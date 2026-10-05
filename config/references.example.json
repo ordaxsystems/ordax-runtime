@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "assets": {
+    "wooden-boat": {
+      "requirements": [
+        "Preserve the overall hull silhouette and bow/stern proportions.",
+        "Ropes must follow the intended hull attachment path without penetrating the wood.",
+        "Geometry not visible in the references must be treated as an implementation hypothesis."
+      ],
+      "components": [
+        "hull",
+        "bow",
+        "stern",
+        "ribs",
+        "gunwales",
+        "ropes"
+      ],
+      "dimensions_world_m": {
+        "x": 3.8,
+        "y": 1.35,
+        "z": 0.95
+      },
+      "tolerance_percent": 5,
+      "references": [
+        {
+          "id": "front",
+          "path": "references/wooden-boat-front.png",
+          "view": "front",
+          "projection": "unknown",
+          "notes": "Reference view label only; camera correspondence must still be verified."
+        },
+        {
+          "id": "three-quarter",
+          "path": "references/wooden-boat-three-quarter.jpg",
+          "view": "three_quarter",
+          "projection": "perspective",
+          "notes": "Primary look-development reference. Perspective lens is not assumed to match Blender."
+        },
+        {
+          "id": "rope-detail",
+          "path": "references/wooden-boat-rope.jpg",
+          "view": "detail",
+          "projection": "unknown",
+          "notes": "Close-up evidence for rope routing; not directly paired to a whole-object multiview."
+        }
+      ]
+    }
+  }
+}

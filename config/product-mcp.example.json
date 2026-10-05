@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ordax-studio": {
+      "command": "ordax-product-mcp",
+      "env": {
+        "ORDAX_PRODUCT_CONTROL_PLANE_URL": "https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev",
+        "ORDAX_PRODUCT_ACCESS_TOKEN": "<provide-at-runtime-do-not-commit>"
+      }
+    }
+  }
+}

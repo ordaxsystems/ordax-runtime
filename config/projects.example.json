@@ -1,0 +1,33 @@
+{
+  "default_project": "game",
+  "projects": {
+    "game": {
+      "path": "C:/Projects/MyGame",
+      "apps": ["unity"],
+      "allowed_branches": ["main", "dev"],
+      "unity": {
+        "companion_source": "Assets/OrdaX/Editor/OrdaXGenericAgent.cs",
+        "allowed_methods": []
+      }
+    },
+    "product": {
+      "path": "C:/Projects/Product3D",
+      "apps": ["blender"],
+      "allowed_branches": ["main"],
+      "blender": {
+        "blend_file": "product.blend",
+        "scripts_dir": "automation/blender"
+      }
+    },
+    "hordax": {
+      "path": "C:/Projects/HORDAX-game",
+      "apps": ["unity"],
+      "allowed_branches": ["dev/unity6-gameplay-pass-1"],
+      "unity": {
+        "profile": "hordax",
+        "validate_method": "HORDAX.EditorTools.CiValidation.Run",
+        "allowed_methods": ["HORDAX.EditorTools.CiValidation.Run", "HORDAX.EditorTools.AutomationCapture.CapturePrototype"]
+      }
+    }
+  }
+}

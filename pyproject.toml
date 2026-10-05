@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-blender-unity"
+# ORDAX Studio 0.4.2 keeps one shared core for the desktop product and headless Device Agent.
+version = "0.4.2"
+description = "ORDAX Studio host and provider-neutral runtime for projects, Git, preview, Blender, Unity and extensible adapters"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.0.0,<2.0.0",
+  "httpx>=0.26.0,<1.0.0",
+  "websockets>=14.0,<16.0",
+  "Pillow>=10.0.0,<12.0.0",
+]
+
+[project.optional-dependencies]
+desktop = [
+  "pywebview>=5.0,<7.0",
+]
+
+[project.scripts]
+# Historical low-level bridge kept for compatibility and targeted diagnostics.
+mcp-blender-unity = "mcp_blender_unity.server:main"
+# Historical connector name now resolves to the full ORDAX Studio MCP.
+mcp-blender = "ordax_studio.mcp_server:main"
+ordax-mcp = "ordax_studio.mcp_server:main"
+ordax-studio-mcp = "ordax_studio.mcp_server:main"
+ordax-project-mcp = "ordax_studio.mcp_server:main"
+ordax-dev-agent = "ordax_dev_agent.main:main"
+ordax-device-agent = "ordax_device_agent.main:main"
+ordax-device-mcp = "ordax_studio.mcp_server:main"
+ordax-product-mcp = "ordax_dev_agent.product_mcp_server:main"
+ordax-studio-remote-mcp = "ordax_dev_agent.product_mcp_server:main"
+ordax-device-pair = "ordax_dev_agent.product_pair_cli:main"
+ordax-studio = "ordax_studio.cli:main"
+ordax-studio-desktop = "ordax_studio.desktop:main"
+ordax-studio-web = "ordax_studio.web_desktop:main"
+ordax-dev = "ordax_studio.product_web_desktop:main"
+
+[tool.setuptools.packages.find]
+include = ["mcp_blender_unity*", "ordax_core*", "ordax_studio*", "ordax_dev_agent*", "ordax_device_agent*"]
+
+[tool.setuptools.package-data]
+ordax_dev_agent = ["assets/*.py", "assets/*.cs", "assets/*.json"]
+ordax_studio = ["*.html", "*.js", "assets/*.js", "assets/*.css"]

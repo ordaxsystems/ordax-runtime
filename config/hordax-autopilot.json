@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "source_repository": "washingtonmsdj/HORDAX-game",
+  "source_branch": "dev/unity6-gameplay-pass-1",
+  "poll_minutes": 5,
+  "capture": {
+    "width": 1280,
+    "height": 720,
+    "warmup_frames": 120
+  }
+}

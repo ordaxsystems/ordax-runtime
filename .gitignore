@@ -1,0 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Local configuration / secrets
+.env
+.env.*
+!.env.example
+
+# Tool logs
+logs/
+Logs/
+*.log
+control-plane/supabase/.temp/
+
+# Blender
+*.blend1
+*.blend2
+*.blend3
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

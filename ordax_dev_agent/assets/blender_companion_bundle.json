@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "files": [
+    "blender_live_companion.py",
+    "blender_uv_math.py",
+    "blender_spatial_math.py",
+    "blender_quality_rules.py",
+    "blender_modeling_contracts.py",
+    "blender_material_contracts.py"
+  ]
+}
