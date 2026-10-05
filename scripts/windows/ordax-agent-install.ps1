@@ -32,7 +32,8 @@ if (-not (Test-Path $python)) {
     }
 }
 
-& $python -c "import httpx, mcp, websockets, ordax_dev_agent" *> $null
+$probeCommand = '\"' + $python + '\" -c \"import httpx, mcp, websockets, ordax_dev_agent\" >nul 2>&1'
+& $env:ComSpec /d /c $probeCommand
 if ($LASTEXITCODE -ne 0) {
     & $python -m pip install --disable-pip-version-check -e $repoRoot
     if ($LASTEXITCODE -ne 0) { throw "OrdaX Dev Agent install failed." }
