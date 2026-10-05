@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$NonInteractive,
     [int]$ReadyTimeoutSeconds = 120,
     [string]$ControlPlaneUrl = 'https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev'
@@ -11,7 +11,7 @@ if ([string]::IsNullOrWhiteSpace($ControlPlaneUrl)) {
 $ControlPlaneUrl = $ControlPlaneUrl.TrimEnd('/')
 $stateDir = Join-Path $env:LOCALAPPDATA 'OrdaX\DevAgent'
 $repo = Join-Path $stateDir 'src'
-$remote = 'https://github.com/washingtonmsdj/mcp-blender.git'
+$remote = 'https://github.com/washingtonmsdj/ordax-runtime.git'
 $taskName = 'OrdaX Dev Agent'
 $mutex = New-Object System.Threading.Mutex($false, 'Local\OrdaXDeviceSetup')
 $restartExisting = $false
@@ -37,7 +37,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'CHECKOUT_UNAVAILABLE_RETRY_SETUP' }
     }
     $origin = (& git -C $repo remote get-url origin).Trim()
-    if ($LASTEXITCODE -ne 0 -or $origin -notin @($remote, 'https://github.com/washingtonmsdj/mcp-blender', 'git@github.com:washingtonmsdj/mcp-blender.git')) { throw 'MANAGED_REMOTE_MISMATCH' }
+    if ($LASTEXITCODE -ne 0 -or $origin -notin @($remote, 'https://github.com/washingtonmsdj/ordax-runtime', 'git@github.com:washingtonmsdj/ordax-runtime.git')) { throw 'MANAGED_REMOTE_MISMATCH' }
     $dirty = & git -c core.fsmonitor=false -C $repo status --porcelain --untracked-files=no
     if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'MANAGED_CHECKOUT_DIRTY_PRESERVED' }
     & git -C $repo fetch --quiet origin 'refs/heads/main:refs/remotes/origin/main'
@@ -143,3 +143,4 @@ try {
     $mutex.ReleaseMutex()
     $mutex.Dispose()
 }
+

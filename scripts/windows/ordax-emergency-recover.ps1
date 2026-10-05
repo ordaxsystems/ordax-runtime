@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Branch = "main"
 )
 
@@ -8,7 +8,7 @@ $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
 $installer = Join-Path $repoRoot "scripts\windows\ordax-agent-install.ps1"
 
 if (-not (Test-Path (Join-Path $repoRoot ".git"))) {
-    throw "This recovery script must run from the managed mcp-blender Git checkout."
+    throw "This recovery script must run from the managed ORDAX Runtime Git checkout."
 }
 
 $dirty = git -C $repoRoot status --porcelain --untracked-files=no
@@ -73,3 +73,4 @@ while ([DateTime]::UtcNow -lt $deadline) {
 }
 
 throw "Scheduled task started but the OrdaX health endpoint did not recover within 60 seconds."
+
