@@ -43,6 +43,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout canonical ORDAX Studio app source
+        uses: actions/checkout@v4
+        with:
+          repository: washingtonmsdj/ordax-apps
+          ref: fb8044d124eb9222d3ca39f52d7fc68938ddaa4d
+          path: .ordax/apps
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -56,8 +63,10 @@ jobs:
       - name: Install Inno Setup
         shell: powershell
         run: choco install innosetup --yes --no-progress
-      - name: Build ORDAX Studio product
+      - name: Build ORDAX Studio product from canonical app source
         shell: powershell
+        env:
+          ORDAX_STUDIO_APP_SOURCE: ${{ github.workspace }}\.ordax\apps\apps\studio
         run: .\scripts\windows\build-ordax-studio-product.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\dist\windows"
       - name: Write checksums
         shell: powershell

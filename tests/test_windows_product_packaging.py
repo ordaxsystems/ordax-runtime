@@ -166,5 +166,23 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("gh release create $tag", workflow)
 
 
+    def test_windows_build_consumes_pinned_ordax_apps_studio_source(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
+        build = (ROOT / "scripts" / "windows" / "build-ordax-studio-product.ps1").read_text(encoding="utf-8")
+        source_lock = (ROOT / "studio-source.lock.json").read_text(encoding="utf-8")
+        self.assertIn('"repository": "washingtonmsdj/ordax-apps"', source_lock)
+        self.assertIn('"commit": "fb8044d124eb9222d3ca39f52d7fc68938ddaa4d"', source_lock)
+        self.assertIn('"path": "apps/studio"', source_lock)
+        self.assertIn('"version": "0.4.2"', source_lock)
+        self.assertIn("repository: washingtonmsdj/ordax-apps", workflow)
+        self.assertIn("ref: fb8044d124eb9222d3ca39f52d7fc68938ddaa4d", workflow)
+        self.assertIn("ORDAX_STUDIO_APP_SOURCE", workflow)
+        self.assertIn("studio-source.lock.json", build)
+        self.assertIn("ORDAX_STUDIO_PORTABLE_SOURCE_COMMIT", build)
+        self.assertIn('"ordax-apps-lock"', build)
+        self.assertIn("host_bridge.js", build)
+        self.assertIn("host_contract.js", build)
+
+
 if __name__ == "__main__":
     unittest.main()

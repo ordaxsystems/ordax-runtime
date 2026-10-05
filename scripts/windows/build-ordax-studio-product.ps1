@@ -14,6 +14,43 @@ $canonicalVersion = [string]$env:ORDAX_STUDIO_CANONICAL_VERSION
 $canonicalVersion = $canonicalVersion.Trim()
 $canonicalVersionSource = if ($canonicalVersion) { "canonical-environment" } else { "" }
 
+$studioAppSource = ([string]$env:ORDAX_STUDIO_APP_SOURCE).Trim()
+if ($studioAppSource) {
+    $sourceLockPath = Join-Path $repoRoot "studio-source.lock.json"
+    if (-not (Test-Path $sourceLockPath)) { throw "Studio source lock is missing" }
+    $sourceLock = Get-Content $sourceLockPath -Raw | ConvertFrom-Json
+    if ($sourceLock.schema -ne "ordax.studio-source-lock/1") { throw "Studio source lock schema is invalid" }
+    if ($sourceLock.repository -ne "washingtonmsdj/ordax-apps") { throw "Studio source repository is not canonical" }
+    if ($sourceLock.path -ne "apps/studio") { throw "Studio source path is not canonical" }
+    if ($sourceLock.authority -ne "none") { throw "Studio source lock must not carry authority" }
+
+    $studioAppManifestPath = Join-Path $studioAppSource "app.json"
+    if (-not (Test-Path $studioAppManifestPath)) { throw "Canonical Studio app manifest is missing: $studioAppManifestPath" }
+    $studioAppManifest = Get-Content $studioAppManifestPath -Raw | ConvertFrom-Json
+    if ($studioAppManifest.schema -ne "ordax.component-manifest/1" -or $studioAppManifest.id -ne "studio") {
+        throw "Canonical Studio app manifest is incompatible"
+    }
+    if ([string]$studioAppManifest.version -ne [string]$sourceLock.version) {
+        throw "Canonical Studio version does not match studio-source.lock.json"
+    }
+
+    $targetStudio = Join-Path $repoRoot "ordax_studio"
+    Copy-Item (Join-Path $studioAppSource "assets\*") (Join-Path $targetStudio "assets") -Recurse -Force
+    Copy-Item (Join-Path $studioAppSource "src\host_contract.js") (Join-Path $targetStudio "host_contract.js") -Force
+    $portableHtml = Get-Content (Join-Path $studioAppSource "src\index.html") -Raw
+    $portableHtml = $portableHtml.Replace("../assets/", "assets/")
+    $portableHtml = $portableHtml.Replace(
+        '<script src="host_contract.js"></script>',
+        '<script src="host_bridge.js"></script>' + [Environment]::NewLine + '<script src="host_contract.js"></script>'
+    )
+    Set-Content (Join-Path $targetStudio "studio_product.html") -Value $portableHtml -Encoding UTF8
+    $canonicalVersion = [string]$studioAppManifest.version
+    $canonicalVersionSource = "ordax-apps-lock"
+    Write-Output "ORDAX_STUDIO_PORTABLE_SOURCE=$studioAppSource"
+    Write-Output "ORDAX_STUDIO_PORTABLE_SOURCE_COMMIT=$($sourceLock.commit)"
+}
+
+
 if (-not $canonicalVersion -and $env:GITHUB_REF_TYPE -eq "tag") {
     $tagName = ([string]$env:GITHUB_REF_NAME).Trim()
     if ($tagName -notmatch '^v(.+)$') {
