@@ -12,6 +12,7 @@ on:
       - "scripts/windows/build-ordax-studio-product.ps1"
       - "tests/test_windows_product_packaging.py"
       - "pyproject.toml"
+      - "studio-source.lock.json"
       - ".github/workflows/windows-product-build.yml"
   workflow_dispatch:
   push:
@@ -47,7 +48,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: washingtonmsdj/ordax-apps
-          ref: fb8044d124eb9222d3ca39f52d7fc68938ddaa4d
+          ref: d16977092dbce6ce6e1be35132789e16586c0d67
           path: .ordax/apps
 
       - uses: actions/setup-python@v5
