@@ -1,0 +1,30 @@
+﻿name: ORDAX Runtime Contracts
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-contracts:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile Runtime packages
+        run: python -m compileall -q ordax_dev_agent ordax_device_agent mcp_blender_unity
+      - name: Run Runtime ownership and Computer Control contracts
+        run: >-
+          python -m unittest
+          tests.test_product_gateway
+          tests.test_product_action_scope_parity
+          tests.test_computer_parity_contract
+          tests.test_computer_access_management
+          tests.test_computer_full_access
+          tests.test_computer_process_actions
+          tests.test_product_mcp_server

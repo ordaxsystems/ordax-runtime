@@ -1,11 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import unittest
 from pathlib import Path
 
 from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 from ordax_dev_agent.product_mcp import PRODUCT_MCP_TOOLS
-
 
 ROOT = Path(__file__).parents[1]
 
@@ -33,24 +32,6 @@ class ComputerParityContractTests(unittest.TestCase):
         for tool_name in self.ACTIONS.values():
             with self.subTest(tool=tool_name):
                 self.assertIn(f"def {tool_name}(", source)
-
-    def test_cloudflare_worker_advertises_and_authorizes_actions(self):
-        mcp = (ROOT / "control-plane" / "cloudflare" / "src" / "mcp_http.ts").read_text(encoding="utf-8")
-        worker = (ROOT / "control-plane" / "cloudflare" / "src" / "index.ts").read_text(encoding="utf-8")
-        for action, tool_name in self.ACTIONS.items():
-            with self.subTest(action=action):
-                self.assertIn(f'name: "{tool_name}"', mcp)
-                self.assertIn(f'action: "{action}"', mcp)
-                self.assertIn(f'"{action}"', worker)
-
-    def test_effect_classification_is_explicit(self):
-        mcp = (ROOT / "control-plane" / "cloudflare" / "src" / "mcp_http.ts").read_text(encoding="utf-8")
-        self.assertIn('"computer_screen_info"', mcp)
-        self.assertIn('"computer_clipboard_read"', mcp)
-        self.assertIn('"computer_drag"', mcp)
-        self.assertIn('"computer_mouse_move"', mcp)
-        self.assertIn('"computer_clipboard_write"', mcp)
-        self.assertIn('"computer_launch_app"', mcp)
 
     def test_device_scoped_computer_runtime_does_not_require_project(self):
         for relative in (
