@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ordax-runtime"
-# ORDAX Studio 0.4.2 keeps one shared core for the desktop product and headless Device Agent.
+# ORDAX Runtime versioning is independent from the portable ORDAX Studio app version.
 version = "0.4.2"
 description = "ORDAX provider-neutral Runtime and Windows host for projects, Git, preview, computer control and extensible adapters"
 readme = "README.md"
