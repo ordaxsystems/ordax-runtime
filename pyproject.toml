@@ -1,12 +1,12 @@
-[build-system]
+﻿[build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mcp-blender-unity"
+name = "ordax-runtime"
 # ORDAX Studio 0.4.2 keeps one shared core for the desktop product and headless Device Agent.
 version = "0.4.2"
-description = "ORDAX Studio host and provider-neutral runtime for projects, Git, preview, Blender, Unity and extensible adapters"
+description = "ORDAX provider-neutral Runtime and Windows host for projects, Git, preview, computer control and extensible adapters"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
