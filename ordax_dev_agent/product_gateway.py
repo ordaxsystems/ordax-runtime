@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 from .models import ActionResult
-from .product_action_scope import DEVICE_SCOPED_ACTIONS
 
 
 class ActionExecutor(Protocol):
@@ -199,27 +198,32 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
     "computer.windows": ProductActionSpec(
         name="computer.windows",
         local_action="computer.windows",
-        allowed_fields=frozenset({"project", "max_items"}),
+        allowed_fields=frozenset({"max_items"}),
+        project_required=False,
     ),
     "computer.active_window": ProductActionSpec(
         name="computer.active_window",
         local_action="computer.active_window",
-        allowed_fields=frozenset({"project"}),
+        allowed_fields=frozenset(),
+        project_required=False,
     ),
     "computer.screenshot": ProductActionSpec(
         name="computer.screenshot",
         local_action="computer.screenshot",
-        allowed_fields=frozenset({"project", "mode"}),
+        allowed_fields=frozenset({"mode"}),
+        project_required=False,
     ),
     "computer.screen_info": ProductActionSpec(
         name="computer.screen_info",
         local_action="computer.screen_info",
-        allowed_fields=frozenset({"project"}),
+        allowed_fields=frozenset(),
+        project_required=False,
     ),
     "computer.clipboard_read": ProductActionSpec(
         name="computer.clipboard_read",
         local_action="computer.clipboard_read",
-        allowed_fields=frozenset({"project", "max_bytes"}),
+        allowed_fields=frozenset({"max_bytes"}),
+        project_required=False,
     ),
     "computer.access_status": ProductActionSpec(
         name="computer.access_status",
@@ -381,55 +385,64 @@ PRODUCT_TYPED_ACTIONS: dict[str, ProductActionSpec] = {
     "computer.focus_window": ProductActionSpec(
         "computer.focus_window",
         "computer.focus_window",
-        frozenset({"project", "handle"}),
+        frozenset({"handle"}),
+        project_required=False,
         effect="write",
     ),
     "computer.click": ProductActionSpec(
         "computer.click",
         "computer.click",
-        frozenset({"project", "x", "y", "button", "clicks"}),
+        frozenset({"x", "y", "button", "clicks"}),
+        project_required=False,
         effect="write",
     ),
     "computer.mouse_move": ProductActionSpec(
         "computer.mouse_move",
         "computer.mouse_move",
-        frozenset({"project", "x", "y", "duration_ms"}),
+        frozenset({"x", "y", "duration_ms"}),
+        project_required=False,
         effect="write",
     ),
     "computer.drag": ProductActionSpec(
         "computer.drag",
         "computer.drag",
-        frozenset({"project", "from_x", "from_y", "to_x", "to_y", "button", "duration_ms"}),
+        frozenset({"from_x", "from_y", "to_x", "to_y", "button", "duration_ms"}),
+        project_required=False,
         effect="write",
     ),
     "computer.clipboard_write": ProductActionSpec(
         "computer.clipboard_write",
         "computer.clipboard_write",
-        frozenset({"project", "text"}),
+        frozenset({"text"}),
+        project_required=False,
         effect="write",
     ),
     "computer.launch_app": ProductActionSpec(
         "computer.launch_app",
         "computer.launch_app",
-        frozenset({"project", "application", "args"}),
+        frozenset({"application", "args"}),
+        project_required=False,
         effect="write",
     ),
     "computer.scroll": ProductActionSpec(
         "computer.scroll",
         "computer.scroll",
-        frozenset({"project", "amount", "horizontal"}),
+        frozenset({"amount", "horizontal"}),
+        project_required=False,
         effect="write",
     ),
     "computer.type": ProductActionSpec(
         "computer.type",
         "computer.type",
-        frozenset({"project", "text"}),
+        frozenset({"text"}),
+        project_required=False,
         effect="write",
     ),
     "computer.hotkey": ProductActionSpec(
         "computer.hotkey",
         "computer.hotkey",
-        frozenset({"project", "keys"}),
+        frozenset({"keys"}),
+        project_required=False,
         effect="write",
     ),
     "computer.text_write": ProductActionSpec(
@@ -479,13 +492,7 @@ PRODUCT_TYPED_ACTIONS: dict[str, ProductActionSpec] = {
     "blender.live_material_apply": ProductActionSpec("blender.live_material_apply", "blender.live_material_apply", frozenset({"project", "object_name", "ordax_object_id", "material_name", "base_color", "roughness", "metallic", "transmission", "alpha", "ior", "surface_render_method", "transparency_overlap", "timeout_seconds"}), effect="write"),
     "blender.live_save": ProductActionSpec("blender.live_save", "blender.live_save", frozenset({"project", "target_path", "timeout_seconds"}), effect="write"),
 }
-_RAW_PRODUCT_ACTIONS: dict[str, ProductActionSpec] = {**PRODUCT_READ_ONLY_ACTIONS, **PRODUCT_TYPED_ACTIONS}
-PRODUCT_ACTIONS: dict[str, ProductActionSpec] = {
-    name: replace(spec, allowed_fields=spec.allowed_fields - {"project"}, project_required=False)
-    if name in DEVICE_SCOPED_ACTIONS
-    else spec
-    for name, spec in _RAW_PRODUCT_ACTIONS.items()
-}
+PRODUCT_ACTIONS: dict[str, ProductActionSpec] = {**PRODUCT_READ_ONLY_ACTIONS, **PRODUCT_TYPED_ACTIONS}
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$")
 
