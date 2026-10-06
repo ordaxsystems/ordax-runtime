@@ -186,6 +186,9 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("ai\\\\manifest.json", build)
         self.assertIn("ordax.app-intelligence-registry/1", build)
         self.assertIn("app_intelligence_registry.json", build)
+        self.assertIn("[System.IO.File]::WriteAllText(", build)
+        self.assertIn("[System.Text.UTF8Encoding]::new($false)", build)
+        self.assertNotIn('Set-Content (Join-Path $targetStudio "app_intelligence_registry.json") -Encoding UTF8', build)
         self.assertIn("ORDAX_APP_INTELLIGENCE_REGISTRY_OK", build)
         self.assertIn('"*.json"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
