@@ -169,6 +169,16 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('- "ordax_studio/**"', workflow)
 
 
+    def test_public_release_requires_trusted_authenticode(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
+        gate = (ROOT / "scripts" / "windows" / "assert-release-authenticode.ps1").read_text(encoding="utf-8")
+        self.assertIn("Verify production Authenticode signature", workflow)
+        self.assertIn("assert-release-authenticode.ps1", workflow)
+        self.assertIn("Get-AuthenticodeSignature", gate)
+        self.assertIn("SignatureStatus]::Valid", gate)
+        self.assertIn("TimeStamperCertificate", gate)
+        self.assertIn("self-signed certificate", gate)
+
     def test_release_publish_handles_missing_release_without_powershell_error_stream_failure(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
         self.assertIn('$ErrorActionPreference = "Stop"', workflow)
