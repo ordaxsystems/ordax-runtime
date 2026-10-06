@@ -110,6 +110,26 @@ class _INPUT(ctypes.Structure):
     _fields_ = [("type", wintypes.DWORD), ("union", _INPUTUNION)]
 
 
+_TH32CS_SNAPPROCESS = 0x00000002
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
+class _PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", _ULONG_PTR),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", wintypes.WCHAR * 260),
+    ]
+
+
 class _POINT(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
@@ -157,34 +177,68 @@ class ComputerControlActions:
     @classmethod
     def _system_process_snapshot(cls) -> list[dict[str, Any]]:
         if os.name == "nt":
-            script = (
-                "$ErrorActionPreference='Stop';"
-                "Get-CimInstance Win32_Process | "
-                "Select-Object ProcessId,ParentProcessId,Name,ExecutablePath | "
-                "ConvertTo-Json -Compress -Depth 3"
-            )
-            completed = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                shell=False,
-            )
-            if completed.returncode != 0:
-                raise OSError((completed.stderr or "process enumeration failed").strip()[:2000])
-            raw = (completed.stdout or "").strip()
-            if not raw:
-                return []
-            payload = json.loads(raw)
-            if isinstance(payload, dict):
-                payload = [payload]
-            if not isinstance(payload, list):
-                raise ValueError("Windows process enumeration returned invalid JSON")
-            return [
-                cls._normalize_process_item(item)
-                for item in payload
-                if isinstance(item, dict) and int(item.get("ProcessId") or 0) > 0
+            kernel32 = ctypes.windll.kernel32
+            kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+            kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+            kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+            kernel32.Process32FirstW.restype = wintypes.BOOL
+            kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+            kernel32.Process32NextW.restype = wintypes.BOOL
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.QueryFullProcessImageNameW.argtypes = [
+                wintypes.HANDLE,
+                wintypes.DWORD,
+                wintypes.LPWSTR,
+                ctypes.POINTER(wintypes.DWORD),
             ]
+            kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+
+            snapshot = kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
+            if not snapshot or snapshot == _INVALID_HANDLE_VALUE:
+                raise OSError(f"CreateToolhelp32Snapshot failed: {ctypes.get_last_error()}")
+
+            items: list[dict[str, Any]] = []
+            entry = _PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+            try:
+                has_entry = bool(kernel32.Process32FirstW(snapshot, ctypes.byref(entry)))
+                while has_entry:
+                    pid = int(entry.th32ProcessID)
+                    if pid > 0:
+                        executable = ""
+                        process = kernel32.OpenProcess(
+                            _PROCESS_QUERY_LIMITED_INFORMATION,
+                            False,
+                            pid,
+                        )
+                        if process:
+                            try:
+                                capacity = 32768
+                                buffer = ctypes.create_unicode_buffer(capacity)
+                                size = wintypes.DWORD(capacity)
+                                if kernel32.QueryFullProcessImageNameW(
+                                    process,
+                                    0,
+                                    buffer,
+                                    ctypes.byref(size),
+                                ):
+                                    executable = buffer.value
+                            finally:
+                                kernel32.CloseHandle(process)
+
+                        items.append(cls._normalize_process_item({
+                            "pid": pid,
+                            "parent_pid": int(entry.th32ParentProcessID),
+                            "name": entry.szExeFile,
+                            "executable": executable,
+                        }))
+                    has_entry = bool(kernel32.Process32NextW(snapshot, ctypes.byref(entry)))
+            finally:
+                kernel32.CloseHandle(snapshot)
+            return items
 
         completed = subprocess.run(
             ["ps", "-eo", "pid=,ppid=,comm="],
