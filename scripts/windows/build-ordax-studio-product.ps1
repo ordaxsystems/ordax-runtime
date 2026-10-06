@@ -34,7 +34,41 @@ if ($studioAppSource) {
         throw "Canonical Studio version does not match studio-source.lock.json"
     }
 
+    $studioAiManifestPath = Join-Path $studioAppSource "ai\\manifest.json"
+    if (-not (Test-Path $studioAiManifestPath)) {
+        throw "Canonical Studio App Intelligence manifest is missing: $studioAiManifestPath"
+    }
+    $studioAiManifest = Get-Content $studioAiManifestPath -Raw | ConvertFrom-Json
+    if (
+        $studioAiManifest.schema -ne "ordax.app-intelligence-manifest/1" -or
+        $studioAiManifest.appId -ne "studio" -or
+        [string]$studioAiManifest.appVersion -ne [string]$studioAppManifest.version -or
+        $studioAiManifest.authority -ne "none" -or
+        $studioAiManifest.execution -ne "declarative-only"
+    ) {
+        throw "Canonical Studio App Intelligence manifest is incompatible"
+    }
+
     $targetStudio = Join-Path $repoRoot "ordax_studio"
+    $appIntelligenceRegistry = [ordered]@{
+        schema = "ordax.app-intelligence-registry/1"
+        authority = "none"
+        source = [ordered]@{
+            repository = [string]$sourceLock.repository
+            commit = [string]$sourceLock.commit
+        }
+        apps = @(
+            [ordered]@{
+                id = [string]$studioAppManifest.id
+                title = [string]$studioAppManifest.title
+                version = [string]$studioAppManifest.version
+                manifest = $studioAiManifest
+            }
+        )
+    }
+    $appIntelligenceRegistry |
+        ConvertTo-Json -Depth 20 |
+        Set-Content (Join-Path $targetStudio "app_intelligence_registry.json") -Encoding UTF8
     Copy-Item (Join-Path $studioAppSource "assets\*") (Join-Path $targetStudio "assets") -Recurse -Force
     Copy-Item (Join-Path $studioAppSource "src\host_contract.js") (Join-Path $targetStudio "host_contract.js") -Force
     $portableHtml = Get-Content (Join-Path $studioAppSource "src\index.html") -Raw
