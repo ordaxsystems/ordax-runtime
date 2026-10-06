@@ -1,0 +1,49 @@
+{
+  "$schema": "ordax.studio-runtime-compatibility/1",
+  "product": {
+    "id": "ordax-studio",
+    "version": "0.4.2",
+    "historical_repository": "washingtonmsdj/mcp-blender",
+    "single_product": true,
+    "canonical_runtime_repository": "washingtonmsdj/ordax-runtime"
+  },
+  "runtime": {
+    "profile": "headless",
+    "python": ">=3.11",
+    "desktop_extra_required": false,
+    "entrypoints": [
+      "ordax-dev-agent",
+      "ordax-device-agent"
+    ]
+  },
+  "ordax_os": {
+    "surface_app_id": "studio",
+    "device_agent_schema": "ordax.device-agent/1",
+    "capability_reader_schema": "ordax.device-agent-capability-reader/1",
+    "same_action_gateway_required": true,
+    "surface_raw_execute_forbidden": true,
+    "parallel_runtime_forbidden": true
+  },
+  "platform_authority": {
+    "identity_owner": "ordax-os",
+    "spaces_owner": "ordax-os",
+    "permissions_owner": "ordax-os",
+    "intelligence_owner": "ordax-os",
+    "memory_owner": "ordax-os",
+    "model_router_owner": "ordax-os"
+  },
+  "capabilities": {
+    "blender": "studio-capability",
+    "unity": "studio-capability",
+    "git": "studio-capability",
+    "filesystem": "studio-capability",
+    "processes": "studio-capability",
+    "browser": "studio-capability"
+  },
+  "activation": {
+    "capability_discovery": "supported",
+    "runtime_dispatch_enabled": false,
+    "remote_action_gateway_activation": "separate-ordax-os-gate",
+    "missing_runtime_boot_critical": false
+  }
+}
