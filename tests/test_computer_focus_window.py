@@ -64,6 +64,17 @@ class ComputerFocusWindowTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.user32.AttachThreadInput.assert_not_called()
 
+    def test_focus_creates_caller_message_queue_before_attaching_threads(self):
+        self.actions._window_info = Mock(return_value={"handle": "0x200", "foreground": True})
+        self.user32.PeekMessageW.return_value = False
+        with patch.object(_Harness, "_current_thread_id", return_value=30), patch("time.sleep"):
+            result = self.actions.computer_focus_window({"project": "demo", "handle": "0x200"})
+
+        self.assertTrue(result.ok)
+        self.user32.PeekMessageW.assert_called_once()
+        first_attach = self.user32.AttachThreadInput.call_args_list[0]
+        self.assertEqual(first_attach.args, (30, 10, True))
+
 
 if __name__ == "__main__":
     unittest.main()
