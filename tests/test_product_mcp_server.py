@@ -206,6 +206,27 @@ class ProductMcpServerTests(unittest.TestCase):
         self.assertEqual(update[2]["arguments"]["summary"], "Ready")
         self.assertEqual(update[2]["arguments"]["next_action"], "Ship")
 
+    def test_app_intelligence_routes_without_project_scope(self):
+        catalog = server.app_intelligence_catalog("dev-1", "space-1")
+        self.assertEqual(catalog["status"], "succeeded")
+        detail = server.app_intelligence_detail("dev-1", "studio", "space-1")
+        self.assertEqual(detail["status"], "succeeded")
+
+        calls = [
+            call for instance in FakeClient.instances for call in instance.calls
+            if call[0] == "submit"
+        ]
+        catalog_call = next(
+            call for call in calls if call[2]["action"] == "intelligence.app_catalog"
+        )
+        self.assertIsNone(catalog_call[2]["project"])
+        self.assertEqual(catalog_call[2]["arguments"], {})
+        detail_call = next(
+            call for call in calls if call[2]["action"] == "intelligence.app_detail"
+        )
+        self.assertIsNone(detail_call[2]["project"])
+        self.assertEqual(detail_call[2]["arguments"], {"app_id": "studio"})
+
     def test_studio_catalog_routes_without_project_scope(self):
         result = server.repository_catalog("dev-1", "space-1")
         self.assertEqual(result["status"], "succeeded")
@@ -281,6 +302,8 @@ class ProductMcpServerTests(unittest.TestCase):
         for name in (
             "product_session",
             "product_targets",
+            "app_intelligence_catalog",
+            "app_intelligence_detail",
             "projects_list",
             "project_create",
             "project_import",

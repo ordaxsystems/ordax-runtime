@@ -29,6 +29,7 @@ from .computer_control_actions import ComputerControlActions
 from .computer_parity_actions import ComputerParityActions
 from .computer_filesystem_actions import ComputerFilesystemActions
 from .memory_actions import MemoryActions
+from .application_intelligence_actions import ApplicationIntelligenceActions
 from .component_actions import ComponentActions
 from .game_asset_catalog_actions import GameAssetCatalogActions
 from .game_asset_status_actions import GameAssetStatusActions
@@ -81,6 +82,8 @@ _NONBLOCKING_OBSERVATION_ACTIONS = frozenset({
     "computer.processes",
     "computer.clipboard_read",
     "computer.screenshot",
+    "intelligence.app_catalog",
+    "intelligence.app_detail",
 })
 
 
@@ -104,6 +107,7 @@ class ActionRegistry(
     ComputerParityActions,
     ComputerFilesystemActions,
     MemoryActions,
+    ApplicationIntelligenceActions,
     ComponentActions,
     GameAssetCatalogActions,
     GameAssetStatusActions,
@@ -138,6 +142,7 @@ class ActionRegistry(
         self.config = config
         self.projects = load_projects(config)
         self.on_observation = None
+        self._initialize_application_intelligence()
         self._execution_lock = threading.Lock()
         self._actions: dict[str, Action] = {
             "projects.list": self.projects_list,
@@ -196,6 +201,8 @@ class ActionRegistry(
             "computer.path_move": self.computer_path_move,
             "computer.path_remove": self.computer_path_remove,
             "computer.search": self.computer_search,
+            "intelligence.app_catalog": self.intelligence_app_catalog,
+            "intelligence.app_detail": self.intelligence_app_detail,
             "memory.status": self.memory_status,
             "memory.context": self.memory_context,
             "memory.remember": self.memory_remember,

@@ -215,6 +215,68 @@ class ProductRemoteClientTests(unittest.TestCase):
         )
 
 
+    def test_owner_app_intelligence_grant_methods_are_product_authenticated(self):
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.method, request.url.path, request.headers.get("authorization", ""), str(request.url.query)))
+            if request.url.path == "/v3/product/device-intelligence-grants" and request.method == "GET":
+                self.assertIn("link_id=link-1", str(request.url.query))
+                return httpx.Response(200, json={
+                    "ok": True,
+                    "grants": [{
+                        "id": "grant-intelligence-1",
+                        "device_id": "dev-1",
+                        "mode": "app-intelligence-read",
+                    }],
+                })
+            if request.url.path == "/v3/product/device-intelligence-grants" and request.method == "POST":
+                body = json.loads(request.content.decode("utf-8"))
+                self.assertEqual("link-1", body["link_id"])
+                self.assertEqual("app-intelligence-read", body["mode"])
+                self.assertEqual("2026-11-05T00:00:00+00:00", body["expires_at"])
+                return httpx.Response(201, json={
+                    "ok": True,
+                    "mode": body["mode"],
+                    "replayed": False,
+                    "grant": {
+                        "id": "grant-intelligence-1",
+                        "device_id": "dev-1",
+                        "mode": body["mode"],
+                    },
+                })
+            if request.url.path == "/v3/product/device-intelligence-grants/grant-intelligence-1" and request.method == "DELETE":
+                return httpx.Response(200, json={
+                    "ok": True,
+                    "revoked": True,
+                    "grant": {"id": "grant-intelligence-1"},
+                })
+            return httpx.Response(404, json={"ok": False, "error": "not_found"})
+
+        client = ProductRemoteClient(
+            "https://control.example.test",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        grants = client.device_intelligence_grants("jwt-list", link_id="link-1")
+        self.assertEqual("grant-intelligence-1", grants[0]["id"])
+        created = client.create_device_intelligence_grant(
+            "jwt-create",
+            link_id="link-1",
+            expires_at="2026-11-05T00:00:00+00:00",
+        )
+        self.assertEqual("grant-intelligence-1", created["grant"]["id"])
+        revoked = client.revoke_device_intelligence_grant(
+            "jwt-revoke",
+            "grant-intelligence-1",
+        )
+        self.assertTrue(revoked["revoked"])
+        self.assertFalse(hasattr(client, "access_token"))
+        self.assertEqual(
+            [item[2] for item in seen],
+            ["Bearer jwt-list", "Bearer jwt-create", "Bearer jwt-revoke"],
+        )
+
+
     def test_owner_project_browser_grant_methods_are_product_authenticated(self):
         seen = []
 

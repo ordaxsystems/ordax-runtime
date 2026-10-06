@@ -20,6 +20,8 @@ class FakeExecutor:
     def __init__(self):
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self._names = [
+            "intelligence.app_catalog",
+            "intelligence.app_detail",
             "projects.list",
             "workspace.repository_catalog",
             "workspace.project_create",
@@ -320,6 +322,8 @@ class ProductGatewayTests(unittest.TestCase):
     def test_catalog_contains_explicit_capability_surface(self) -> None:
         names = {entry["name"] for entry in product_action_catalog()}
         self.assertEqual(names, set(PRODUCT_ACTIONS))
+        self.assertIn("intelligence.app_catalog", names)
+        self.assertIn("intelligence.app_detail", names)
         self.assertIn("workspace.repository_catalog", names)
         self.assertIn("workspace.project_create", names)
         self.assertIn("workspace.bind_project", names)

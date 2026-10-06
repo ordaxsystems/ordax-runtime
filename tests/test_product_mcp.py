@@ -15,6 +15,8 @@ class _Executor:
     def __init__(self):
         self.calls = []
         self._names = [
+            "intelligence.app_catalog",
+            "intelligence.app_detail",
             "projects.list",
             "workspace.repository_catalog",
             "workspace.project_create",
@@ -140,6 +142,8 @@ class ProductMcpFacadeTests(unittest.TestCase):
         self.assertEqual(
             names,
             {
+                "app_intelligence_catalog",
+                "app_intelligence_detail",
                 "projects_list",
                 "project_create",
                 "project_import",
@@ -211,6 +215,8 @@ class ProductMcpFacadeTests(unittest.TestCase):
             },
         )
         effects = {tool["name"]: tool["effect"] for tool in tools}
+        self.assertEqual(effects["app_intelligence_catalog"], "read")
+        self.assertEqual(effects["app_intelligence_detail"], "read")
         self.assertEqual(effects["project_create"], "write")
         self.assertEqual(effects["project_import"], "write")
         self.assertEqual(effects["project_briefing"], "read")

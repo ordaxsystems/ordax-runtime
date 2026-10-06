@@ -5,10 +5,15 @@ from typing import Literal
 
 ProductActionScope = Literal["device", "project"]
 
-# Keep this list explicit and byte-for-byte aligned with the Cloudflare
-# `DEVICE_SCOPED_ACTIONS` catalog. New remote Computer capabilities require a
-# reviewed scope decision; they must not inherit device authority from a prefix.
-DEVICE_SCOPED_ACTIONS = frozenset(
+# Keep these lists explicit and byte-for-byte aligned with the Cloudflare
+# product_action_scope catalog. Device-scoped App Intelligence is deliberately
+# separate from Computer Control and must never be inherited from a prefix.
+APP_INTELLIGENCE_DEVICE_ACTIONS = frozenset({
+    "intelligence.app_catalog",
+    "intelligence.app_detail",
+})
+
+COMPUTER_DEVICE_ACTIONS = frozenset(
     {
         "computer.access_status",
         "computer.active_window",
@@ -38,6 +43,11 @@ DEVICE_SCOPED_ACTIONS = frozenset(
         "computer.windows",
     }
 )
+
+DEVICE_SCOPED_ACTIONS = frozenset({
+    *COMPUTER_DEVICE_ACTIONS,
+    *APP_INTELLIGENCE_DEVICE_ACTIONS,
+})
 
 
 def is_device_scoped_action(action: str) -> bool:

@@ -23,6 +23,16 @@ class ProductMcpToolSpec:
 
 PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(
+        name="app_intelligence_catalog",
+        action="intelligence.app_catalog",
+        description="Read the compact, version-bound App Intelligence catalog from the connected ORDAX device. Use this when app capabilities are uncertain; it carries no execution authority.",
+    ),
+    ProductMcpToolSpec(
+        name="app_intelligence_detail",
+        action="intelligence.app_detail",
+        description="Read declarative instructions, intents, parameters and examples for one exact app_id from the device App Intelligence registry. This does not grant permission to execute the app.",
+    ),
+    ProductMcpToolSpec(
         name="projects_list",
         action="projects.list",
         description="List granted projects. Use this first when the user wants to continue/resume work but the target project is not yet known.",

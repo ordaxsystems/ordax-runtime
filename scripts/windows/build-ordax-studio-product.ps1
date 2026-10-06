@@ -34,7 +34,60 @@ if ($studioAppSource) {
         throw "Canonical Studio version does not match studio-source.lock.json"
     }
 
+    $studioAiManifestPath = Join-Path $studioAppSource "ai\\manifest.json"
+    if (-not (Test-Path $studioAiManifestPath)) {
+        throw "Canonical Studio App Intelligence manifest is missing: $studioAiManifestPath"
+    }
+    $studioAiManifest = Get-Content $studioAiManifestPath -Raw | ConvertFrom-Json
+    if (
+        $studioAiManifest.schema -ne "ordax.app-intelligence-manifest/1" -or
+        $studioAiManifest.appId -ne "studio" -or
+        [string]$studioAiManifest.appVersion -ne [string]$studioAppManifest.version -or
+        $studioAiManifest.authority -ne "none" -or
+        $studioAiManifest.execution -ne "declarative-only"
+    ) {
+        throw "Canonical Studio App Intelligence manifest is incompatible"
+    }
+
+    $studioActionManifestPath = Join-Path $studioAppSource "actions\\manifest.json"
+    if (-not (Test-Path $studioActionManifestPath)) {
+        throw "Canonical Studio Application Action manifest is missing: $studioActionManifestPath"
+    }
+    $studioActionManifest = Get-Content $studioActionManifestPath -Raw | ConvertFrom-Json
+    if (
+        $studioActionManifest.schema -ne "ordax.application-action-manifest/1" -or
+        $studioActionManifest.appId -ne "studio" -or
+        [string]$studioActionManifest.appVersion -ne [string]$studioAppManifest.version -or
+        $studioActionManifest.authority -ne "none" -or
+        $studioActionManifest.execution -ne "proposal-only"
+    ) {
+        throw "Canonical Studio Application Action manifest is incompatible"
+    }
+
     $targetStudio = Join-Path $repoRoot "ordax_studio"
+    $appIntelligenceRegistry = [ordered]@{
+        schema = "ordax.app-intelligence-registry/1"
+        authority = "none"
+        source = [ordered]@{
+            repository = [string]$sourceLock.repository
+            commit = [string]$sourceLock.commit
+        }
+        apps = @(
+            [ordered]@{
+                id = [string]$studioAppManifest.id
+                title = [string]$studioAppManifest.title
+                version = [string]$studioAppManifest.version
+                manifest = $studioAiManifest
+            }
+        )
+    }
+    $appIntelligenceRegistryJson = $appIntelligenceRegistry | ConvertTo-Json -Depth 20
+    $appIntelligenceRegistryPath = Join-Path $targetStudio "app_intelligence_registry.json"
+    [System.IO.File]::WriteAllText(
+        $appIntelligenceRegistryPath,
+        $appIntelligenceRegistryJson,
+        [System.Text.UTF8Encoding]::new($false)
+    )
     Copy-Item (Join-Path $studioAppSource "assets\*") (Join-Path $targetStudio "assets") -Recurse -Force
     Copy-Item (Join-Path $studioAppSource "src\host_contract.js") (Join-Path $targetStudio "host_contract.js") -Force
     $portableHtml = Get-Content (Join-Path $studioAppSource "src\index.html") -Raw
@@ -150,6 +203,10 @@ $privatePython = Join-Path $runtimeRoot "python.exe"
 & $privatePython -c "import ordax_studio, ordax_dev_agent, ordax_device_agent, webview; print('ORDAX_PRIVATE_RUNTIME_OK')"
 if ($LASTEXITCODE -ne 0) {
     throw "Private ORDAX Python runtime import smoke failed"
+}
+& $privatePython -c "from ordax_dev_agent.application_intelligence_actions import load_app_intelligence_registry; r = load_app_intelligence_registry(); assert r['available'] and r['by_id']['studio']['version'] == '$Version'; print('ORDAX_APP_INTELLIGENCE_REGISTRY_OK')"
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged App Intelligence registry validation failed"
 }
 
 $webViewBootstrapper = Join-Path $redistRoot "MicrosoftEdgeWebview2Setup.exe"
