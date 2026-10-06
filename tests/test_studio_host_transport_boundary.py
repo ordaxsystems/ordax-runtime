@@ -46,6 +46,9 @@ class StudioHostTransportBoundaryTests(unittest.TestCase):
         self.assertIn("projectsCatalog:", self.host)
         self.assertIn("aiSessionsStatus:", self.host)
         self.assertIn("connectProductAccount:", self.host)
+        self.assertIn("remoteAppIntelligenceGrants:", self.host)
+        self.assertIn("authorizeRemoteAppIntelligenceGrant:", self.host)
+        self.assertIn("revokeRemoteAppIntelligenceGrant:", self.host)
         self.assertNotIn("call:", self.host)
         self.assertNotIn("execute:", self.host)
         self.assertNotIn("deviceAgent:", self.host)
@@ -56,6 +59,9 @@ class StudioHostTransportBoundaryTests(unittest.TestCase):
         self.assertIn('"connect_product_account"', bridge)
         self.assertIn('"blender_prepare"', bridge)
         self.assertIn('"computer_access_settings"', bridge)
+        self.assertIn('"remote_app_intelligence_grants"', bridge)
+        self.assertIn('"authorize_remote_app_intelligence_grant"', bridge)
+        self.assertIn('"revoke_remote_app_intelligence_grant"', bridge)
 
     def test_host_bridge_is_in_python_package_data(self) -> None:
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
