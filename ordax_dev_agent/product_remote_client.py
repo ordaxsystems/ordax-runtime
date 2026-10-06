@@ -253,6 +253,74 @@ class ProductRemoteClient:
         )
         return self._body(response)
 
+    def project_capability_grants(
+        self,
+        access_token: str,
+        *,
+        link_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        params = {"link_id": link_id} if link_id is not None else None
+        response = self.http.get(
+            f"{self.base_url}/v3/product/project-capability-grants",
+            headers=self._headers(access_token),
+            params=params,
+        )
+        body = self._body(response)
+        grants = body.get("grants")
+        if not isinstance(grants, list) or not all(isinstance(item, dict) for item in grants):
+            raise ProductRemoteError(
+                "product_remote_invalid_response",
+                response.status_code,
+                "Product project capability grant catalog is invalid",
+            )
+        return [dict(item) for item in grants]
+
+    def create_project_capability_grant(
+        self,
+        access_token: str,
+        *,
+        link_id: str,
+        mode: str,
+        projects: list[str],
+        expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "link_id": link_id,
+            "mode": mode,
+            "projects": list(projects),
+        }
+        if expires_at is not None:
+            payload["expires_at"] = expires_at
+        response = self.http.post(
+            f"{self.base_url}/v3/product/project-capability-grants",
+            headers={**self._headers(access_token), "content-type": "application/json"},
+            json=payload,
+        )
+        body = self._body(response)
+        grant = body.get("grant")
+        if not isinstance(grant, dict):
+            raise ProductRemoteError(
+                "product_remote_invalid_response",
+                response.status_code,
+                "Product project capability grant payload is missing",
+            )
+        return {
+            "mode": body.get("mode"),
+            "replayed": bool(body.get("replayed")),
+            "grant": dict(grant),
+        }
+
+    def revoke_project_capability_grant(
+        self,
+        access_token: str,
+        grant_id: str,
+    ) -> dict[str, Any]:
+        response = self.http.delete(
+            f"{self.base_url}/v3/product/project-capability-grants/{grant_id}",
+            headers=self._headers(access_token),
+        )
+        return self._body(response)
+
     def submit_action(
         self,
         access_token: str,

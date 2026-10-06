@@ -214,6 +214,68 @@ class ProductRemoteClientTests(unittest.TestCase):
             ["Bearer jwt-list", "Bearer jwt-create", "Bearer jwt-revoke"],
         )
 
+    def test_owner_project_browser_grant_methods_are_product_authenticated(self):
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.method, request.url.path, request.headers.get("authorization", "")))
+            if request.url.path == "/v3/product/project-capability-grants" and request.method == "GET":
+                self.assertIn("link_id=link-1", str(request.url.query))
+                return httpx.Response(200, json={
+                    "ok": True,
+                    "grants": [{
+                        "id": "browser-grant-1",
+                        "device_id": "dev-1",
+                        "mode": "project-browser-automation",
+                        "projects": ["ordax-review-demo"],
+                    }],
+                })
+            if request.url.path == "/v3/product/project-capability-grants" and request.method == "POST":
+                body = json.loads(request.content.decode("utf-8"))
+                self.assertEqual("link-1", body["link_id"])
+                self.assertEqual("project-browser-automation", body["mode"])
+                self.assertEqual(["ordax-review-demo"], body["projects"])
+                return httpx.Response(201, json={
+                    "ok": True,
+                    "mode": body["mode"],
+                    "replayed": False,
+                    "grant": {
+                        "id": "browser-grant-1",
+                        "device_id": "dev-1",
+                        "mode": body["mode"],
+                        "projects": body["projects"],
+                    },
+                })
+            if request.url.path == "/v3/product/project-capability-grants/browser-grant-1" and request.method == "DELETE":
+                return httpx.Response(200, json={
+                    "ok": True,
+                    "revoked": True,
+                    "grant": {"id": "browser-grant-1"},
+                })
+            return httpx.Response(404, json={"ok": False, "error": "not_found"})
+
+        client = ProductRemoteClient(
+            "https://control.example.test",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        grants = client.project_capability_grants("jwt-list", link_id="link-1")
+        self.assertEqual("browser-grant-1", grants[0]["id"])
+        created = client.create_project_capability_grant(
+            "jwt-create",
+            link_id="link-1",
+            mode="project-browser-automation",
+            projects=["ordax-review-demo"],
+            expires_at="2026-11-05T00:00:00+00:00",
+        )
+        self.assertEqual("browser-grant-1", created["grant"]["id"])
+        revoked = client.revoke_project_capability_grant("jwt-revoke", "browser-grant-1")
+        self.assertTrue(revoked["revoked"])
+        self.assertEqual(
+            [item[2] for item in seen],
+            ["Bearer jwt-list", "Bearer jwt-create", "Bearer jwt-revoke"],
+        )
+        self.assertFalse(hasattr(client, "access_token"))
+
 
 if __name__ == "__main__":
     unittest.main()
