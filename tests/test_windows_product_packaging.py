@@ -171,7 +171,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         build = (ROOT / "scripts" / "windows" / "build-ordax-studio-product.ps1").read_text(encoding="utf-8")
         source_lock = (ROOT / "studio-source.lock.json").read_text(encoding="utf-8")
         self.assertIn('"repository": "washingtonmsdj/ordax-apps"', source_lock)
-        self.assertIn('"commit": "6baff254e01dd9dee1d994ab31ec6a0028d92671"', source_lock)
+        self.assertIn('"commit": "a92f75a6687799281871eb66a506628e0b6dd0ae"', source_lock)
         self.assertIn('"path": "apps/studio"', source_lock)
         self.assertIn('"version": "0.4.5"', source_lock)
         self.assertIn("repository: washingtonmsdj/ordax-apps", workflow)
