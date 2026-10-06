@@ -152,7 +152,6 @@ class ComputerControlActions:
             "parent_pid": ppid,
             "name": bounded(item.get("name") or item.get("Name"), 260),
             "executable": bounded(item.get("executable") or item.get("ExecutablePath"), 2000),
-            "command_line": bounded(item.get("command_line") or item.get("CommandLine"), 4000),
         }
 
     @classmethod
@@ -161,7 +160,7 @@ class ComputerControlActions:
             script = (
                 "$ErrorActionPreference='Stop';"
                 "Get-CimInstance Win32_Process | "
-                "Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | "
+                "Select-Object ProcessId,ParentProcessId,Name,ExecutablePath | "
                 "ConvertTo-Json -Compress -Depth 3"
             )
             completed = subprocess.run(
@@ -207,12 +206,10 @@ class ComputerControlActions:
             except ValueError:
                 continue
             name = parts[2]
-            command = parts[3] if len(parts) > 3 else name
             items.append(cls._normalize_process_item({
                 "pid": pid,
                 "parent_pid": ppid,
                 "name": name,
-                "command_line": command,
             }))
         return items
 
@@ -243,7 +240,6 @@ class ComputerControlActions:
                 item for item in items
                 if query in str(item.get("name") or "").casefold()
                 or query in str(item.get("executable") or "").casefold()
-                or query in str(item.get("command_line") or "").casefold()
             ]
         items.sort(key=lambda item: (str(item.get("name") or "").casefold(), int(item["pid"])))
         total = len(items)
