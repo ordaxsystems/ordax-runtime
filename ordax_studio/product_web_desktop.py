@@ -71,6 +71,7 @@ _OWNER_REMOTE_COMPUTER_GRANT_MODES = frozenset({
     "computer-clipboard",
     "computer-process-control",
 })
+_OWNER_PROJECT_BROWSER_GRANT_MODE = "project-browser-automation"
 
 
 class StudioProductApi(StudioApi):
@@ -278,6 +279,155 @@ class StudioProductApi(StudioApi):
         return {
             "ok": True,
             "summary": "Autoriza??o remota revogada",
+            "data": result,
+        }
+
+    def remote_browser_grants(self) -> dict[str, Any]:
+        project = str(getattr(self, "project", "") or "").strip()
+        if not project:
+            return {
+                "ok": False,
+                "code": "project_required",
+                "summary": "Selecione um projeto antes de gerenciar o navegador remoto.",
+            }
+        try:
+            session = self._product_session_required()
+            device_id = self._current_product_device_id()
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                links = [
+                    link for link in remote.device_links(session.access_token)
+                    if str(link.get("device_id") or "") == device_id
+                ]
+                grants = [
+                    grant for grant in remote.project_capability_grants(session.access_token)
+                    if str(grant.get("device_id") or "") == device_id
+                    and str(grant.get("mode") or "") == _OWNER_PROJECT_BROWSER_GRANT_MODE
+                    and project in [str(item) for item in (grant.get("projects") or [])]
+                ]
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autoriza??o do navegador indispon?vel",
+            }
+        return {
+            "ok": True,
+            "summary": "Autoriza??o do navegador carregada",
+            "data": {
+                "device_id": device_id,
+                "project": project,
+                "links": links,
+                "grants": grants,
+                "mode": _OWNER_PROJECT_BROWSER_GRANT_MODE,
+            },
+        }
+
+    def authorize_remote_browser_grant(
+        self,
+        link_id: str | None = None,
+        expires_days: int = 30,
+    ) -> dict[str, Any]:
+        project = str(getattr(self, "project", "") or "").strip()
+        if not project:
+            return {
+                "ok": False,
+                "code": "project_required",
+                "summary": "Selecione um projeto antes de autorizar o navegador remoto.",
+            }
+        try:
+            days = int(expires_days)
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "code": "owner_project_grant_expiry_invalid",
+                "summary": "A validade deve ser informada em dias inteiros.",
+            }
+        if not 1 <= days <= 365:
+            return {
+                "ok": False,
+                "code": "owner_project_grant_expiry_invalid",
+                "summary": "A validade deve ficar entre 1 e 365 dias.",
+            }
+
+        try:
+            session = self._product_session_required()
+            device_id = self._current_product_device_id()
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                links = [
+                    link for link in remote.device_links(session.access_token)
+                    if str(link.get("device_id") or "") == device_id
+                ]
+                requested_link = str(link_id or "").strip()
+                if requested_link:
+                    links = [
+                        link for link in links
+                        if str(link.get("link_id") or "") == requested_link
+                    ]
+                if len(links) != 1:
+                    code = "product_device_link_not_found" if not links else "product_device_link_ambiguous"
+                    summary = (
+                        "Nenhum v?nculo ativo desta conta corresponde a este computador."
+                        if not links else
+                        "H? mais de um v?nculo ativo para este computador; selecione o v?nculo explicitamente."
+                    )
+                    return {"ok": False, "code": code, "summary": summary}
+                selected_link = str(links[0].get("link_id") or "")
+                expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+                created = remote.create_project_capability_grant(
+                    session.access_token,
+                    link_id=selected_link,
+                    mode=_OWNER_PROJECT_BROWSER_GRANT_MODE,
+                    projects=[project],
+                    expires_at=expires_at,
+                )
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autoriza??o do navegador indispon?vel",
+            }
+        return {
+            "ok": True,
+            "summary": "Navegador gerenciado autorizado para o projeto atual",
+            "data": created,
+        }
+
+    def revoke_remote_browser_grant(self, grant_id: str) -> dict[str, Any]:
+        grant_id = str(grant_id or "").strip()
+        if not grant_id or len(grant_id) > 128:
+            return {
+                "ok": False,
+                "code": "owner_project_grant_id_invalid",
+                "summary": "Identificador de autoriza??o do navegador inv?lido.",
+            }
+        try:
+            session = self._product_session_required()
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                result = remote.revoke_project_capability_grant(
+                    session.access_token,
+                    grant_id,
+                )
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autoriza??o do navegador indispon?vel",
+            }
+        return {
+            "ok": True,
+            "summary": "Autoriza??o do navegador revogada",
             "data": result,
         }
 
