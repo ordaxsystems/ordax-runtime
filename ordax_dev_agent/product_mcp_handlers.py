@@ -59,6 +59,37 @@ def _invoke(
 
 
 @mcp.tool()
+def app_intelligence_catalog(
+    device_id: str,
+    space_id: str | None = None,
+) -> dict[str, Any]:
+    """Read the device's compact App Intelligence catalog without execution authority."""
+    return _invoke(
+        device_id=device_id,
+        action="intelligence.app_catalog",
+        project=None,
+        space_id=space_id,
+        arguments={},
+    )
+
+
+@mcp.tool()
+def app_intelligence_detail(
+    device_id: str,
+    app_id: str,
+    space_id: str | None = None,
+) -> dict[str, Any]:
+    """Read declarative semantics for one exact app id."""
+    return _invoke(
+        device_id=device_id,
+        action="intelligence.app_detail",
+        project=None,
+        space_id=space_id,
+        arguments={"app_id": app_id},
+    )
+
+
+@mcp.tool()
 def product_session() -> dict[str, Any]:
     """Return the authenticated OrdaX Product subject for this MCP host."""
     token = _access_token()
