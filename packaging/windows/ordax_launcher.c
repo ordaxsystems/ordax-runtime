@@ -38,6 +38,71 @@ static bool file_exists(const wchar_t *path) {
     return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+static bool runtime_is_running(void) {
+    HANDLE mutex = OpenMutexW(SYNCHRONIZE, FALSE, L"Local\\ORDAXRuntime");
+    if (mutex == NULL) {
+        return false;
+    }
+    CloseHandle(mutex);
+    return true;
+}
+
+static bool ensure_runtime_running(const wchar_t *root) {
+    if (runtime_is_running()) {
+        return true;
+    }
+
+    wchar_t runtime[ORDAX_MAX_PATH];
+    wchar_t command[ORDAX_MAX_PATH];
+    if (_snwprintf_s(
+            runtime,
+            ORDAX_MAX_PATH,
+            _TRUNCATE,
+            L"%ls\\ORDAX Runtime.exe",
+            root) < 0 || !file_exists(runtime)) {
+        return false;
+    }
+    if (_snwprintf_s(
+            command,
+            ORDAX_MAX_PATH,
+            _TRUNCATE,
+            L"\"%ls\"",
+            runtime) < 0) {
+        return false;
+    }
+
+    STARTUPINFOW startup;
+    PROCESS_INFORMATION process;
+    ZeroMemory(&startup, sizeof(startup));
+    ZeroMemory(&process, sizeof(process));
+    startup.cb = sizeof(startup);
+
+    if (!CreateProcessW(
+            NULL,
+            command,
+            NULL,
+            NULL,
+            FALSE,
+            CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP,
+            NULL,
+            root,
+            &startup,
+            &process)) {
+        return false;
+    }
+
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+
+    for (int attempt = 0; attempt < 200; ++attempt) {
+        if (runtime_is_running()) {
+            return true;
+        }
+        Sleep(50);
+    }
+    return false;
+}
+
 static HANDLE create_kill_job(void) {
     HANDLE job = CreateJobObjectW(NULL, NULL);
     if (job == NULL) {
@@ -287,6 +352,14 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
     set_default_environment(L"ORDAX_AGENT_REPO_PATH", root);
     set_default_environment(L"ORDAX_BRIDGE_PATH", root);
     SetCurrentDirectoryW(root);
+
+    if (!ORDAX_RUNTIME_LAUNCHER && !ensure_runtime_running(root)) {
+        fatal_message(L"Não foi possível iniciar o ORDAX Runtime automaticamente.");
+        CloseHandle(shutdown_event);
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
+        return 15;
+    }
 
     HANDLE job = create_kill_job();
     DWORD result = 0;
