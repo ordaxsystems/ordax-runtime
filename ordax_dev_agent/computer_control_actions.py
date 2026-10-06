@@ -110,6 +110,22 @@ class _INPUT(ctypes.Structure):
     _fields_ = [("type", wintypes.DWORD), ("union", _INPUTUNION)]
 
 
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+
+class _MSG(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", wintypes.HWND),
+        ("message", wintypes.UINT),
+        ("wParam", wintypes.WPARAM),
+        ("lParam", wintypes.LPARAM),
+        ("time", wintypes.DWORD),
+        ("pt", _POINT),
+        ("lPrivate", wintypes.DWORD),
+    ]
+
+
 _CRITICAL_PROCESS_NAMES = frozenset({
     "system",
     "registry",
@@ -473,6 +489,20 @@ class ComputerControlActions:
     def _current_thread_id() -> int:
         return int(ctypes.windll.kernel32.GetCurrentThreadId())
 
+    @staticmethod
+    def _ensure_current_thread_message_queue(user32: Any) -> None:
+        # AttachThreadInput requires both threads to own a message queue.
+        # Background worker threads may not have one yet. Microsoft documents
+        # PeekMessage(..., PM_NOREMOVE) as the supported way to force creation.
+        message = _MSG()
+        user32.PeekMessageW(
+            ctypes.byref(message),
+            None,
+            0x0400,  # WM_USER
+            0x0400,
+            0x0000,  # PM_NOREMOVE
+        )
+
     def computer_focus_window(self, payload: dict[str, Any]) -> ActionResult:
         try:
             user32 = self._user32()
@@ -499,6 +529,7 @@ class ComputerControlActions:
 
         try:
             foreground_hwnd = int(user32.GetForegroundWindow() or 0)
+            self._ensure_current_thread_message_queue(user32)
             caller_thread = self._current_thread_id()
             foreground_thread = int(
                 user32.GetWindowThreadProcessId(foreground_hwnd, None) or 0
