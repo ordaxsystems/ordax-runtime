@@ -45,6 +45,7 @@ jobs:
           tests.test_product_audit_outbox
           tests.test_product_action_scope_parity
           tests.test_computer_parity_contract
+          tests.test_computer_focus_window
           tests.test_computer_access_management
           tests.test_computer_full_access
           tests.test_computer_process_actions
