@@ -31,8 +31,8 @@ class ComputerProcessActionsTests(unittest.TestCase):
 
     def test_process_list_is_device_scoped_filtered_and_bounded(self):
         snapshot = [
-            {"pid": 10, "parent_pid": 1, "name": "python.exe", "executable": "C:/Python/python.exe", "command_line": "python app.py"},
-            {"pid": 11, "parent_pid": 1, "name": "node.exe", "executable": "C:/Node/node.exe", "command_line": "node server.js"},
+            {"pid": 10, "parent_pid": 1, "name": "python.exe", "executable": "C:/Python/python.exe"},
+            {"pid": 11, "parent_pid": 1, "name": "node.exe", "executable": "C:/Node/node.exe"},
         ]
         with patch.object(self.registry, "_system_process_snapshot", return_value=snapshot):
             result = self.registry.execute(
@@ -43,6 +43,20 @@ class ComputerProcessActionsTests(unittest.TestCase):
         self.assertTrue(result.ok, result.summary)
         self.assertEqual(1, result.data["total_matches"])
         self.assertEqual("python.exe", result.data["processes"][0]["name"])
+
+    def test_process_list_does_not_collect_or_return_command_lines(self):
+        normalized = self.registry._normalize_process_item({
+            "ProcessId": 10,
+            "ParentProcessId": 1,
+            "Name": "python.exe",
+            "ExecutablePath": "C:/Python/python.exe",
+            "CommandLine": "python secret-or-expensive-arguments.py",
+        })
+        self.assertNotIn("command_line", normalized)
+
+        source = (Path(__file__).resolve().parents[1] / "ordax_dev_agent" / "computer_control_actions.py").read_text(encoding="utf-8")
+        self.assertIn("Select-Object ProcessId,ParentProcessId,Name,ExecutablePath |", source)
+        self.assertNotIn("Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine", source)
 
     def test_terminate_requires_current_name_to_match_pid(self):
         with patch.object(
