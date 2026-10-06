@@ -45,6 +45,22 @@ class ComputerFocusWindowTests(unittest.TestCase):
             result = self.actions.computer_focus_window({"project": "demo", "handle": "0x200"})
 
         self.assertFalse(result.ok)
+        self.assertEqual(
+            result.summary,
+            "window focus was rejected by Windows foreground activation policy",
+        )
+        diagnostics = result.data["focus_diagnostics"]
+        self.assertEqual(diagnostics["requested_handle"], "0x200")
+        self.assertEqual(diagnostics["initial_foreground_handle"], "0x100")
+        self.assertEqual(diagnostics["caller_thread_id"], 30)
+        self.assertEqual(diagnostics["foreground_thread_id"], 10)
+        self.assertEqual(diagnostics["target_thread_id"], 20)
+        self.assertFalse(diagnostics["set_foreground_window_returned"])
+        self.assertFalse(diagnostics["observed_foreground"])
+        self.assertEqual(
+            diagnostics["reason"],
+            "windows_foreground_activation_rejected",
+        )
         calls = [c.args for c in self.user32.AttachThreadInput.call_args_list]
         self.assertEqual(calls[-3:], [(20, 10, False), (30, 20, False), (30, 10, False)])
 
