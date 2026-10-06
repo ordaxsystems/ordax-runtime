@@ -104,6 +104,22 @@ def load_settings(path: Path) -> dict:
         raise SetupError("SETTINGS_INVALID_PRESERVED") from None
 
 
+def migrate_legacy_bridge_path(settings: dict, *, state: Path, home: Path) -> bool:
+    raw = settings.get("bridge_path")
+    if not isinstance(raw, str) or not raw.strip():
+        return False
+
+    configured = os.path.normcase(os.path.normpath(os.path.expandvars(raw.strip())))
+    legacy = os.path.normcase(
+        os.path.normpath(str(home / "Documents" / "github" / "mcp-blender"))
+    )
+    if configured != legacy:
+        return False
+
+    settings["bridge_path"] = str(state / "src")
+    return True
+
+
 def request(client, endpoint: str, body: dict, headers: dict) -> dict:
     try:
         response = client.post(endpoint, json=body, headers=headers)
@@ -242,8 +258,11 @@ def _configure(
             device_id=device_id,
         )
 
+        effective_home = home or Path.home()
+        migrate_legacy_bridge_path(settings, state=state, home=effective_home)
+
         projects = settings.setdefault("projects", {})
-        root = (home or Path.home()) / "Documents" / "github"
+        root = effective_home / "Documents" / "github"
         for slug in ("cerco-no-interior-mvp", "dioramas-biblicos"):
             if (root / slug).is_dir() and slug not in projects:
                 projects[slug] = {
