@@ -49,6 +49,21 @@ if ($studioAppSource) {
         throw "Canonical Studio App Intelligence manifest is incompatible"
     }
 
+    $studioActionManifestPath = Join-Path $studioAppSource "actions\\manifest.json"
+    if (-not (Test-Path $studioActionManifestPath)) {
+        throw "Canonical Studio Application Action manifest is missing: $studioActionManifestPath"
+    }
+    $studioActionManifest = Get-Content $studioActionManifestPath -Raw | ConvertFrom-Json
+    if (
+        $studioActionManifest.schema -ne "ordax.application-action-manifest/1" -or
+        $studioActionManifest.appId -ne "studio" -or
+        [string]$studioActionManifest.appVersion -ne [string]$studioAppManifest.version -or
+        $studioActionManifest.authority -ne "none" -or
+        $studioActionManifest.execution -ne "proposal-only"
+    ) {
+        throw "Canonical Studio Application Action manifest is incompatible"
+    }
+
     $targetStudio = Join-Path $repoRoot "ordax_studio"
     $appIntelligenceRegistry = [ordered]@{
         schema = "ordax.app-intelligence-registry/1"
