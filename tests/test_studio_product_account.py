@@ -277,6 +277,71 @@ class StudioProductAccountTests(unittest.TestCase):
         self.assertEqual("interactive-computer-control", kwargs["mode"])
         self.assertNotIn("sensitive-jwt", repr(result))
 
+    def test_owner_can_authorize_app_intelligence_read_for_current_device_link(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace(
+            control_plane_url="https://control.example.test",
+            device_id="dev-1",
+        ))
+        api._product_session = ProductAuthSession(
+            access_token="sensitive-jwt",
+            email="user@example.com",
+        )
+        api._product_device_id = "dev-1"
+        remote = Mock()
+        remote.__enter__ = Mock(return_value=remote)
+        remote.__exit__ = Mock(return_value=None)
+        remote.device_links.return_value = [
+            {"link_id": "link-1", "device_id": "dev-1"},
+            {"link_id": "foreign", "device_id": "dev-2"},
+        ]
+        remote.create_device_intelligence_grant.return_value = {
+            "mode": "app-intelligence-read",
+            "replayed": False,
+            "grant": {"id": "grant-intelligence-1", "device_id": "dev-1"},
+        }
+        with patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote):
+            result = api.authorize_remote_app_intelligence_grant(expires_days=30)
+        self.assertTrue(result["ok"])
+        args, kwargs = remote.create_device_intelligence_grant.call_args
+        self.assertEqual("sensitive-jwt", args[0])
+        self.assertEqual("link-1", kwargs["link_id"])
+        self.assertEqual("app-intelligence-read", kwargs["mode"])
+        self.assertNotIn("sensitive-jwt", repr(result))
+
+    def test_app_intelligence_grant_listing_filters_current_device(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace(
+            control_plane_url="https://control.example.test",
+            device_id="dev-1",
+        ))
+        api._product_session = ProductAuthSession(
+            access_token="sensitive-jwt",
+            email="user@example.com",
+        )
+        api._product_device_id = "dev-1"
+        remote = Mock()
+        remote.__enter__ = Mock(return_value=remote)
+        remote.__exit__ = Mock(return_value=None)
+        remote.device_links.return_value = [
+            {"link_id": "link-1", "device_id": "dev-1"},
+            {"link_id": "link-2", "device_id": "dev-2"},
+        ]
+        remote.device_intelligence_grants.return_value = [
+            {"id": "grant-intelligence-1", "device_id": "dev-1"},
+            {"id": "grant-intelligence-2", "device_id": "dev-2"},
+        ]
+        with patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote):
+            result = api.remote_app_intelligence_grants()
+        self.assertTrue(result["ok"])
+        self.assertEqual(["link-1"], [item["link_id"] for item in result["data"]["links"]])
+        self.assertEqual(
+            ["grant-intelligence-1"],
+            [item["id"] for item in result["data"]["grants"]],
+        )
+        self.assertEqual(["app-intelligence-read"], result["data"]["available_modes"])
+        self.assertNotIn("sensitive-jwt", repr(result))
+
     def test_owner_ui_host_refuses_full_or_unknown_profile(self) -> None:
         api = object.__new__(StudioProductApi)
         api.agent = SimpleNamespace(config=SimpleNamespace(
