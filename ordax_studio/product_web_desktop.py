@@ -73,6 +73,7 @@ _OWNER_REMOTE_COMPUTER_GRANT_MODES = frozenset({
 })
 
 _OWNER_PROJECT_BROWSER_GRANT_MODE = "project-browser-automation"
+_OWNER_APP_INTELLIGENCE_GRANT_MODE = "app-intelligence-read"
 
 
 class StudioProductApi(StudioApi):
@@ -280,6 +281,136 @@ class StudioProductApi(StudioApi):
         return {
             "ok": True,
             "summary": "Autoriza??o remota revogada",
+            "data": result,
+        }
+
+    def remote_app_intelligence_grants(self) -> dict[str, Any]:
+        try:
+            session = self._product_session_required()
+            device_id = self._current_product_device_id()
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                links = [
+                    link for link in remote.device_links(session.access_token)
+                    if str(link.get("device_id") or "") == device_id
+                ]
+                grants = [
+                    grant for grant in remote.device_intelligence_grants(session.access_token)
+                    if str(grant.get("device_id") or "") == device_id
+                ]
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autorização de inteligência dos apps indisponível",
+            }
+        return {
+            "ok": True,
+            "summary": "Autorizações de inteligência dos apps carregadas",
+            "data": {
+                "device_id": device_id,
+                "links": links,
+                "grants": grants,
+                "available_modes": [_OWNER_APP_INTELLIGENCE_GRANT_MODE],
+            },
+        }
+
+    def authorize_remote_app_intelligence_grant(
+        self,
+        link_id: str | None = None,
+        expires_days: int = 30,
+    ) -> dict[str, Any]:
+        try:
+            days = int(expires_days)
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "code": "owner_intelligence_grant_expiry_invalid",
+                "summary": "A validade deve ser informada em dias inteiros.",
+            }
+        if not 1 <= days <= 365:
+            return {
+                "ok": False,
+                "code": "owner_intelligence_grant_expiry_invalid",
+                "summary": "A validade deve ficar entre 1 e 365 dias.",
+            }
+
+        try:
+            session = self._product_session_required()
+            device_id = self._current_product_device_id()
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                links = [
+                    link for link in remote.device_links(session.access_token)
+                    if str(link.get("device_id") or "") == device_id
+                ]
+                requested_link = str(link_id or "").strip()
+                if requested_link:
+                    links = [
+                        link for link in links
+                        if str(link.get("link_id") or "") == requested_link
+                    ]
+                if len(links) != 1:
+                    code = "product_device_link_not_found" if not links else "product_device_link_ambiguous"
+                    summary = (
+                        "Nenhum vínculo ativo desta conta corresponde a este computador."
+                        if not links else
+                        "Há mais de um vínculo ativo para este computador; selecione o vínculo explicitamente."
+                    )
+                    return {"ok": False, "code": code, "summary": summary}
+                expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+                created = remote.create_device_intelligence_grant(
+                    session.access_token,
+                    link_id=str(links[0].get("link_id") or ""),
+                    mode=_OWNER_APP_INTELLIGENCE_GRANT_MODE,
+                    expires_at=expires_at,
+                )
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autorização de inteligência dos apps indisponível",
+            }
+        return {
+            "ok": True,
+            "summary": "Leitura de inteligência dos apps autorizada",
+            "data": created,
+        }
+
+    def revoke_remote_app_intelligence_grant(self, grant_id: str) -> dict[str, Any]:
+        grant_id = str(grant_id or "").strip()
+        if not grant_id or len(grant_id) > 128:
+            return {
+                "ok": False,
+                "code": "owner_intelligence_grant_id_invalid",
+                "summary": "Identificador de autorização inválido.",
+            }
+        try:
+            session = self._product_session_required()
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                result = remote.revoke_device_intelligence_grant(
+                    session.access_token,
+                    grant_id,
+                )
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autorização de inteligência dos apps indisponível",
+            }
+        return {
+            "ok": True,
+            "summary": "Autorização de inteligência dos apps revogada",
             "data": result,
         }
 
