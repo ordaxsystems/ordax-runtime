@@ -19,6 +19,7 @@ from .config import AgentConfig
 from .device_credentials import resolve_token_path
 from .models import ActionResult, AgentJob
 from .terminal_outbox import TerminalOutbox
+from .product_audit_outbox import ProductAuditOutbox
 from .remote_protocol import (
     DeviceAuthorizationError,
     TransientDeliveryError,
@@ -85,6 +86,13 @@ class CloudflareControlPlane:
             "cloudflare-v3",
             self.device_id,
         )
+        self._product_audit_outbox = ProductAuditOutbox(
+            config.state_dir,
+            "cloudflare-v3",
+            self.device_id,
+        )
+        self._product_audit_flush_lock = threading.Lock()
+        self._product_audit_flush_thread: threading.Thread | None = None
 
         self.http = httpx.Client(
             timeout=httpx.Timeout(60.0),
@@ -313,6 +321,10 @@ class CloudflareControlPlane:
         return job
 
     def claim_next_job(self) -> AgentJob | None:
+        # Product audit is durably journaled locally before actions run. Cloud
+        # delivery is retried outside the execution path so audit latency cannot
+        # serialize otherwise independent desktop actions.
+        self._kick_product_audit_flush()
         # Never accept a new action while a prior executed action still has a
         # durable terminal report awaiting cloud acceptance.
         self.recover_pending_reports()
@@ -462,8 +474,9 @@ class CloudflareControlPlane:
             )
         return dict(pairing)
 
-    def record_product_audit(self, event) -> None:
-        body = {
+    @staticmethod
+    def _product_audit_body(event) -> dict[str, Any]:
+        return {
             "request_id": event.request_id,
             "subject_id": event.subject_id,
             "grant_id": event.grant_id,
@@ -475,10 +488,12 @@ class CloudflareControlPlane:
             "payload_fields": list(event.payload_fields),
             "result_ok": event.result_ok,
         }
+
+    def _deliver_product_audit_body(self, body: dict[str, Any]) -> None:
         response = self.http.post(
             f"{self.base_http_url}/v3/product/audit",
             json=body,
-            timeout=15.0,
+            timeout=httpx.Timeout(connect=3.0, read=5.0, write=5.0, pool=3.0),
         )
         if response.status_code in {401, 403}:
             raise DeviceAuthorizationError("DEVICE_CREDENTIAL_REJECTED")
@@ -494,6 +509,40 @@ class CloudflareControlPlane:
         payload = response.json()
         if not isinstance(payload, dict) or payload.get("ok") is not True:
             raise RuntimeError("cloudflare-v3 product audit returned invalid response")
+
+    def _flush_product_audit_outbox(self) -> None:
+        try:
+            for path, body in self._product_audit_outbox.pending():
+                try:
+                    self._deliver_product_audit_body(body)
+                except Exception:
+                    return
+                self._product_audit_outbox.acknowledge(path)
+        finally:
+            with self._product_audit_flush_lock:
+                self._product_audit_flush_thread = None
+
+    def _kick_product_audit_flush(self) -> None:
+        with self._product_audit_flush_lock:
+            thread = self._product_audit_flush_thread
+            if thread is not None and thread.is_alive():
+                return
+            thread = threading.Thread(
+                target=self._flush_product_audit_outbox,
+                name="ordax-product-audit-flush",
+                daemon=True,
+            )
+            self._product_audit_flush_thread = thread
+            thread.start()
+
+    def record_product_audit(self, event) -> None:
+        # Local durable persistence is the synchronous audit boundary. If this
+        # fails, ProductActionGateway remains fail-closed. Remote persistence is
+        # eventual and retried asynchronously to avoid network latency stalling
+        # the global action queue.
+        body = self._product_audit_body(event)
+        self._product_audit_outbox.persist(body)
+        self._kick_product_audit_flush()
 
     def _control_plane_capabilities(self) -> frozenset[str]:
         now = time.monotonic()
