@@ -21,6 +21,21 @@ jobs:
 
       - name: Compile Runtime packages
         run: python -m compileall -q ordax_dev_agent ordax_device_agent mcp_blender_unity
+
+      - name: Validate managed runtime setup PowerShell syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/windows/ordax-device-agent-setup.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
       - name: Run Runtime ownership and Computer Control contracts
         run: >-
           python -m unittest
@@ -32,4 +47,5 @@ jobs:
           tests.test_computer_process_actions
           tests.test_product_mcp_server
           tests.test_ordax_os_runtime_compatibility_contract
+          tests.test_managed_runtime_legacy_migration_contract
 
