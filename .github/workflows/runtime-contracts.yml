@@ -49,5 +49,6 @@ jobs:
           tests.test_product_mcp_server
           tests.test_ordax_os_runtime_compatibility_contract
           tests.test_managed_runtime_legacy_migration_contract
+          tests.test_managed_runtime_precompile_contract
           tests.test_device_setup_legacy_bridge_path
 
