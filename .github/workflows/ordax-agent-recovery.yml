@@ -1,0 +1,368 @@
+name: OrdaX Agent Recovery
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "ordax_dev_agent/**"
+      - "mcp_blender_unity/**"
+      - "scripts/windows/**"
+      - "scripts/verify_visual_agent.py"
+      - "scripts/blender_benchmark.py"
+      - "pyproject.toml"
+      - ".github/workflows/ordax-agent-recovery.yml"
+      - ".github/ordax-recovery-request.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ordax-agent-recovery
+  cancel-in-progress: true
+
+jobs:
+  current-head:
+    runs-on: ubuntu-latest
+    outputs:
+      current: ${{ steps.head.outputs.current }}
+    steps:
+      - uses: actions/github-script@v7
+        id: head
+        with:
+          script: |
+            const {data} = await github.rest.repos.getBranch({...context.repo, branch: 'main'});
+            core.setOutput('current', context.ref === 'refs/heads/main' && data.commit.sha === context.sha);
+  recover-if-offline:
+    needs: current-head
+    if: needs.current-head.outputs.current == 'true' && (github.event_name == 'workflow_dispatch' || vars.ORDAX_RECOVERY_ENABLED == 'true')
+    runs-on: [self-hosted, Windows, X64, ordax-recovery]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout candidate code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check whether this main run is still current
+        id: freshness
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          git fetch --quiet origin "refs/heads/main:refs/remotes/origin/main"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not fetch origin/main for freshness check."
+          }
+          $latest = (git rev-parse origin/main).Trim()
+          if ($latest -eq "${{ github.sha }}") {
+            "current=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "This is the current main commit."
+          } else {
+            "current=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "Superseded main run: ${{ github.sha }}; latest is $latest. Heavy local validation and recovery will be skipped."
+          }
+
+      - name: Compile candidate Python before touching managed agent
+        if: steps.freshness.outputs.current != 'false'
+        shell: pwsh
+        run: |
+          $python = Get-Command python -ErrorAction SilentlyContinue
+          if (-not $python) {
+            $python = Get-Command py -ErrorAction SilentlyContinue
+            if (-not $python) { throw "Python is unavailable on the recovery runner." }
+            & $python.Source -3 -m compileall -q mcp_blender_unity ordax_dev_agent
+          } else {
+            & $python.Source -m compileall -q mcp_blender_unity ordax_dev_agent
+          }
+          if ($LASTEXITCODE -ne 0) {
+            throw "Candidate agent code does not compile. Local managed agent was not touched."
+          }
+
+      - name: Run isolated real Blender smoke
+        if: steps.freshness.outputs.current != 'false'
+        shell: pwsh
+        run: |
+          $managedRepo = Join-Path $env:LOCALAPPDATA "OrdaX\DevAgent\src"
+          $venvPython = Join-Path $managedRepo ".venv\Scripts\python.exe"
+          if (-not (Test-Path $venvPython)) {
+            throw "Managed agent virtual environment is missing: $venvPython"
+          }
+
+          $previousPythonPath = $env:PYTHONPATH
+          try {
+            $env:PYTHONPATH = $env:GITHUB_WORKSPACE
+            & $venvPython (Join-Path $env:GITHUB_WORKSPACE "scripts\verify_visual_agent.py")
+            if ($LASTEXITCODE -ne 0) {
+              throw "Candidate failed isolated real Blender visual/multiview smoke."
+            }
+          } finally {
+            $env:PYTHONPATH = $previousPythonPath
+          }
+
+      - name: Run OrdaX BlenderBench
+        if: steps.freshness.outputs.current != 'false'
+        shell: pwsh
+        run: |
+          $managedRepo = Join-Path $env:LOCALAPPDATA "OrdaX\DevAgent\src"
+          $venvPython = Join-Path $managedRepo ".venv\Scripts\python.exe"
+          if (-not (Test-Path $venvPython)) {
+            throw "Managed agent virtual environment is missing: $venvPython"
+          }
+
+          $benchmarkRoot = Join-Path $env:RUNNER_TEMP "ordax-blenderbench"
+          if (Test-Path $benchmarkRoot) {
+            Remove-Item $benchmarkRoot -Recurse -Force
+          }
+
+          $previousPythonPath = $env:PYTHONPATH
+          try {
+            $env:PYTHONPATH = $env:GITHUB_WORKSPACE
+            & $venvPython (Join-Path $env:GITHUB_WORKSPACE "scripts\blender_benchmark.py") --output-dir $benchmarkRoot
+            if ($LASTEXITCODE -ne 0) {
+              throw "Candidate failed OrdaX BlenderBench."
+            }
+          } finally {
+            $env:PYTHONPATH = $previousPythonPath
+          }
+
+      - name: Configure device through shared user-authenticated setup
+        if: steps.freshness.outputs.current != 'false'
+        shell: pwsh
+        run: |
+          git fetch --quiet origin "refs/heads/main:refs/remotes/origin/main"
+          if ($LASTEXITCODE -ne 0 -or (git rev-parse origin/main).Trim() -ne "${{ github.sha }}") {
+            throw "Recovery superseded before local mutation."
+          }
+          $python = Join-Path $env:LOCALAPPDATA "OrdaX\DevAgent\src\.venv\Scripts\python.exe"
+          & $python -m ordax_dev_agent.device_setup
+          if ($LASTEXITCODE -ne 0) { throw "Run ordax-device-agent-setup.ps1 interactively to authenticate this PC." }
+
+      - name: Recover managed agent safely
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.freshness.outputs.current != 'false'
+        shell: pwsh
+        run: |
+          $branch = "main"
+          $repo = Join-Path $env:LOCALAPPDATA "OrdaX\DevAgent\src"
+          $requestPath = Join-Path $env:GITHUB_WORKSPACE ".github\ordax-recovery-request.json"
+          $policyScript = Join-Path $env:GITHUB_WORKSPACE "ordax_dev_agent\update_policy.py"
+
+          if (-not (Test-Path (Join-Path $repo ".git"))) {
+            throw "Managed OrdaX agent repository not found at $repo"
+          }
+          if (-not (Test-Path $policyScript)) {
+            throw "Candidate update policy is missing: $policyScript"
+          }
+
+          $candidatePython = Get-Command python -ErrorAction SilentlyContinue
+          $candidatePythonArgs = @()
+          if (-not $candidatePython) {
+            $candidatePython = Get-Command py -ErrorAction SilentlyContinue
+            if (-not $candidatePython) {
+              throw "Python is unavailable on the recovery runner."
+            }
+            $candidatePythonArgs = @("-3")
+          }
+          $candidatePythonPath = $candidatePython.Source
+
+          $cleanArgs = @($candidatePythonArgs) + @($policyScript, "--check-clean", $repo)
+          & $candidatePythonPath @cleanArgs | Write-Host
+          $preflightCode = $LASTEXITCODE
+          if ($preflightCode -gt 1) {
+            throw "Could not verify managed agent tracked changes with candidate policy."
+          }
+          if ($preflightCode -eq 1) {
+            throw "Managed agent has tracked changes. Recovery refuses to overwrite them."
+          }
+
+          $beforeHead = (git -c core.fsmonitor=false -C $repo rev-parse HEAD).Trim()
+          if (-not $beforeHead) {
+            throw "Could not read managed agent HEAD."
+          }
+
+          git -c core.fsmonitor=false -C $repo fetch --quiet origin "refs/heads/$branch:refs/remotes/origin/$branch"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not fetch agent recovery branch."
+          }
+
+          $remoteHead = (git -c core.fsmonitor=false -C $repo rev-parse "origin/$branch").Trim()
+          if (-not $remoteHead) {
+            throw "Could not read origin/$branch."
+          }
+
+          $needsUpdate = $beforeHead -ne $remoteHead
+          $installContractChanged = $false
+          if ($needsUpdate) {
+            git -c core.fsmonitor=false -C $repo merge-base --is-ancestor $beforeHead $remoteHead
+            if ($LASTEXITCODE -ne 0) {
+              throw "Managed agent is not a fast-forward ancestor of origin/$branch."
+            }
+
+            $contractArgs = @(
+              $policyScript,
+              "--compare-install-contract", $repo,
+              "--before-ref", $beforeHead,
+              "--after-ref", "origin/$branch"
+            )
+            $contractInvokeArgs = @($candidatePythonArgs) + $contractArgs
+            & $candidatePythonPath @contractInvokeArgs | Write-Host
+            $contractCode = $LASTEXITCODE
+            if ($contractCode -gt 1) {
+              throw "Could not compare managed agent install contract."
+            }
+            $installContractChanged = $contractCode -eq 1
+          }
+
+          $request = $null
+          if (Test-Path $requestPath) {
+            try {
+              $request = Get-Content $requestPath -Raw | ConvertFrom-Json
+            } catch {
+              throw "Invalid recovery request JSON: $requestPath"
+            }
+          }
+
+          $taskName = "OrdaX Dev Agent"
+          $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+          if (-not $task) {
+            throw "OrdaX scheduled task is not installed."
+          }
+          if ($task.State -eq "Disabled") {
+            throw "OrdaX scheduled task is disabled."
+          }
+
+          # Avoid Win32_Process/CIM here. A degraded Windows WMI provider can
+          # block indefinitely and prevent the very recovery this workflow is
+          # supposed to perform. The scheduled task plus the bounded local
+          # health endpoint are the authoritative ownership signals.
+          $status = $null
+          try {
+            $status = Invoke-RestMethod -Uri "http://127.0.0.1:8765/status" -TimeoutSec 3
+          } catch {
+            Write-Host "Local agent status endpoint is unavailable."
+          }
+
+          $taskRunning = $task.State -eq "Running"
+          $requestedJob = if ($request) { [string]$request.job_id } else { "" }
+          $activeJob = if ($status -and $status.runtime) { [string]$status.runtime.last_job_id } else { "" }
+          $activeState = if ($status -and $status.runtime) { [string]$status.runtime.state } else { "" }
+          $explicitRecovery = (
+            $requestedJob -and
+            $activeJob -eq $requestedJob -and
+            $activeState -eq "busy"
+          )
+
+          if ($taskRunning -and -not $status -and -not $explicitRecovery) {
+            Write-Host "Scheduled task is running but healthy-state proof is unavailable; leaving it untouched."
+            exit 0
+          }
+
+          if (-not $taskRunning -and $status -and -not $explicitRecovery) {
+            Write-Host "Agent endpoint is healthy outside the scheduled task; refusing to start a duplicate instance."
+            exit 0
+          }
+
+          if ($status -and $activeState -eq "busy" -and -not $explicitRecovery) {
+            Write-Host "Agent is busy with $activeJob; update deferred without interruption."
+            exit 0
+          }
+
+          if ($status -and -not $needsUpdate -and -not $explicitRecovery) {
+            Write-Host "Managed agent is already at current main; leaving it untouched."
+            exit 0
+          }
+
+          $venvPython = Join-Path $repo ".venv\Scripts\python.exe"
+          if (-not (Test-Path $venvPython)) {
+            throw "Managed agent virtual environment is missing: $venvPython"
+          }
+
+          function Restore-ManagedHead([string]$Reason) {
+            Write-Host "RECOVERY_ROLLBACK: $Reason"
+            git -c core.fsmonitor=false -C $repo reset --hard $beforeHead
+            if ($LASTEXITCODE -ne 0) {
+              throw "$Reason Rollback to $beforeHead also failed."
+            }
+            throw "$Reason Managed checkout restored to $beforeHead."
+          }
+
+          if ($taskRunning) {
+            if ($explicitRecovery) {
+              Write-Host "Explicit recovery request matches stuck job $activeJob."
+            } elseif ($needsUpdate) {
+              Write-Host "Agent is idle and behind current main; performing safe maintenance update."
+            }
+
+            Stop-ScheduledTask -TaskName $taskName -ErrorAction Stop
+            Start-Sleep -Seconds 2
+          }
+
+          if ($needsUpdate) {
+            $current = (git -c core.fsmonitor=false -C $repo rev-parse --abbrev-ref HEAD).Trim()
+            if ($current -ne $branch) {
+              git -c core.fsmonitor=false -C $repo checkout $branch
+              if ($LASTEXITCODE -ne 0) {
+                throw "Could not checkout $branch safely."
+              }
+            }
+
+            git -c core.fsmonitor=false -C $repo merge --ff-only --quiet "origin/$branch"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Managed agent fast-forward failed."
+            }
+
+            if ($installContractChanged) {
+              & $venvPython -m pip install -e $repo
+              if ($LASTEXITCODE -ne 0) {
+                Restore-ManagedHead "Managed agent dependency refresh failed."
+              }
+            }
+
+            & $venvPython -m compileall -q (Join-Path $repo "mcp_blender_unity") (Join-Path $repo "ordax_dev_agent")
+            if ($LASTEXITCODE -ne 0) {
+              Restore-ManagedHead "Managed checkout failed compile verification after fast-forward."
+            }
+          }
+
+          $bootstrapInstaller = Join-Path $repo "scripts\windows\ordax-agent-bootstrap-install.ps1"
+          if (-not (Test-Path $bootstrapInstaller)) {
+            throw "External bootstrap installer is missing after managed update: $bootstrapInstaller"
+          }
+
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapInstaller -RepoRoot $repo -TaskName $taskName -RetargetTask
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not install/retarget the external OrdaX bootstrap."
+          }
+
+          $task = Get-ScheduledTask -TaskName $taskName
+          if ($task.State -eq "Running") {
+            Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+          }
+
+          Start-ScheduledTask -TaskName $taskName
+
+          $healthy = $false
+          for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
+            Start-Sleep -Seconds 3
+            try {
+              $newStatus = Invoke-RestMethod -Uri "http://127.0.0.1:8765/status" -TimeoutSec 3
+              if ($newStatus) {
+                $healthy = $true
+                Write-Host "Recovered agent local status endpoint is healthy."
+                break
+              }
+            } catch {
+              Write-Host "Waiting for recovered agent health endpoint..."
+            }
+          }
+          if (-not $healthy) {
+            throw "Recovered agent did not become healthy within 60 seconds."
+          }
+
+          $task = Get-ScheduledTask -TaskName $taskName
+          Write-Host ("OrdaX scheduled task state: " + $task.State)
+          Write-Host ("Managed agent HEAD: " + (git -C $repo rev-parse HEAD).Trim())
+          Write-Host ("Install contract refreshed: " + $installContractChanged)
+          Write-Host ("External bootstrap: " + (Join-Path $env:LOCALAPPDATA "OrdaX\DevAgent\bootstrap\ordax-agent-bootstrap.ps1"))
