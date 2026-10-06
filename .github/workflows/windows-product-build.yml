@@ -10,6 +10,7 @@ on:
       - "ordax_studio/**"
       - "native/ordax-workbench/**"
       - "scripts/windows/build-ordax-studio-product.ps1"
+      - "scripts/windows/assert-release-authenticode.ps1"
       - "tests/test_windows_product_packaging.py"
       - "pyproject.toml"
       - "studio-source.lock.json"
@@ -346,6 +347,12 @@ jobs:
         with:
           name: ordax-studio-windows-x64
           path: artifact
+      - name: Verify production Authenticode signature
+        shell: powershell
+        run: |
+          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
+          if (-not $installer) { throw "Validated ORDAX Studio installer is missing" }
+          .\scripts\windows\assert-release-authenticode.ps1 -Path $installer.FullName
       - name: Publish GitHub Release assets
         shell: powershell
         env:
