@@ -342,7 +342,7 @@ class StudioProductAccountTests(unittest.TestCase):
         self.assertEqual(["app-intelligence-read"], result["data"]["available_modes"])
         self.assertNotIn("sensitive-jwt", repr(result))
 
-    def test_owner_ui_host_refuses_full_or_unknown_profile(self) -> None:
+    def test_owner_full_profile_requires_local_full_access(self) -> None:
         api = object.__new__(StudioProductApi)
         api.agent = SimpleNamespace(config=SimpleNamespace(
             control_plane_url="https://control.example.test",
@@ -350,7 +350,54 @@ class StudioProductAccountTests(unittest.TestCase):
         ))
         api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
         api._product_device_id = "dev-1"
-        for mode in ("full-computer-control", "terminal.exec", "unknown"):
+        with patch(
+            "ordax_studio.product_web_desktop.computer_access_management_status",
+            return_value={"enabled": True, "full_access": False},
+        ):
+            result = api.authorize_remote_computer_grant("full-computer-control")
+        self.assertFalse(result["ok"])
+        self.assertEqual("local_full_access_required", result["code"])
+
+    def test_owner_can_authorize_full_profile_after_local_full_access(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace(
+            control_plane_url="https://control.example.test",
+            device_id="dev-1",
+        ))
+        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
+        api._product_device_id = "dev-1"
+        remote = Mock()
+        remote.__enter__ = Mock(return_value=remote)
+        remote.__exit__ = Mock(return_value=None)
+        remote.device_links.return_value = [{"link_id": "link-1", "device_id": "dev-1"}]
+        remote.create_device_computer_grant.return_value = {
+            "mode": "full-computer-control",
+            "replayed": False,
+            "grant": {"id": "grant-full", "device_id": "dev-1"},
+        }
+        with (
+            patch(
+                "ordax_studio.product_web_desktop.computer_access_management_status",
+                return_value={"enabled": True, "full_access": True},
+            ),
+            patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote),
+        ):
+            result = api.authorize_remote_computer_grant("full-computer-control", expires_days=30)
+        self.assertTrue(result["ok"])
+        args, kwargs = remote.create_device_computer_grant.call_args
+        self.assertEqual("sensitive-jwt", args[0])
+        self.assertEqual("link-1", kwargs["link_id"])
+        self.assertEqual("full-computer-control", kwargs["mode"])
+
+    def test_owner_ui_host_refuses_non_computer_or_unknown_profile(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace(
+            control_plane_url="https://control.example.test",
+            device_id="dev-1",
+        ))
+        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
+        api._product_device_id = "dev-1"
+        for mode in ("terminal.exec", "unknown"):
             result = api.authorize_remote_computer_grant(mode)
             self.assertFalse(result["ok"], mode)
             self.assertEqual("owner_device_grant_mode_not_allowed", result["code"])

@@ -11,6 +11,7 @@ import httpx
 
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.computer_filesystem_actions import computer_access_management_status
 
 from .blender_connection import prepare_blender_connection
 from .instance_lock import SingleInstanceLock
@@ -66,6 +67,7 @@ def _restart_packaged_runtime_after_enrollment() -> bool:
 
 
 _OWNER_REMOTE_COMPUTER_GRANT_MODES = frozenset({
+    "full-computer-control",
     "interactive-computer-control",
     "computer-filesystem",
     "computer-clipboard",
@@ -198,6 +200,14 @@ class StudioProductApi(StudioApi):
                 "code": "owner_device_grant_mode_not_allowed",
                 "summary": "Perfil de autoriza??o remota n?o permitido nesta interface.",
             }
+        if normalized_mode == "full-computer-control":
+            local_policy = computer_access_management_status(self.agent.config)
+            if not bool(local_policy.get("enabled")) or not bool(local_policy.get("full_access")):
+                return {
+                    "ok": False,
+                    "code": "local_full_access_required",
+                    "summary": "Ative e salve Full Access local antes de autorizar acesso total remoto.",
+                }
         try:
             days = int(expires_days)
         except (TypeError, ValueError):
