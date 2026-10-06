@@ -72,6 +72,18 @@ class ProductAuditSink(Protocol):
 
 
 PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
+    "intelligence.app_catalog": ProductActionSpec(
+        name="intelligence.app_catalog",
+        local_action="intelligence.app_catalog",
+        allowed_fields=frozenset(),
+        project_required=False,
+    ),
+    "intelligence.app_detail": ProductActionSpec(
+        name="intelligence.app_detail",
+        local_action="intelligence.app_detail",
+        allowed_fields=frozenset({"app_id"}),
+        project_required=False,
+    ),
     "projects.list": ProductActionSpec(
         name="projects.list",
         local_action="projects.list",
