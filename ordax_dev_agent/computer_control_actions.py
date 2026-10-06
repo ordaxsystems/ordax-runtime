@@ -555,10 +555,31 @@ class ComputerControlActions:
                 user32.AttachThreadInput(first, second, False)
 
         focused = bool(ok or (info and info.get("foreground")))
+        data = dict(info or {"handle": f"0x{hwnd:X}"})
+        data["focus_diagnostics"] = {
+            "requested_handle": f"0x{hwnd:X}",
+            "initial_foreground_handle": (
+                f"0x{foreground_hwnd:X}" if foreground_hwnd else None
+            ),
+            "caller_thread_id": caller_thread,
+            "foreground_thread_id": foreground_thread or None,
+            "target_thread_id": target_thread or None,
+            "attached_thread_pairs": [
+                {"first": first, "second": second}
+                for first, second in attached
+            ],
+            "set_foreground_window_returned": bool(ok),
+            "observed_foreground": bool(info and info.get("foreground")),
+            "reason": None if focused else "windows_foreground_activation_rejected",
+        }
         return ActionResult(
             focused,
-            "window focused" if focused else "window focus was rejected by Windows",
-            info or {"handle": f"0x{hwnd:X}"},
+            (
+                "window focused"
+                if focused
+                else "window focus was rejected by Windows foreground activation policy"
+            ),
+            data,
         )
 
     def computer_click(self, payload: dict[str, Any]) -> ActionResult:

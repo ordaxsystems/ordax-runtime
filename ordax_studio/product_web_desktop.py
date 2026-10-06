@@ -72,6 +72,8 @@ _OWNER_REMOTE_COMPUTER_GRANT_MODES = frozenset({
     "computer-process-control",
 })
 
+_OWNER_PROJECT_BROWSER_GRANT_MODE = "project-browser-automation"
+
 
 class StudioProductApi(StudioApi):
     """Windows product surface layered over the canonical Studio API.
@@ -280,6 +282,222 @@ class StudioProductApi(StudioApi):
             "summary": "Autoriza??o remota revogada",
             "data": result,
         }
+
+    def remote_project_browser_grants(self) -> dict[str, Any]:
+        try:
+            session = self._product_session_required()
+            device_id = self._current_product_device_id()
+            project = str(self.project or "").strip()
+            if not project:
+                return {
+                    "ok": False,
+                    "code": "project_required",
+                    "summary": "Selecione um projeto antes de gerenciar o navegador remoto.",
+                }
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                links = [
+                    link for link in remote.device_links(session.access_token)
+                    if str(link.get("device_id") or "") == device_id
+                ]
+                grants = [
+                    grant for grant in remote.project_capability_grants(session.access_token)
+                    if str(grant.get("device_id") or "") == device_id
+                    and project in (grant.get("projects") or [])
+                ]
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autorização do navegador indisponível",
+            }
+        return {
+            "ok": True,
+            "summary": "Autorizações do navegador gerenciado carregadas",
+            "data": {
+                "device_id": device_id,
+                "project": project,
+                "links": links,
+                "grants": grants,
+                "available_modes": [_OWNER_PROJECT_BROWSER_GRANT_MODE],
+            },
+        }
+
+    def authorize_remote_project_browser_grant(
+        self,
+        link_id: str | None = None,
+        expires_days: int = 30,
+    ) -> dict[str, Any]:
+        project = str(self.project or "").strip()
+        if not project:
+            return {
+                "ok": False,
+                "code": "project_required",
+                "summary": "Selecione um projeto antes de autorizar o navegador remoto.",
+            }
+        try:
+            days = int(expires_days)
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "code": "owner_project_grant_expiry_invalid",
+                "summary": "A validade deve ser informada em dias inteiros.",
+            }
+        if not 1 <= days <= 365:
+            return {
+                "ok": False,
+                "code": "owner_project_grant_expiry_invalid",
+                "summary": "A validade deve ficar entre 1 e 365 dias.",
+            }
+        try:
+            session = self._product_session_required()
+            device_id = self._current_product_device_id()
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                links = [
+                    link for link in remote.device_links(session.access_token)
+                    if str(link.get("device_id") or "") == device_id
+                ]
+                requested_link = str(link_id or "").strip()
+                if requested_link:
+                    links = [
+                        link for link in links
+                        if str(link.get("link_id") or "") == requested_link
+                    ]
+                if len(links) != 1:
+                    code = "product_device_link_not_found" if not links else "product_device_link_ambiguous"
+                    summary = (
+                        "Nenhum vínculo ativo desta conta corresponde a este computador."
+                        if not links else
+                        "Há mais de um vínculo ativo para este computador; selecione o vínculo explicitamente."
+                    )
+                    return {"ok": False, "code": code, "summary": summary}
+                expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+                created = remote.create_project_capability_grant(
+                    session.access_token,
+                    link_id=str(links[0].get("link_id") or ""),
+                    mode=_OWNER_PROJECT_BROWSER_GRANT_MODE,
+                    projects=[project],
+                    expires_at=expires_at,
+                )
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autorização do navegador indisponível",
+            }
+        return {
+            "ok": True,
+            "summary": "Navegador remoto autorizado somente para o projeto atual",
+            "data": created,
+        }
+
+    def revoke_remote_project_browser_grant(self, grant_id: str) -> dict[str, Any]:
+        grant_id = str(grant_id or "").strip()
+        if not grant_id or len(grant_id) > 128:
+            return {
+                "ok": False,
+                "code": "owner_project_grant_id_invalid",
+                "summary": "Identificador de autorização inválido.",
+            }
+        try:
+            session = self._product_session_required()
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                result = remote.revoke_project_capability_grant(session.access_token, grant_id)
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autorização do navegador indisponível",
+            }
+        return {
+            "ok": True,
+            "summary": "Autorização remota do navegador revogada",
+            "data": result,
+        }
+
+    def browser_list(self) -> dict[str, Any]:
+        return self._result(self.agent.execute("browser.list", {"project": self.project}))
+
+    def browser_start(
+        self,
+        url: str | None = None,
+        headless: bool = False,
+        wait_seconds: float = 3.0,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "project": self.project,
+            "headless": bool(headless),
+            "wait_seconds": float(wait_seconds),
+        }
+        normalized_url = str(url or "").strip()
+        if normalized_url:
+            arguments["url"] = normalized_url
+        return self._result(self.agent.execute("browser.start", arguments))
+
+    def browser_status(self, session_id: str) -> dict[str, Any]:
+        return self._result(self.agent.execute(
+            "browser.status",
+            {"project": self.project, "session_id": str(session_id or "").strip()},
+        ))
+
+    def browser_navigate(
+        self,
+        session_id: str,
+        url: str,
+        wait_seconds: float = 3.0,
+    ) -> dict[str, Any]:
+        return self._result(self.agent.execute(
+            "browser.navigate",
+            {
+                "project": self.project,
+                "session_id": str(session_id or "").strip(),
+                "url": str(url or "").strip(),
+                "wait_seconds": float(wait_seconds),
+            },
+        ))
+
+    def browser_snapshot(self, session_id: str, max_elements: int = 200) -> dict[str, Any]:
+        return self._result(self.agent.execute(
+            "browser.snapshot",
+            {
+                "project": self.project,
+                "session_id": str(session_id or "").strip(),
+                "max_elements": int(max_elements),
+            },
+        ))
+
+    def browser_screenshot(
+        self,
+        session_id: str,
+        width: int = 1280,
+        height: int = 800,
+    ) -> dict[str, Any]:
+        return self._result(self.agent.execute(
+            "browser.screenshot",
+            {
+                "project": self.project,
+                "session_id": str(session_id or "").strip(),
+                "width": int(width),
+                "height": int(height),
+            },
+        ))
+
+    def browser_stop(self, session_id: str) -> dict[str, Any]:
+        return self._result(self.agent.execute(
+            "browser.stop",
+            {"project": self.project, "session_id": str(session_id or "").strip()},
+        ))
 
     def blender_prepare(self) -> dict[str, Any]:
         return prepare_blender_connection(self.agent, self.project, wait_seconds=4.0)
