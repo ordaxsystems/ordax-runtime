@@ -44,11 +44,17 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve canonical Studio source lock
+        shell: powershell
+        run: |
+          $lock = Get-Content .\\studio-source.lock.json -Raw | ConvertFrom-Json
+          if ($lock.schema -ne "ordax.studio-source-lock/1") { throw "Studio source lock schema is invalid" }
+          "ORDAX_STUDIO_SOURCE_COMMIT=$($lock.commit)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Checkout canonical ORDAX Studio app source
         uses: actions/checkout@v4
         with:
           repository: washingtonmsdj/ordax-apps
-          ref: d16977092dbce6ce6e1be35132789e16586c0d67
+          ref: ${{ env.ORDAX_STUDIO_SOURCE_COMMIT }}
           path: .ordax/apps
 
       - uses: actions/setup-python@v5
