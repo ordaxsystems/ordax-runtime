@@ -57,7 +57,17 @@ Contratos detalhados:
 - `docs/ORDAX_IDENTITY_AND_PROVIDERS.md`;
 - `docs/ORDAX_PROVIDER_CONNECTORS.md`.
 
-## Uso diário
+## App Intelligence no produto Windows
+
+O instalador compila o manifesto canônico `apps/studio/ai/manifest.json` da revisão de `ordax-apps` fixada em `studio-source.lock.json` para um registry local do produto.
+
+O Runtime valida e carrega esse registry uma única vez. Clientes autorizados consultam:
+
+- `intelligence.app_catalog` para identidade, versão e ids de intents;
+- `intelligence.app_detail` para o manifesto declarativo de um `app_id` exato.
+
+Essas ações não executam o app, não chamam modelo, não acessam GitHub por requisição e não herdam Computer Control. O acesso remoto usa o grant owner separado `app-intelligence-read`.
+
 
 1. instalar `ORDAX-Studio-Setup-<versão>-x64.exe`;
 2. o Runtime inicia automaticamente com o Windows;
