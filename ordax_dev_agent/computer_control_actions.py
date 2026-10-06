@@ -65,18 +65,44 @@ _WS_EX_APPWINDOW = 0x00040000
 _GWL_EXSTYLE = -20
 
 
+_ULONG_PTR = ctypes.c_size_t
+
+
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", _ULONG_PTR),
+    ]
+
+
 class _KEYBDINPUT(ctypes.Structure):
     _fields_ = [
         ("wVk", wintypes.WORD),
         ("wScan", wintypes.WORD),
         ("dwFlags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ("dwExtraInfo", _ULONG_PTR),
+    ]
+
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
     ]
 
 
 class _INPUTUNION(ctypes.Union):
-    _fields_ = [("ki", _KEYBDINPUT)]
+    _fields_ = [
+        ("mi", _MOUSEINPUT),
+        ("ki", _KEYBDINPUT),
+        ("hi", _HARDWAREINPUT),
+    ]
 
 
 class _INPUT(ctypes.Structure):
@@ -548,15 +574,27 @@ class ComputerControlActions:
     @staticmethod
     def _send_unicode(text: str) -> None:
         user32 = ctypes.windll.user32
+        send_input = user32.SendInput
+        send_input.argtypes = [wintypes.UINT, ctypes.POINTER(_INPUT), ctypes.c_int]
+        send_input.restype = wintypes.UINT
         units = text.encode("utf-16-le")
         for index in range(0, len(units), 2):
             scan = int.from_bytes(units[index:index + 2], "little")
-            down = _INPUT(type=_INPUT_KEYBOARD, ki=_KEYBDINPUT(0, scan, _KEYEVENTF_UNICODE, 0, None))
-            up = _INPUT(type=_INPUT_KEYBOARD, ki=_KEYBDINPUT(0, scan, _KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP, 0, None))
-            if user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(_INPUT)) != 1:
-                raise OSError("Windows rejected unicode key down")
-            if user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(_INPUT)) != 1:
-                raise OSError("Windows rejected unicode key up")
+            inputs = (_INPUT * 2)(
+                _INPUT(
+                    type=_INPUT_KEYBOARD,
+                    ki=_KEYBDINPUT(0, scan, _KEYEVENTF_UNICODE, 0, 0),
+                ),
+                _INPUT(
+                    type=_INPUT_KEYBOARD,
+                    ki=_KEYBDINPUT(0, scan, _KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP, 0, 0),
+                ),
+            )
+            sent = send_input(len(inputs), inputs, ctypes.sizeof(_INPUT))
+            if sent != len(inputs):
+                raise OSError(
+                    f"Windows accepted {sent}/{len(inputs)} unicode keyboard events"
+                )
 
     def computer_type(self, payload: dict[str, Any]) -> ActionResult:
         try:
