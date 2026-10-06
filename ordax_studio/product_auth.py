@@ -151,6 +151,7 @@ def connect_existing_device(
     password: str,
     *,
     auth_http: httpx.Client | None = None,
+    session: ProductAuthSession | None = None,
 ) -> dict[str, Any]:
     if not config.control_plane_url:
         raise ProductAccountError(
@@ -158,7 +159,7 @@ def connect_existing_device(
             "O ORDAX Runtime não possui Control Plane configurado.",
         )
 
-    session = sign_in_with_password(email, password, http=auth_http)
+    active_session = session or sign_in_with_password(email, password, http=auth_http)
     active_config = config
     enrolled_now = False
     if not config.device_id:
@@ -166,7 +167,7 @@ def connect_existing_device(
             enrollment = configure_device(
                 config.state_dir,
                 control_plane_url=config.control_plane_url,
-                product_access_token=session.access_token,
+                product_access_token=active_session.access_token,
             )
         except SetupError as error:
             raise ProductAccountError(
@@ -210,7 +211,7 @@ def connect_existing_device(
     try:
         with ProductRemoteClient(active_config.control_plane_url) as remote:
             link = remote.claim_device_pairing(
-                session.access_token,
+                active_session.access_token,
                 pairing_id=pairing_id,
                 pairing_secret=pairing_secret,
             )
@@ -232,7 +233,7 @@ def connect_existing_device(
         )
 
     return {
-        "email": session.email or email,
+        "email": active_session.email or email,
         "link": dict(link),
         "device_id": active_config.device_id,
         "enrolled_now": enrolled_now,
