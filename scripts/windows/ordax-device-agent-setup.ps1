@@ -154,6 +154,17 @@ try {
         Move-Item -LiteralPath "$contractPath.next" -Destination $contractPath -Force
     }
 
+    # Warm Python bytecode before the Scheduled Task starts. The Runtime registry
+    # imports a broad typed capability surface; compiling on the first service
+    # boot makes readiness depend on cold filesystem/antivirus latency.
+    $compileTargets = @(
+        (Join-Path $repo 'ordax_dev_agent'),
+        (Join-Path $repo 'ordax_device_agent'),
+        (Join-Path $repo 'mcp_blender_unity')
+    )
+    & $python -m compileall -q @compileTargets
+    if ($LASTEXITCODE -ne 0) { throw 'RUNTIME_PRECOMPILE_FAILED_RETRY_SETUP' }
+
     # Install the external supervisor even if pairing/network needs a retry.
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'scripts\windows\ordax-agent-install.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'TASK_INSTALL_FAILED' }
