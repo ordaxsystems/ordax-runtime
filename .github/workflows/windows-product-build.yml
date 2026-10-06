@@ -209,9 +209,10 @@ jobs:
           & $privatePython -c "import ordax_studio, ordax_dev_agent, ordax_device_agent; print('ORDAX_INSTALLED_RUNTIME_OK')"
           if ($LASTEXITCODE -ne 0) { throw "Installed private runtime import smoke failed" }
 
+          $runtime = $null
           $studio = Start-Process -FilePath $studioExe -WorkingDirectory $installRoot -PassThru
           try {
-            Start-Sleep -Seconds 5
+            Start-Sleep -Seconds 2
             $studio.Refresh()
             if ($studio.HasExited) {
               throw "ORDAX Studio native Workbench exited during startup smoke with code $($studio.ExitCode)"
@@ -223,6 +224,15 @@ jobs:
               throw "ORDAX Studio supervisor did not launch native Workbench"
             }
             Write-Host "ORDAX_WORKBENCH_READY"
+
+            $null = Wait-OrdaxReady -Label "ORDAX_STUDIO_RUNTIME"
+            $runtime = Get-Process | Where-Object {
+              $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq [IO.Path]::GetFullPath($runtimeExe)
+            } | Select-Object -First 1
+            if (-not $runtime) {
+              throw "ORDAX Studio did not start the packaged ORDAX Runtime"
+            }
+            Write-Host "STUDIO_STARTED_RUNTIME"
           } finally {
             Stop-Process -Id $studio.Id -Force -ErrorAction SilentlyContinue
             Get-Process | Where-Object {
@@ -231,7 +241,13 @@ jobs:
             Start-Sleep -Seconds 1
           }
 
-          $runtime = Start-Process -FilePath $runtimeExe -WorkingDirectory $installRoot -PassThru
+          $runtime.Refresh()
+          if ($runtime.HasExited) {
+            throw "ORDAX Runtime exited when ORDAX Studio closed"
+          }
+          $null = Wait-OrdaxReady -Label "ORDAX_RUNTIME_AFTER_STUDIO_CLOSE"
+          Write-Host "ORDAX_RUNTIME_OUTLIVED_STUDIO"
+
           $upgradedRuntime = $null
           $legacyProcess = $null
           try {
