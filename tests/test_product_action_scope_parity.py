@@ -4,7 +4,11 @@ import re
 import unittest
 from pathlib import Path
 
-from ordax_dev_agent.product_action_scope import DEVICE_SCOPED_ACTIONS
+from ordax_dev_agent.product_action_scope import (
+    APP_INTELLIGENCE_DEVICE_ACTIONS,
+    COMPUTER_DEVICE_ACTIONS,
+    DEVICE_SCOPED_ACTIONS,
+)
 from ordax_dev_agent.product_mcp import PRODUCT_MCP_TOOLS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,13 +20,21 @@ class ProductActionScopeParityTests(unittest.TestCase):
         computer_actions = {
             tool.action for tool in PRODUCT_MCP_TOOLS if tool.action.startswith("computer.")
         }
-        self.assertEqual(computer_actions, set(DEVICE_SCOPED_ACTIONS))
+        self.assertEqual(computer_actions, set(COMPUTER_DEVICE_ACTIONS))
 
     def test_device_scope_does_not_absorb_other_execution_authority(self) -> None:
         self.assertNotIn("terminal.exec", DEVICE_SCOPED_ACTIONS)
         self.assertNotIn("git.command", DEVICE_SCOPED_ACTIONS)
         self.assertNotIn("process.start", DEVICE_SCOPED_ACTIONS)
-        self.assertTrue(all(action.startswith("computer.") for action in DEVICE_SCOPED_ACTIONS))
+        self.assertTrue(all(action.startswith("computer.") for action in COMPUTER_DEVICE_ACTIONS))
+        self.assertEqual(
+            APP_INTELLIGENCE_DEVICE_ACTIONS,
+            frozenset({"intelligence.app_catalog", "intelligence.app_detail"}),
+        )
+        self.assertEqual(
+            DEVICE_SCOPED_ACTIONS,
+            frozenset({*COMPUTER_DEVICE_ACTIONS, *APP_INTELLIGENCE_DEVICE_ACTIONS}),
+        )
 
     def test_python_product_mcp_server_must_not_keep_project_bound_computer_tools(self) -> None:
         server = PY_SERVER.read_text(encoding="utf-8")
