@@ -19,6 +19,16 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("ordax_device_agent.main", launcher)
         self.assertNotIn('L"ORDAX Dev"', launcher)
 
+    def test_studio_is_the_only_user_facing_runtime_entrypoint(self) -> None:
+        launcher = (ROOT / "packaging" / "windows" / "ordax_launcher.c").read_text(encoding="utf-8")
+        installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
+        self.assertIn("ensure_runtime_running", launcher)
+        self.assertIn("runtime_is_running", launcher)
+        self.assertIn('L"%ls\\\\ORDAX Runtime.exe"', launcher)
+        self.assertIn('Description: "Abrir ORDAX Studio"', installer)
+        self.assertNotIn('Description: "Iniciar ORDAX Runtime"', installer)
+        self.assertIn('ValueName: "ORDAX Runtime"', installer)
+
     def test_installer_preserves_app_id_while_migrating_branding(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
         self.assertIn("AppId={{0D31F22D-8451-4CF4-9E34-F0D4D857F55F}", installer)
@@ -149,6 +159,9 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("LEGACY_ORDAX_TASK_REMOVED", workflow)
         self.assertIn("LEGACY_ORDAX_STARTUP_REMOVED", workflow)
         self.assertIn("ORDAX_WORKBENCH_READY", workflow)
+        self.assertIn("STUDIO_STARTED_RUNTIME", workflow)
+        self.assertIn("ORDAX_RUNTIME_OUTLIVED_STUDIO", workflow)
+        self.assertIn('Wait-OrdaxReady -Label "ORDAX_STUDIO_RUNTIME"', workflow)
         self.assertIn("workbench\\ORDAX Workbench.exe", workflow)
         self.assertIn('- "ordax_core/**"', workflow)
         self.assertIn('- "ordax_dev_agent/**"', workflow)
