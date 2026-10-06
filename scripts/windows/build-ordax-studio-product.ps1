@@ -66,9 +66,13 @@ if ($studioAppSource) {
             }
         )
     }
-    $appIntelligenceRegistry |
-        ConvertTo-Json -Depth 20 |
-        Set-Content (Join-Path $targetStudio "app_intelligence_registry.json") -Encoding UTF8
+    $appIntelligenceRegistryJson = $appIntelligenceRegistry | ConvertTo-Json -Depth 20
+    $appIntelligenceRegistryPath = Join-Path $targetStudio "app_intelligence_registry.json"
+    [System.IO.File]::WriteAllText(
+        $appIntelligenceRegistryPath,
+        $appIntelligenceRegistryJson,
+        [System.Text.UTF8Encoding]::new($false)
+    )
     Copy-Item (Join-Path $studioAppSource "assets\*") (Join-Path $targetStudio "assets") -Recurse -Force
     Copy-Item (Join-Path $studioAppSource "src\host_contract.js") (Join-Path $targetStudio "host_contract.js") -Force
     $portableHtml = Get-Content (Join-Path $studioAppSource "src\index.html") -Raw
