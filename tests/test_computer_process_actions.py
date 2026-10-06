@@ -55,8 +55,10 @@ class ComputerProcessActionsTests(unittest.TestCase):
         self.assertNotIn("command_line", normalized)
 
         source = (Path(__file__).resolve().parents[1] / "ordax_dev_agent" / "computer_control_actions.py").read_text(encoding="utf-8")
-        self.assertIn("Select-Object ProcessId,ParentProcessId,Name,ExecutablePath |", source)
-        self.assertNotIn("Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine", source)
+        self.assertIn("CreateToolhelp32Snapshot", source)
+        self.assertIn("QueryFullProcessImageNameW", source)
+        self.assertNotIn("Get-CimInstance Win32_Process", source)
+        self.assertNotIn("CommandLine", source)
 
     def test_terminate_requires_current_name_to_match_pid(self):
         with patch.object(
