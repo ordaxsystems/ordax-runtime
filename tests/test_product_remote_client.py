@@ -167,6 +167,53 @@ class ProductRemoteClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client.wait_action("jwt", "req", poll_interval_seconds=0.01)
 
+    def test_owner_device_computer_grant_methods_are_product_authenticated(self):
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.method, request.url.path, request.headers.get("authorization", ""), str(request.url.query)))
+            if request.url.path == "/v3/product/device-computer-grants" and request.method == "GET":
+                self.assertIn("link_id=link-1", str(request.url.query))
+                return httpx.Response(200, json={
+                    "ok": True,
+                    "grants": [{"id": "grant-1", "device_id": "dev-1", "mode": "interactive-computer-control"}],
+                })
+            if request.url.path == "/v3/product/device-computer-grants" and request.method == "POST":
+                body = json.loads(request.content.decode("utf-8"))
+                self.assertEqual("link-1", body["link_id"])
+                self.assertEqual("interactive-computer-control", body["mode"])
+                self.assertEqual("2026-11-05T00:00:00+00:00", body["expires_at"])
+                return httpx.Response(201, json={
+                    "ok": True,
+                    "mode": body["mode"],
+                    "replayed": False,
+                    "grant": {"id": "grant-1", "device_id": "dev-1", "mode": body["mode"]},
+                })
+            if request.url.path == "/v3/product/device-computer-grants/grant-1" and request.method == "DELETE":
+                return httpx.Response(200, json={"ok": True, "revoked": True, "grant": {"id": "grant-1"}})
+            return httpx.Response(404, json={"ok": False, "error": "not_found"})
+
+        client = ProductRemoteClient(
+            "https://control.example.test",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        grants = client.device_computer_grants("jwt-list", link_id="link-1")
+        self.assertEqual("grant-1", grants[0]["id"])
+        created = client.create_device_computer_grant(
+            "jwt-create",
+            link_id="link-1",
+            mode="interactive-computer-control",
+            expires_at="2026-11-05T00:00:00+00:00",
+        )
+        self.assertEqual("grant-1", created["grant"]["id"])
+        revoked = client.revoke_device_computer_grant("jwt-revoke", "grant-1")
+        self.assertTrue(revoked["revoked"])
+        self.assertFalse(hasattr(client, "access_token"))
+        self.assertEqual(
+            [item[2] for item in seen],
+            ["Bearer jwt-list", "Bearer jwt-create", "Bearer jwt-revoke"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

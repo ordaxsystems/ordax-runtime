@@ -3,15 +3,24 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
 
 from .blender_connection import prepare_blender_connection
 from .instance_lock import SingleInstanceLock
-from .product_auth import ProductAccountError, connect_existing_device
+from .product_auth import (
+    ProductAccountError,
+    ProductAuthSession,
+    connect_existing_device,
+    sign_in_with_password,
+)
+from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 from .web_desktop import APP_NAME, StudioApi
 
 
@@ -56,6 +65,14 @@ def _restart_packaged_runtime_after_enrollment() -> bool:
         return False
 
 
+_OWNER_REMOTE_COMPUTER_GRANT_MODES = frozenset({
+    "interactive-computer-control",
+    "computer-filesystem",
+    "computer-clipboard",
+    "computer-process-control",
+})
+
+
 class StudioProductApi(StudioApi):
     """Windows product surface layered over the canonical Studio API.
 
@@ -64,9 +81,50 @@ class StudioProductApi(StudioApi):
     development hosts do not need to own or store Product credentials.
     """
 
+    def __init__(self, agent: ActionRegistry | None = None):
+        super().__init__(agent)
+        self._product_session: ProductAuthSession | None = None
+        self._product_device_id: str | None = None
+
+    def _product_session_required(self) -> ProductAuthSession:
+        session = getattr(self, "_product_session", None)
+        if not isinstance(session, ProductAuthSession):
+            raise ProductAccountError(
+                "product_auth_session_required",
+                "Conecte sua conta ORDAX nesta sess?o para gerenciar autoriza??es remotas.",
+            )
+        return session
+
+    def _current_product_device_id(self) -> str:
+        device_id = str(
+            getattr(self, "_product_device_id", None)
+            or getattr(self.agent.config, "device_id", None)
+            or ""
+        ).strip()
+        if not device_id:
+            raise ProductAccountError(
+                "product_device_unavailable",
+                "Este computador ainda n?o possui identidade ORDAX ativa.",
+            )
+        return device_id
+
+    @staticmethod
+    def _safe_product_error(error: ProductRemoteError) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "code": error.error_code,
+            "summary": "O Control Plane recusou a opera??o de autoriza??o remota.",
+        }
+
     def connect_product_account(self, email: str, password: str) -> dict[str, Any]:
         try:
-            data = connect_existing_device(self.agent.config, email, password)
+            session = sign_in_with_password(email, password)
+            data = connect_existing_device(
+                self.agent.config,
+                email,
+                password,
+                session=session,
+            )
         except ProductAccountError as error:
             return {
                 "ok": False,
@@ -79,6 +137,8 @@ class StudioProductApi(StudioApi):
                 "code": "product_account_unexpected_error",
                 "summary": f"{type(error).__name__}: não foi possível conectar a conta ORDAX",
             }
+        self._product_session = session
+        self._product_device_id = str(data.get("device_id") or "") or None
         if data.get("enrolled_now"):
             data["runtime_restarted"] = _restart_packaged_runtime_after_enrollment()
             data["runtime_restart_required"] = not data["runtime_restarted"]
@@ -86,6 +146,139 @@ class StudioProductApi(StudioApi):
             "ok": True,
             "summary": "Conta ORDAX conectada a este computador",
             "data": data,
+        }
+
+    def remote_computer_grants(self) -> dict[str, Any]:
+        try:
+            session = self._product_session_required()
+            device_id = self._current_product_device_id()
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                links = [
+                    link for link in remote.device_links(session.access_token)
+                    if str(link.get("device_id") or "") == device_id
+                ]
+                grants = [
+                    grant for grant in remote.device_computer_grants(session.access_token)
+                    if str(grant.get("device_id") or "") == device_id
+                ]
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autoriza??o remota indispon?vel",
+            }
+        return {
+            "ok": True,
+            "summary": "Autoriza??es remotas carregadas",
+            "data": {
+                "device_id": device_id,
+                "links": links,
+                "grants": grants,
+                "available_modes": sorted(_OWNER_REMOTE_COMPUTER_GRANT_MODES),
+            },
+        }
+
+    def authorize_remote_computer_grant(
+        self,
+        mode: str,
+        link_id: str | None = None,
+        expires_days: int = 30,
+    ) -> dict[str, Any]:
+        normalized_mode = str(mode or "").strip()
+        if normalized_mode not in _OWNER_REMOTE_COMPUTER_GRANT_MODES:
+            return {
+                "ok": False,
+                "code": "owner_device_grant_mode_not_allowed",
+                "summary": "Perfil de autoriza??o remota n?o permitido nesta interface.",
+            }
+        try:
+            days = int(expires_days)
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "code": "owner_device_grant_expiry_invalid",
+                "summary": "A validade deve ser informada em dias inteiros.",
+            }
+        if not 1 <= days <= 365:
+            return {
+                "ok": False,
+                "code": "owner_device_grant_expiry_invalid",
+                "summary": "A validade deve ficar entre 1 e 365 dias.",
+            }
+
+        try:
+            session = self._product_session_required()
+            device_id = self._current_product_device_id()
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                links = [
+                    link for link in remote.device_links(session.access_token)
+                    if str(link.get("device_id") or "") == device_id
+                ]
+                requested_link = str(link_id or "").strip()
+                if requested_link:
+                    links = [link for link in links if str(link.get("link_id") or "") == requested_link]
+                if len(links) != 1:
+                    code = "product_device_link_not_found" if not links else "product_device_link_ambiguous"
+                    summary = (
+                        "Nenhum v?nculo ativo desta conta corresponde a este computador."
+                        if not links else
+                        "H? mais de um v?nculo ativo para este computador; selecione o v?nculo explicitamente."
+                    )
+                    return {"ok": False, "code": code, "summary": summary}
+                selected_link = str(links[0].get("link_id") or "")
+                expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+                created = remote.create_device_computer_grant(
+                    session.access_token,
+                    link_id=selected_link,
+                    mode=normalized_mode,
+                    expires_at=expires_at,
+                )
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autoriza??o remota indispon?vel",
+            }
+        return {
+            "ok": True,
+            "summary": "Perfil remoto autorizado",
+            "data": created,
+        }
+
+    def revoke_remote_computer_grant(self, grant_id: str) -> dict[str, Any]:
+        grant_id = str(grant_id or "").strip()
+        if not grant_id or len(grant_id) > 128:
+            return {
+                "ok": False,
+                "code": "owner_device_grant_id_invalid",
+                "summary": "Identificador de autoriza??o inv?lido.",
+            }
+        try:
+            session = self._product_session_required()
+            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+                result = remote.revoke_device_computer_grant(session.access_token, grant_id)
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False,
+                "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autoriza??o remota indispon?vel",
+            }
+        return {
+            "ok": True,
+            "summary": "Autoriza??o remota revogada",
+            "data": result,
         }
 
     def blender_prepare(self) -> dict[str, Any]:

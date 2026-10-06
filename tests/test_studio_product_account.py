@@ -188,7 +188,12 @@ class StudioProductAccountTests(unittest.TestCase):
     def test_product_api_restarts_packaged_runtime_after_first_enrollment(self) -> None:
         api = object.__new__(StudioProductApi)
         api.agent = SimpleNamespace(config=SimpleNamespace())
+        session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
         with (
+            patch(
+                "ordax_studio.product_web_desktop.sign_in_with_password",
+                return_value=session,
+            ),
             patch(
                 "ordax_studio.product_web_desktop.connect_existing_device",
                 return_value={
@@ -197,7 +202,7 @@ class StudioProductAccountTests(unittest.TestCase):
                     "device_id": "dev-1",
                     "enrolled_now": True,
                 },
-            ),
+            ) as connect,
             patch(
                 "ordax_studio.product_web_desktop._restart_packaged_runtime_after_enrollment",
                 return_value=True,
@@ -209,33 +214,121 @@ class StudioProductAccountTests(unittest.TestCase):
         self.assertTrue(result["data"]["runtime_restarted"])
         self.assertFalse(result["data"]["runtime_restart_required"])
         restart.assert_called_once_with()
-
+        self.assertIs(session, api._product_session)
+        self.assertEqual("dev-1", api._product_device_id)
+        self.assertNotIn("sensitive-jwt", repr(result))
+        self.assertIs(connect.call_args.kwargs["session"], session)
     def test_product_api_returns_safe_error_shape(self) -> None:
         api = object.__new__(StudioProductApi)
         api.agent = SimpleNamespace(config=SimpleNamespace())
-        with patch(
-            "ordax_studio.product_web_desktop.connect_existing_device",
-            side_effect=ProductAccountError("device_not_enrolled", "Máquina não registrada"),
+        with (
+            patch(
+                "ordax_studio.product_web_desktop.sign_in_with_password",
+                return_value=ProductAuthSession(access_token="sensitive-jwt", email="user@example.com"),
+            ),
+            patch(
+                "ordax_studio.product_web_desktop.connect_existing_device",
+                side_effect=ProductAccountError("device_not_enrolled", "M?quina n?o registrada"),
+            ),
         ):
             result = api.connect_product_account("user@example.com", "secret")
         self.assertFalse(result["ok"])
         self.assertEqual("device_not_enrolled", result["code"])
-        self.assertEqual("Máquina não registrada", result["summary"])
+        self.assertEqual("M?quina n?o registrada", result["summary"])
+        self.assertIsNone(getattr(api, "_product_session", None))
+    def test_remote_grant_requires_in_memory_product_session(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace(
+            control_plane_url="https://control.example.test",
+            device_id="dev-1",
+        ))
+        api._product_session = None
+        api._product_device_id = "dev-1"
+        result = api.remote_computer_grants()
+        self.assertFalse(result["ok"])
+        self.assertEqual("product_auth_session_required", result["code"])
+
+    def test_owner_can_authorize_interactive_profile_for_current_device_link(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace(
+            control_plane_url="https://control.example.test",
+            device_id="dev-1",
+        ))
+        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
+        api._product_device_id = "dev-1"
+        remote = Mock()
+        remote.__enter__ = Mock(return_value=remote)
+        remote.__exit__ = Mock(return_value=None)
+        remote.device_links.return_value = [
+            {"link_id": "link-1", "device_id": "dev-1"},
+            {"link_id": "foreign", "device_id": "dev-2"},
+        ]
+        remote.create_device_computer_grant.return_value = {
+            "mode": "interactive-computer-control",
+            "replayed": False,
+            "grant": {"id": "grant-1", "device_id": "dev-1"},
+        }
+        with patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote):
+            result = api.authorize_remote_computer_grant("interactive-computer-control", expires_days=30)
+        self.assertTrue(result["ok"])
+        args, kwargs = remote.create_device_computer_grant.call_args
+        self.assertEqual("sensitive-jwt", args[0])
+        self.assertEqual("link-1", kwargs["link_id"])
+        self.assertEqual("interactive-computer-control", kwargs["mode"])
+        self.assertNotIn("sensitive-jwt", repr(result))
+
+    def test_owner_ui_host_refuses_full_or_unknown_profile(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace(
+            control_plane_url="https://control.example.test",
+            device_id="dev-1",
+        ))
+        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
+        api._product_device_id = "dev-1"
+        for mode in ("full-computer-control", "terminal.exec", "unknown"):
+            result = api.authorize_remote_computer_grant(mode)
+            self.assertFalse(result["ok"], mode)
+            self.assertEqual("owner_device_grant_mode_not_allowed", result["code"])
+
+    def test_owner_grant_listing_filters_current_device(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace(
+            control_plane_url="https://control.example.test",
+            device_id="dev-1",
+        ))
+        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
+        api._product_device_id = "dev-1"
+        remote = Mock()
+        remote.__enter__ = Mock(return_value=remote)
+        remote.__exit__ = Mock(return_value=None)
+        remote.device_links.return_value = [
+            {"link_id": "link-1", "device_id": "dev-1"},
+            {"link_id": "link-2", "device_id": "dev-2"},
+        ]
+        remote.device_computer_grants.return_value = [
+            {"id": "grant-1", "device_id": "dev-1"},
+            {"id": "grant-2", "device_id": "dev-2"},
+        ]
+        with patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote):
+            result = api.remote_computer_grants()
+        self.assertTrue(result["ok"])
+        self.assertEqual(["link-1"], [item["link_id"] for item in result["data"]["links"]])
+        self.assertEqual(["grant-1"], [item["id"] for item in result["data"]["grants"]])
+        self.assertNotIn("sensitive-jwt", repr(result))
 
     def test_product_identity_is_separate_from_github_provider(self) -> None:
         root = Path(__file__).resolve().parents[1]
         auth_source = (root / "ordax_studio" / "product_auth.py").read_text(encoding="utf-8")
         ui_source = (root / "ordax_studio" / "assets" / "product_account.js").read_text(encoding="utf-8")
-        contract = (root / "docs" / "ORDAX_IDENTITY_AND_PROVIDERS.md").read_text(encoding="utf-8")
+        contract = (root / "docs" / "ORDAX_STUDIO_WINDOWS_PRODUCT.md").read_text(encoding="utf-8")
         self.assertIn("conta ORDAX", ui_source)
         self.assertIn("GitHub", ui_source)
         self.assertIn("provedor de projetos", ui_source)
         self.assertIn("Conta ORDAX", contract)
-        self.assertIn("plugin ORDAX Studio", contract)
-        self.assertIn("plugin GitHub do ChatGPT", contract)
+        self.assertIn("GitHub", contract)
+        self.assertIn("plugin GitHub", contract)
         self.assertNotIn("github.com/login/oauth", auth_source.lower())
         self.assertNotIn("api.github.com/user", auth_source.lower())
-
     def test_product_surface_source_never_persists_password_or_access_token(self) -> None:
         root = Path(__file__).resolve().parents[1]
         auth_source = (root / "ordax_studio" / "product_auth.py").read_text(encoding="utf-8")
