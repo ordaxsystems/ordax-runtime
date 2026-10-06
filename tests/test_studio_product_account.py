@@ -316,6 +316,94 @@ class StudioProductAccountTests(unittest.TestCase):
         self.assertEqual(["grant-1"], [item["id"] for item in result["data"]["grants"]])
         self.assertNotIn("sensitive-jwt", repr(result))
 
+    def test_owner_can_authorize_managed_browser_only_for_active_project(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace(
+            control_plane_url="https://control.example.test",
+            device_id="dev-1",
+        ))
+        api.project = "ordax-review-demo"
+        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
+        api._product_device_id = "dev-1"
+        remote = Mock()
+        remote.__enter__ = Mock(return_value=remote)
+        remote.__exit__ = Mock(return_value=None)
+        remote.device_links.return_value = [
+            {"link_id": "link-1", "device_id": "dev-1"},
+            {"link_id": "foreign", "device_id": "dev-2"},
+        ]
+        remote.create_project_capability_grant.return_value = {
+            "mode": "project-browser-automation",
+            "replayed": False,
+            "grant": {
+                "id": "browser-grant-1",
+                "device_id": "dev-1",
+                "projects": ["ordax-review-demo"],
+            },
+        }
+        with patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote):
+            result = api.authorize_remote_browser_grant(expires_days=30)
+        self.assertTrue(result["ok"])
+        args, kwargs = remote.create_project_capability_grant.call_args
+        self.assertEqual("sensitive-jwt", args[0])
+        self.assertEqual("link-1", kwargs["link_id"])
+        self.assertEqual("project-browser-automation", kwargs["mode"])
+        self.assertEqual(["ordax-review-demo"], kwargs["projects"])
+        self.assertNotIn("sensitive-jwt", repr(result))
+
+    def test_browser_grant_listing_filters_device_mode_and_active_project(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace(
+            control_plane_url="https://control.example.test",
+            device_id="dev-1",
+        ))
+        api.project = "ordax-review-demo"
+        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
+        api._product_device_id = "dev-1"
+        remote = Mock()
+        remote.__enter__ = Mock(return_value=remote)
+        remote.__exit__ = Mock(return_value=None)
+        remote.device_links.return_value = [{"link_id": "link-1", "device_id": "dev-1"}]
+        remote.project_capability_grants.return_value = [
+            {
+                "id": "browser-grant-1",
+                "device_id": "dev-1",
+                "mode": "project-browser-automation",
+                "projects": ["ordax-review-demo"],
+            },
+            {
+                "id": "other-project",
+                "device_id": "dev-1",
+                "mode": "project-browser-automation",
+                "projects": ["other-project"],
+            },
+            {
+                "id": "wrong-mode",
+                "device_id": "dev-1",
+                "mode": "other-mode",
+                "projects": ["ordax-review-demo"],
+            },
+            {
+                "id": "wrong-device",
+                "device_id": "dev-2",
+                "mode": "project-browser-automation",
+                "projects": ["ordax-review-demo"],
+            },
+        ]
+        with patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote):
+            result = api.remote_browser_grants()
+        self.assertTrue(result["ok"])
+        self.assertEqual(["browser-grant-1"], [item["id"] for item in result["data"]["grants"]])
+        self.assertEqual("ordax-review-demo", result["data"]["project"])
+
+    def test_browser_grant_requires_active_project(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace())
+        api.project = ""
+        result = api.authorize_remote_browser_grant()
+        self.assertFalse(result["ok"])
+        self.assertEqual("project_required", result["code"])
+
     def test_product_identity_is_separate_from_github_provider(self) -> None:
         root = Path(__file__).resolve().parents[1]
         auth_source = (root / "ordax_studio" / "product_auth.py").read_text(encoding="utf-8")
