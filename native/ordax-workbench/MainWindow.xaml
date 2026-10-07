@@ -14,32 +14,36 @@
     <Border Grid.Row="0" Background="{StaticResource BgBrush}">
       <TabControl x:Name="WorkTabs" SelectionChanged="WorkTabs_SelectionChanged" Margin="0" Padding="0">
         <TabItem Header="Projeto">
-          <Grid Background="#060D15">
+          <Grid x:Name="StudioHostGrid" Background="#060D15">
             <wv2:WebView2CompositionControl x:Name="StudioView" DefaultBackgroundColor="#07101B"/>
-          </Grid>
-        </TabItem>
-
-        <TabItem Header="Web IA">
-          <Grid Background="#07101A">
-            <Grid.RowDefinitions>
-              <RowDefinition Height="48"/>
-              <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
-            <Grid Grid.Row="0" Background="#0B1724" Margin="0,0,0,1">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="180"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-              </Grid.ColumnDefinitions>
-              <ComboBox x:Name="ProviderSelector" Margin="8,6" SelectionChanged="ProviderSelector_SelectionChanged"/>
-              <Button Grid.Column="1" Content="←" Click="ProviderBack_Click" ToolTip="Voltar"/>
-              <Button Grid.Column="2" Content="→" Click="ProviderForward_Click" ToolTip="Avançar"/>
-              <TextBox Grid.Column="3" x:Name="ProviderAddress" Margin="6" VerticalContentAlignment="Center" KeyDown="ProviderAddress_KeyDown"/>
-              <Button Grid.Column="4" Content="↻" Click="ProviderRefresh_Click" ToolTip="Atualizar"/>
+            <Grid x:Name="ProviderSurfaceHost"
+                  Visibility="Collapsed"
+                  HorizontalAlignment="Left"
+                  VerticalAlignment="Top"
+                  Panel.ZIndex="20"
+                  Background="#07101A"
+                  Width="1"
+                  Height="1">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="44"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <Grid Grid.Row="0" Background="#0B1724" Margin="0,0,0,1">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="132"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <ComboBox x:Name="ProviderSelector" Margin="7,5" SelectionChanged="ProviderSelector_SelectionChanged"/>
+                <Button Grid.Column="1" Content="←" Click="ProviderBack_Click" ToolTip="Voltar"/>
+                <Button Grid.Column="2" Content="→" Click="ProviderForward_Click" ToolTip="Avançar"/>
+                <TextBox Grid.Column="3" x:Name="ProviderAddress" Margin="5" VerticalContentAlignment="Center" KeyDown="ProviderAddress_KeyDown"/>
+                <Button Grid.Column="4" Content="↻" Click="ProviderRefresh_Click" ToolTip="Atualizar"/>
+              </Grid>
+              <wv2:WebView2CompositionControl x:Name="ProviderView" Grid.Row="1" DefaultBackgroundColor="#07101A"/>
             </Grid>
-            <wv2:WebView2CompositionControl x:Name="ProviderView" Grid.Row="1" DefaultBackgroundColor="#07101A"/>
           </Grid>
         </TabItem>
 

@@ -75,6 +75,29 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("closeapplications=no", installer)
         self.assertIn("software\\microsoft\\windows\\currentversion\\run", installer)
 
+    def test_legacy_mcp_blender_identity_is_retired_from_product_surface(self) -> None:
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        server = (ROOT / "ordax_dev_agent" / "mcp_server.py").read_text(encoding="utf-8")
+        studio_server = (ROOT / "ordax_studio" / "mcp_server.py").read_text(encoding="utf-8")
+        installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
+        setup = (ROOT / "scripts" / "windows" / "ordax-device-agent-setup.ps1").read_text(encoding="utf-8")
+
+        self.assertNotIn('mcp-blender = "ordax_studio.mcp_server:main"', pyproject)
+        self.assertNotIn('mcp-blender-unity = "mcp_blender_unity.server:main"', pyproject)
+        self.assertNotIn('"repository_alias": "mcp-blender"', server)
+        self.assertNotIn("historical connector alias: mcp-blender", studio_server)
+        self.assertIn("mcp_blender_unity-*.dist-info", installer)
+        self.assertIn("mcp-blender.exe", installer)
+        self.assertIn("mcp-blender-unity.exe", installer)
+
+        # The only accepted historical repository references are migration input:
+        # an existing managed checkout can be cut over to ordax-runtime safely.
+        self.assertIn("$legacyRemotes", setup)
+        self.assertIn("washingtonmsdj/mcp-blender.git", setup)
+        self.assertIn("LEGACY_MIGRATION", setup)
+        self.assertIn("washingtonmsdj/ordax-runtime.git", setup)
+
+
     def test_installer_retires_legacy_scheduled_runtime_without_deleting_state(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
         self.assertIn("RetireLegacyScheduledTask", installer)
@@ -139,11 +162,17 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("Microsoft.Web.WebView2", project)
         self.assertIn("WebView2CompositionControl", xaml)
         self.assertIn('x:Name="ProviderView"', xaml)
+        self.assertIn('x:Name="ProviderSurfaceHost"', xaml)
+        self.assertNotIn('Header="Web IA"', xaml)
         self.assertIn('x:Name="PreviewView"', xaml)
         self.assertIn('x:Name="WorkbenchBrowserView"', xaml)
         self.assertIn('Header="Execuções"', xaml)
         self.assertIn("StudioView.CoreWebView2.WebMessageReceived", code)
+        self.assertIn('"ordax-assistant-surface"', code)
+        self.assertIn("ApplyAssistantSurfaceAsync", code)
+        self.assertIn("StudioView.ActualWidth / viewportWidth", code)
         self.assertNotIn("ProviderView.CoreWebView2.WebMessageReceived", code)
+        self.assertIn("presentAssistantSurface", host_bridge)
         self.assertIn("_ALLOWED_METHODS", bridge)
         self.assertIn('"ai_sessions_status"', bridge)
         self.assertIn("window.chrome?.webview", host_bridge)
@@ -209,9 +238,9 @@ class WindowsProductPackagingTests(unittest.TestCase):
         build = (ROOT / "scripts" / "windows" / "build-ordax-studio-product.ps1").read_text(encoding="utf-8")
         source_lock = (ROOT / "studio-source.lock.json").read_text(encoding="utf-8")
         self.assertIn('"repository": "washingtonmsdj/ordax-apps"', source_lock)
-        self.assertIn('"commit": "70ab82a61c99b118fb87378d9479c1e773952101"', source_lock)
+        self.assertIn('"commit": "40dd6f974b03d24b7a3a02c7cd53e41712ff293d"', source_lock)
         self.assertIn('"path": "apps/studio"', source_lock)
-        self.assertIn('"version": "0.5.5"', source_lock)
+        self.assertIn('"version": "0.5.6"', source_lock)
         self.assertIn("repository: washingtonmsdj/ordax-apps", workflow)
         self.assertIn("ORDAX_STUDIO_SOURCE_COMMIT", workflow)
         self.assertIn("ref: ${{ env.ORDAX_STUDIO_SOURCE_COMMIT }}", workflow)

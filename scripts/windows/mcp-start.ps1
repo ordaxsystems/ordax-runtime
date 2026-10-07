@@ -36,6 +36,6 @@ if ($needsInstall) {
     }
 }
 
-Write-Host "Starting ORDAX Studio MCP (historical connector alias: mcp-blender)..."
+Write-Host "Starting ORDAX Studio MCP..."
 & $python -m ordax_studio.mcp_server
 exit $LASTEXITCODE

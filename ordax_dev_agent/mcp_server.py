@@ -1,9 +1,8 @@
 """Local provider-neutral MCP front end for the ORDAX Runtime.
 
-The historical repository name is ``mcp-blender``. Blender is one capability of
-the broader ORDAX Runtime alongside workspace, Git, preview, memory, Unity and
-other typed adapters. Remote jobs continue through the paired Control Plane;
-this stdio server itself is not public.
+Blender is one typed capability of the broader ORDAX Runtime alongside
+workspace, Git, preview, memory, Unity and other adapters. Remote jobs continue
+through the paired Control Plane; this stdio server itself is not public.
 """
 from __future__ import annotations
 
@@ -58,7 +57,6 @@ def studio_status(project: str | None = None) -> dict:
     return {
         "product": "ORDAX Studio",
         "server": "ordax-runtime",
-        "repository_alias": "mcp-blender",
         "project": selected,
         "health": {"ok": health.ok, "summary": health.summary, "data": health.data},
         "preview": {"ok": preview.ok, "summary": preview.summary, "data": preview.data},

@@ -105,6 +105,13 @@
     blenderInstances:(...args)=>invoke('blender_instances',args),
     blenderAdopt:(...args)=>invoke('blender_adopt',args),
     blenderStart:(...args)=>invoke('blender_start',args),
+    presentAssistantSurface(payload){
+      if(window.chrome?.webview){
+        window.chrome.webview.postMessage(payload);
+        return true;
+      }
+      return false;
+    },
     whenReady(callback){
       if(typeof callback!=='function')throw new TypeError('ORDAX host bridge ready callback must be a function');
       if(ready){queueMicrotask(callback);return}

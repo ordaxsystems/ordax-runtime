@@ -194,16 +194,23 @@ public partial class MainWindow : Window
 
     private async void StudioWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        if (_bridge is null)
-            return;
-
         string? requestId = null;
         try
         {
             using var document = JsonDocument.Parse(e.WebMessageAsJson);
             var root = document.RootElement;
-            if (!root.TryGetProperty("type", out var type) || type.GetString() != "ordax-rpc")
+            if (!root.TryGetProperty("type", out var typeElement))
                 return;
+
+            var messageType = typeElement.GetString() ?? "";
+            if (messageType == "ordax-assistant-surface")
+            {
+                await ApplyAssistantSurfaceAsync(root);
+                return;
+            }
+            if (messageType != "ordax-rpc" || _bridge is null)
+                return;
+
             requestId = root.GetProperty("id").GetString();
             var method = root.GetProperty("method").GetString() ?? "";
             var args = root.TryGetProperty("args", out var argsElement)
@@ -215,14 +222,70 @@ public partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            var response = JsonSerializer.Serialize(new
+            if (requestId is not null)
             {
-                id = requestId,
-                error = $"{error.GetType().Name}: {error.Message}",
-            });
-            StudioView.CoreWebView2.PostWebMessageAsJson(response);
-            LogActivity($"RPC Studio falhou: {error.Message}");
+                var response = JsonSerializer.Serialize(new
+                {
+                    id = requestId,
+                    error = $"{error.GetType().Name}: {error.Message}",
+                });
+                StudioView.CoreWebView2.PostWebMessageAsJson(response);
+            }
+            LogActivity($"Mensagem do Studio falhou: {error.Message}");
         }
+    }
+
+    private async Task ApplyAssistantSurfaceAsync(JsonElement root)
+    {
+        var active = root.TryGetProperty("active", out var activeElement) &&
+                     activeElement.ValueKind == JsonValueKind.True;
+        if (!active)
+        {
+            ProviderSurfaceHost.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        if (!root.TryGetProperty("rect", out var rect) ||
+            !root.TryGetProperty("viewport", out var viewport))
+        {
+            ProviderSurfaceHost.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        static double ReadNumber(JsonElement element, string name)
+        {
+            return element.TryGetProperty(name, out var value) && value.TryGetDouble(out var number)
+                ? number
+                : 0d;
+        }
+
+        var viewportWidth = ReadNumber(viewport, "width");
+        var viewportHeight = ReadNumber(viewport, "height");
+        var left = ReadNumber(rect, "left");
+        var top = ReadNumber(rect, "top");
+        var width = ReadNumber(rect, "width");
+        var height = ReadNumber(rect, "height");
+
+        if (viewportWidth <= 0 || viewportHeight <= 0 || width <= 1 || height <= 1 ||
+            StudioView.ActualWidth <= 0 || StudioView.ActualHeight <= 0)
+        {
+            ProviderSurfaceHost.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        await EnsureProviderViewAsync();
+
+        var scaleX = StudioView.ActualWidth / viewportWidth;
+        var scaleY = StudioView.ActualHeight / viewportHeight;
+        var hostLeft = Math.Clamp(left * scaleX, 0d, StudioView.ActualWidth);
+        var hostTop = Math.Clamp(top * scaleY, 0d, StudioView.ActualHeight);
+        var hostWidth = Math.Clamp(width * scaleX, 1d, Math.Max(1d, StudioView.ActualWidth - hostLeft));
+        var hostHeight = Math.Clamp(height * scaleY, 1d, Math.Max(1d, StudioView.ActualHeight - hostTop));
+
+        ProviderSurfaceHost.Margin = new Thickness(hostLeft, hostTop, 0, 0);
+        ProviderSurfaceHost.Width = hostWidth;
+        ProviderSurfaceHost.Height = hostHeight;
+        ProviderSurfaceHost.Visibility = Visibility.Visible;
     }
 
     private void LoadProviders()
@@ -242,7 +305,7 @@ public partial class MainWindow : Window
 
     private void ProviderSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_ready || ProviderSelector.SelectedItem is not ProviderDefinition provider)
+        if (!_providerViewReady || ProviderSelector.SelectedItem is not ProviderDefinition provider)
             return;
         ProviderAddress.Text = provider.Url;
         Navigate(ProviderView, provider.Url);
@@ -282,9 +345,7 @@ public partial class MainWindow : Window
     {
         if (!_ready || WorkTabs.SelectedItem is not TabItem tab)
             return;
-        if (Equals(tab.Header, "Web IA"))
-            await EnsureProviderViewAsync();
-        else if (Equals(tab.Header, "Preview"))
+        if (Equals(tab.Header, "Preview"))
         {
             await EnsurePreviewViewAsync();
             await RefreshPreviewAsync();

@@ -47,6 +47,11 @@ Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\browser_extension"
+Type: filesandordirs; Name: "{app}\runtime\Lib\site-packages\mcp_blender_unity-*.dist-info"
+Type: files; Name: "{app}\runtime\Scripts\mcp-blender.exe"
+Type: files; Name: "{app}\runtime\Scripts\mcp-blender-unity.exe"
+Type: files; Name: "{app}\runtime\Scripts\mcp-blender-script.py"
+Type: files; Name: "{app}\runtime\Scripts\mcp-blender-unity-script.py"
 Type: files; Name: "{userstartup}\OrdaX Dev Agent.lnk"
 Type: files; Name: "{group}\ORDAX Dev.lnk"
 Type: files; Name: "{userdesktop}\ORDAX Dev.lnk"

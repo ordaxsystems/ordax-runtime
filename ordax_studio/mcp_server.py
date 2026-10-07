@@ -1,7 +1,7 @@
 """Canonical MCP entrypoint for ORDAX Studio.
 
-The repository may still be installed or referenced as ``mcp-blender`` for
-compatibility, but the MCP product exposed to clients is ORDAX Studio.
+The Studio is owned by ``ordax-apps`` and hosted by the provider-neutral
+ORDAX Runtime. Blender is exposed only as a typed runtime capability.
 """
 from ordax_dev_agent.mcp_server import main, mcp, registry
 
