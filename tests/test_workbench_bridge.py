@@ -25,6 +25,12 @@ class WorkbenchBridgeTests(unittest.TestCase):
         self.assertIn("authorize_remote_computer_grant", _ALLOWED_METHODS)
         self.assertIn("revoke_remote_computer_grant", _ALLOWED_METHODS)
         self.assertIn("execution_status", _ALLOWED_METHODS)
+        self.assertIn("assistant_catalog", _ALLOWED_METHODS)
+        self.assertIn("assistant_state", _ALLOWED_METHODS)
+        self.assertIn("assistant_create_chat", _ALLOWED_METHODS)
+        self.assertIn("assistant_select_chat", _ALLOWED_METHODS)
+        self.assertIn("assistant_update_chat", _ALLOWED_METHODS)
+        self.assertIn("assistant_close_chat", _ALLOWED_METHODS)
         self.assertNotIn("_activate", _ALLOWED_METHODS)
         self.assertNotIn("__dict__", _ALLOWED_METHODS)
 

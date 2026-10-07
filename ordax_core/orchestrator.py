@@ -181,6 +181,41 @@ class OrchestratorStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_work_ready
                   ON agent_work_items(assigned_agent_id,state,available_at_unix,priority);
+
+                CREATE TABLE IF NOT EXISTS assistant_conversations(
+                  id TEXT PRIMARY KEY,
+                  project_slug TEXT NOT NULL,
+                  title TEXT NOT NULL,
+                  account_id TEXT NOT NULL,
+                  provider_id TEXT NOT NULL,
+                  model_id TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  archived_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_assistant_conversations_project
+                  ON assistant_conversations(project_slug, archived_at, updated_at);
+
+                CREATE TABLE IF NOT EXISTS assistant_messages(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  conversation_id TEXT NOT NULL,
+                  role TEXT NOT NULL,
+                  content TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  FOREIGN KEY(conversation_id) REFERENCES assistant_conversations(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_assistant_messages_conversation
+                  ON assistant_messages(conversation_id, id);
+
+                CREATE TABLE IF NOT EXISTS assistant_project_state(
+                  project_slug TEXT PRIMARY KEY,
+                  active_conversation_id TEXT,
+                  account_id TEXT NOT NULL,
+                  provider_id TEXT NOT NULL,
+                  model_id TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  FOREIGN KEY(active_conversation_id) REFERENCES assistant_conversations(id)
+                );
                 """
             )
 
@@ -593,6 +628,297 @@ class OrchestratorStore:
             "latest_checkpoint": latest_checkpoint,
             "recent_messages": messages,
         }
+
+    @staticmethod
+    def _assistant_conversation(row: sqlite3.Row) -> dict[str, Any]:
+        return dict(row)
+
+    @staticmethod
+    def _assistant_message(row: sqlite3.Row) -> dict[str, Any]:
+        return dict(row)
+
+    def assistant_project_state(
+        self,
+        project_slug: str,
+        *,
+        default_account_id: str = "local",
+        default_provider_id: str = "",
+        default_model_id: str = "",
+    ) -> dict[str, Any]:
+        project_slug = str(project_slug or "").strip()
+        if not project_slug:
+            raise ValueError("project_slug is required")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM assistant_project_state WHERE project_slug=?",
+                (project_slug,),
+            ).fetchone()
+        if row:
+            return dict(row)
+        return {
+            "project_slug": project_slug,
+            "active_conversation_id": None,
+            "account_id": str(default_account_id or "local"),
+            "provider_id": str(default_provider_id or ""),
+            "model_id": str(default_model_id or ""),
+            "updated_at": None,
+        }
+
+    def set_assistant_project_state(
+        self,
+        project_slug: str,
+        *,
+        active_conversation_id: str | None,
+        account_id: str,
+        provider_id: str,
+        model_id: str,
+    ) -> dict[str, Any]:
+        project_slug = str(project_slug or "").strip()
+        account_id = str(account_id or "").strip()
+        provider_id = str(provider_id or "").strip()
+        model_id = str(model_id or "").strip()
+        if not project_slug:
+            raise ValueError("project_slug is required")
+        if not account_id:
+            raise ValueError("account_id is required")
+        if active_conversation_id:
+            conversation = self.assistant_conversation(active_conversation_id)
+            if conversation["project_slug"] != project_slug:
+                raise ValueError("active assistant conversation belongs to another project")
+            if conversation.get("archived_at"):
+                raise ValueError("active assistant conversation is archived")
+        updated = _now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO assistant_project_state(
+                  project_slug,active_conversation_id,account_id,provider_id,model_id,updated_at
+                ) VALUES(?,?,?,?,?,?)
+                ON CONFLICT(project_slug) DO UPDATE SET
+                  active_conversation_id=excluded.active_conversation_id,
+                  account_id=excluded.account_id,
+                  provider_id=excluded.provider_id,
+                  model_id=excluded.model_id,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    project_slug,
+                    active_conversation_id,
+                    account_id,
+                    provider_id,
+                    model_id,
+                    updated,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM assistant_project_state WHERE project_slug=?",
+                (project_slug,),
+            ).fetchone()
+        return dict(row)
+
+    def assistant_conversations(
+        self,
+        project_slug: str,
+        *,
+        include_archived: bool = False,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        project_slug = str(project_slug or "").strip()
+        if not project_slug:
+            raise ValueError("project_slug is required")
+        limit = max(1, min(500, int(limit)))
+        sql = "SELECT * FROM assistant_conversations WHERE project_slug=?"
+        params: list[Any] = [project_slug]
+        if not include_archived:
+            sql += " AND archived_at IS NULL"
+        sql += " ORDER BY updated_at DESC, created_at ASC LIMIT ?"
+        params.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+        return [self._assistant_conversation(row) for row in rows]
+
+    def assistant_conversation(self, conversation_id: str) -> dict[str, Any]:
+        conversation_id = str(conversation_id or "").strip()
+        if not conversation_id:
+            raise ValueError("conversation_id is required")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM assistant_conversations WHERE id=?",
+                (conversation_id,),
+            ).fetchone()
+        if not row:
+            raise ValueError(f"assistant conversation not found: {conversation_id}")
+        return self._assistant_conversation(row)
+
+    def create_assistant_conversation(
+        self,
+        project_slug: str,
+        *,
+        title: str,
+        account_id: str,
+        provider_id: str,
+        model_id: str,
+    ) -> dict[str, Any]:
+        project_slug = str(project_slug or "").strip()
+        title = str(title or "").strip()
+        account_id = str(account_id or "").strip()
+        provider_id = str(provider_id or "").strip()
+        model_id = str(model_id or "").strip()
+        if not project_slug:
+            raise ValueError("project_slug is required")
+        if not title:
+            raise ValueError("assistant conversation title is required")
+        if len(title) > 120:
+            raise ValueError("assistant conversation title is too long")
+        if not account_id or not provider_id or not model_id:
+            raise ValueError("account_id, provider_id and model_id are required")
+        if max(len(account_id), len(provider_id), len(model_id)) > 200:
+            raise ValueError("assistant provider identity is too long")
+
+        conversation_id = _uuid()
+        created = _now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO assistant_conversations(
+                  id,project_slug,title,account_id,provider_id,model_id,
+                  created_at,updated_at,archived_at
+                ) VALUES(?,?,?,?,?,?,?,?,NULL)
+                """,
+                (
+                    conversation_id,
+                    project_slug,
+                    title,
+                    account_id,
+                    provider_id,
+                    model_id,
+                    created,
+                    created,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM assistant_conversations WHERE id=?",
+                (conversation_id,),
+            ).fetchone()
+        return self._assistant_conversation(row)
+
+    def update_assistant_conversation(
+        self,
+        conversation_id: str,
+        *,
+        title: str | None = None,
+        account_id: str | None = None,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        current = self.assistant_conversation(conversation_id)
+        values = {
+            "title": current["title"] if title is None else str(title).strip(),
+            "account_id": current["account_id"] if account_id is None else str(account_id).strip(),
+            "provider_id": current["provider_id"] if provider_id is None else str(provider_id).strip(),
+            "model_id": current["model_id"] if model_id is None else str(model_id).strip(),
+        }
+        if not all(values.values()):
+            raise ValueError("assistant conversation fields cannot be empty")
+        if len(values["title"]) > 120:
+            raise ValueError("assistant conversation title is too long")
+        if max(len(values["account_id"]), len(values["provider_id"]), len(values["model_id"])) > 200:
+            raise ValueError("assistant provider identity is too long")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE assistant_conversations
+                SET title=?,account_id=?,provider_id=?,model_id=?,updated_at=?
+                WHERE id=? AND archived_at IS NULL
+                """,
+                (
+                    values["title"],
+                    values["account_id"],
+                    values["provider_id"],
+                    values["model_id"],
+                    _now(),
+                    conversation_id,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM assistant_conversations WHERE id=?",
+                (conversation_id,),
+            ).fetchone()
+        return self._assistant_conversation(row)
+
+    def archive_assistant_conversation(self, conversation_id: str) -> dict[str, Any]:
+        self.assistant_conversation(conversation_id)
+        archived = _now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE assistant_conversations
+                SET archived_at=?,updated_at=?
+                WHERE id=? AND archived_at IS NULL
+                """,
+                (archived, archived, conversation_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM assistant_conversations WHERE id=?",
+                (conversation_id,),
+            ).fetchone()
+        return self._assistant_conversation(row)
+
+    def assistant_messages(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        self.assistant_conversation(conversation_id)
+        limit = max(1, min(1000, int(limit)))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM assistant_messages
+                WHERE conversation_id=?
+                ORDER BY id ASC LIMIT ?
+                """,
+                (conversation_id, limit),
+            ).fetchall()
+        return [self._assistant_message(row) for row in rows]
+
+    def add_assistant_message(
+        self,
+        conversation_id: str,
+        *,
+        role: str,
+        content: str,
+    ) -> dict[str, Any]:
+        conversation = self.assistant_conversation(conversation_id)
+        if conversation.get("archived_at"):
+            raise ValueError("assistant conversation is archived")
+        role = str(role or "").strip().lower()
+        if role not in {"user", "assistant", "system", "tool"}:
+            raise ValueError("invalid assistant message role")
+        content = str(content or "").strip()
+        if not content:
+            raise ValueError("assistant message content is required")
+        if len(content) > 200_000:
+            raise ValueError("assistant message content is too large")
+        created = _now()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO assistant_messages(conversation_id,role,content,created_at)
+                VALUES(?,?,?,?)
+                """,
+                (conversation_id, role, content, created),
+            )
+            connection.execute(
+                "UPDATE assistant_conversations SET updated_at=? WHERE id=?",
+                (created, conversation_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM assistant_messages WHERE id=?",
+                (cursor.lastrowid,),
+            ).fetchone()
+        return self._assistant_message(row)
 
     def enqueue_work(
         self,

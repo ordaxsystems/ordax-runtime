@@ -114,6 +114,59 @@ class OrchestratorStoreTests(unittest.TestCase):
         )
         self.assertGreater(instruction["id"], report["id"])
 
+    def test_assistant_conversations_are_durable_and_project_scoped(self) -> None:
+        chat = self.store.create_assistant_conversation(
+            "demo",
+            title="Chat UI",
+            account_id="ordax",
+            provider_id="openai",
+            model_id="gpt-4o",
+        )
+        self.store.add_assistant_message(
+            chat["id"],
+            role="user",
+            content="Revise o layout do Studio",
+        )
+        self.store.add_assistant_message(
+            chat["id"],
+            role="assistant",
+            content="Vou revisar o shell IDE.",
+        )
+        updated = self.store.update_assistant_conversation(
+            chat["id"],
+            provider_id="xai",
+            model_id="grok",
+        )
+        self.assertEqual(updated["provider_id"], "xai")
+        self.assertEqual(updated["model_id"], "grok")
+        state = self.store.set_assistant_project_state(
+            "demo",
+            active_conversation_id=chat["id"],
+            account_id="ordax",
+            provider_id="xai",
+            model_id="grok",
+        )
+        self.assertEqual(state["active_conversation_id"], chat["id"])
+
+        reopened = OrchestratorStore(self.db)
+        chats = reopened.assistant_conversations("demo")
+        self.assertEqual([item["id"] for item in chats], [chat["id"]])
+        reopened_state = reopened.assistant_project_state("demo")
+        self.assertEqual(reopened_state["active_conversation_id"], chat["id"])
+        self.assertEqual(reopened_state["provider_id"], "xai")
+        messages = reopened.assistant_messages(chat["id"])
+        self.assertEqual([item["role"] for item in messages], ["user", "assistant"])
+        self.assertEqual(messages[0]["content"], "Revise o layout do Studio")
+        self.assertEqual(reopened.assistant_conversations("other"), [])
+
+        archived = reopened.archive_assistant_conversation(chat["id"])
+        self.assertIsNotNone(archived["archived_at"])
+        self.assertEqual(reopened.assistant_conversations("demo"), [])
+        self.assertEqual(
+            reopened.assistant_conversations("demo", include_archived=True)[0]["id"],
+            chat["id"],
+        )
+
     def test_worker_cannot_create_nested_workers(self) -> None:
         prime = self.store.create_agent("demo", "Prime", "coordinator")
         worker = self.store.create_agent(
