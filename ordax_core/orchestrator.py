@@ -206,6 +206,16 @@ class OrchestratorStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_assistant_messages_conversation
                   ON assistant_messages(conversation_id, id);
+
+                CREATE TABLE IF NOT EXISTS assistant_project_state(
+                  project_slug TEXT PRIMARY KEY,
+                  active_conversation_id TEXT,
+                  account_id TEXT NOT NULL,
+                  provider_id TEXT NOT NULL,
+                  model_id TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  FOREIGN KEY(active_conversation_id) REFERENCES assistant_conversations(id)
+                );
                 """
             )
 
@@ -625,6 +635,85 @@ class OrchestratorStore:
 
     @staticmethod
     def _assistant_message(row: sqlite3.Row) -> dict[str, Any]:
+        return dict(row)
+
+    def assistant_project_state(
+        self,
+        project_slug: str,
+        *,
+        default_account_id: str = "local",
+        default_provider_id: str = "",
+        default_model_id: str = "",
+    ) -> dict[str, Any]:
+        project_slug = str(project_slug or "").strip()
+        if not project_slug:
+            raise ValueError("project_slug is required")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM assistant_project_state WHERE project_slug=?",
+                (project_slug,),
+            ).fetchone()
+        if row:
+            return dict(row)
+        return {
+            "project_slug": project_slug,
+            "active_conversation_id": None,
+            "account_id": str(default_account_id or "local"),
+            "provider_id": str(default_provider_id or ""),
+            "model_id": str(default_model_id or ""),
+            "updated_at": None,
+        }
+
+    def set_assistant_project_state(
+        self,
+        project_slug: str,
+        *,
+        active_conversation_id: str | None,
+        account_id: str,
+        provider_id: str,
+        model_id: str,
+    ) -> dict[str, Any]:
+        project_slug = str(project_slug or "").strip()
+        account_id = str(account_id or "").strip()
+        provider_id = str(provider_id or "").strip()
+        model_id = str(model_id or "").strip()
+        if not project_slug:
+            raise ValueError("project_slug is required")
+        if not account_id:
+            raise ValueError("account_id is required")
+        if active_conversation_id:
+            conversation = self.assistant_conversation(active_conversation_id)
+            if conversation["project_slug"] != project_slug:
+                raise ValueError("active assistant conversation belongs to another project")
+            if conversation.get("archived_at"):
+                raise ValueError("active assistant conversation is archived")
+        updated = _now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO assistant_project_state(
+                  project_slug,active_conversation_id,account_id,provider_id,model_id,updated_at
+                ) VALUES(?,?,?,?,?,?)
+                ON CONFLICT(project_slug) DO UPDATE SET
+                  active_conversation_id=excluded.active_conversation_id,
+                  account_id=excluded.account_id,
+                  provider_id=excluded.provider_id,
+                  model_id=excluded.model_id,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    project_slug,
+                    active_conversation_id,
+                    account_id,
+                    provider_id,
+                    model_id,
+                    updated,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM assistant_project_state WHERE project_slug=?",
+                (project_slug,),
+            ).fetchone()
         return dict(row)
 
     def assistant_conversations(
