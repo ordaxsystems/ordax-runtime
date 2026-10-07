@@ -243,6 +243,45 @@ begin
     (Pos('ORDAX Studio', String(ManifestText)) > 0);
 end;
 
+function IsSafePartialOrdaxResidual(const Root: String): Boolean;
+var
+  FindRec: TFindRec;
+  ItemName: String;
+  HasOrdaxRuntimeMarker: Boolean;
+begin
+  HasOrdaxRuntimeMarker :=
+    FileExists(AddBackslash(Root) + 'runtime\python.exe') and
+    DirExists(AddBackslash(Root) + 'runtime\Lib\site-packages\ordax_studio') and
+    FileExists(AddBackslash(Root) + 'unins000.dat');
+
+  if not HasOrdaxRuntimeMarker then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  Result := True;
+  if FindFirst(AddBackslash(Root) + '*', FindRec) then
+  begin
+    try
+      repeat
+        ItemName := FindRec.Name;
+        if (ItemName <> '.') and (ItemName <> '..') and
+           (CompareText(ItemName, 'runtime') <> 0) and
+           (CompareText(ItemName, 'scripts') <> 0) and
+           (CompareText(ItemName, 'unins000.dat') <> 0) and
+           (CompareText(ItemName, 'unins000.exe') <> 0) then
+        begin
+          Result := False;
+          Exit;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
 function RetireAlternateInstallRoot(): Boolean;
 var
   AlternateRoot: String;
@@ -267,7 +306,8 @@ begin
     name. Only retire it when product markers prove it is an ORDAX install.
     Durable user/device/project state lives outside Program Files under
     LocalAppData\OrdaX and is intentionally untouched. }
-  if not IsRecognizedOrdaxInstallRoot(AlternateRoot) then
+  if not IsRecognizedOrdaxInstallRoot(AlternateRoot) and
+     not IsSafePartialOrdaxResidual(AlternateRoot) then
   begin
     Result := True;
     Exit;
