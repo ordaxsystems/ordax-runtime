@@ -41,6 +41,7 @@ VersionInfoProductName={#AppName}
 VersionInfoProductVersion={#AppVersion}
 
 [Files]
+Source: "{#StageDir}\scripts\windows\ordax-upgrade-quiesce.ps1"; Flags: dontcopy
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
@@ -152,6 +153,33 @@ begin
     Sleep(500);
 end;
 
+function QuiescePackagedProcesses(): Boolean;
+var
+  ResultCode: Integer;
+  Started: Boolean;
+  ScriptPath: String;
+  Parameters: String;
+begin
+  ExtractTemporaryFile('ordax-upgrade-quiesce.ps1');
+  ScriptPath := ExpandConstant('{tmp}\ordax-upgrade-quiesce.ps1');
+  Parameters :=
+    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+    ScriptPath +
+    '" -InstallRoot "' +
+    ExpandConstant('{app}') +
+    '"';
+
+  Started := Exec(
+    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    Parameters,
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  );
+  Result := Started and (ResultCode = 0);
+end;
+
 function LegacyScheduledTaskExists(): Boolean;
 var
   ResultCode: Integer;
@@ -237,6 +265,16 @@ begin
     Exit;
   end;
 
+  { Cooperative launchers are stopped first. Then quiesce only executable
+    trees whose root process is physically inside this ORDAX installation.
+    This releases private-runtime DLLs held by orphaned Workbench bridges or
+    persistent preview managers without touching system Python/Node/Blender. }
+  if not QuiescePackagedProcesses() then
+  begin
+    Result := 'Não foi possível liberar todos os processos pertencentes à instalação atual do ORDAX.';
+    Exit;
+  end;
+
   Result := '';
 end;
 
@@ -248,5 +286,6 @@ begin
     StopOrdaxProcess('Local\ORDAXStudioShutdown', '{#LegacyAppExeName}');
     StopOrdaxProcess('Local\ORDAXRuntimeShutdown', '{#RuntimeExeName}');
     RetireLegacyScheduledTask();
+    QuiescePackagedProcesses();
   end;
 end;
