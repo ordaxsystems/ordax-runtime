@@ -359,6 +359,50 @@ class StudioApi:
     def _assistant_defaults(self) -> tuple[str, str, str]:
         return ("local", "openai", "gpt-4o")
 
+    def _assistant_validate_identity(
+        self,
+        account_id: str,
+        provider_id: str,
+        model_id: str,
+    ) -> tuple[str, str, str]:
+        account_id = str(account_id or "").strip()
+        provider_id = str(provider_id or "").strip()
+        model_id = str(model_id or "").strip()
+        catalog = self.assistant_catalog()
+        if not catalog.get("ok"):
+            raise ValueError("assistant catalog is unavailable")
+        data = catalog.get("data") or {}
+        account = next(
+            (
+                item for item in (data.get("accounts") or [])
+                if str(item.get("id") or "") == account_id
+            ),
+            None,
+        )
+        if account is None:
+            raise ValueError("assistant account is not declared by the Runtime")
+        if account.get("connected") is False:
+            raise ValueError("assistant account is not connected")
+        provider = next(
+            (
+                item for item in (data.get("providers") or [])
+                if str(item.get("id") or "") == provider_id
+            ),
+            None,
+        )
+        if provider is None:
+            raise ValueError("assistant provider is not declared by the Runtime")
+        model = next(
+            (
+                item for item in (provider.get("models") or [])
+                if str(item.get("id") or "") == model_id
+            ),
+            None,
+        )
+        if model is None:
+            raise ValueError("assistant model is not declared by the Runtime")
+        return account_id, provider_id, model_id
+
     def assistant_state(self) -> dict[str, Any]:
         account_id, provider_id, model_id = self._assistant_defaults()
         try:
@@ -425,12 +469,17 @@ class StudioApi:
         default_account, default_provider, default_model = self._assistant_defaults()
         try:
             existing = self.orchestrator.assistant_conversations(self.project)
+            selected_account, selected_provider, selected_model = self._assistant_validate_identity(
+                str(account_id or "").strip() or default_account,
+                str(provider_id or "").strip() or default_provider,
+                str(model_id or "").strip() or default_model,
+            )
             created = self.orchestrator.create_assistant_conversation(
                 self.project,
                 title=str(title or "").strip() or f"Chat {len(existing) + 1}",
-                account_id=str(account_id or "").strip() or default_account,
-                provider_id=str(provider_id or "").strip() or default_provider,
-                model_id=str(model_id or "").strip() or default_model,
+                account_id=selected_account,
+                provider_id=selected_provider,
+                model_id=selected_model,
             )
             state = self.orchestrator.set_assistant_project_state(
                 self.project,
@@ -479,12 +528,17 @@ class StudioApi:
             current = self.orchestrator.assistant_conversation(conversation_id)
             if current["project_slug"] != self.project or current.get("archived_at"):
                 raise ValueError("assistant conversation is unavailable for this project")
+            selected_account, selected_provider, selected_model = self._assistant_validate_identity(
+                current["account_id"] if account_id is None else account_id,
+                current["provider_id"] if provider_id is None else provider_id,
+                current["model_id"] if model_id is None else model_id,
+            )
             updated = self.orchestrator.update_assistant_conversation(
                 conversation_id,
                 title=title,
-                account_id=account_id,
-                provider_id=provider_id,
-                model_id=model_id,
+                account_id=selected_account,
+                provider_id=selected_provider,
+                model_id=selected_model,
             )
             state = self.orchestrator.assistant_project_state(self.project)
             if str(state.get("active_conversation_id") or "") == str(conversation_id):
