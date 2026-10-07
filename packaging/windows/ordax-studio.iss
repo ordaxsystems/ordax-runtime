@@ -228,7 +228,7 @@ begin
 
   { Older Studio builds could leave Workbench outside the launcher Job Object.
     Kill that process tree explicitly before replacing the private Python runtime,
-    because its workbench_bridge child loads DLLs from {app}\runtime. }
+    because its workbench_bridge child loads DLLs from the installed runtime directory. }
   if not StopOrdaxProcess('Local\ORDAXWorkbenchShutdown', '{#WorkbenchExeName}') then
   begin
     Result := 'Não foi possível encerrar a ORDAX Workbench para atualizar os arquivos.';
