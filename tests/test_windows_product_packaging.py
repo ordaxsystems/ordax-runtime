@@ -32,7 +32,8 @@ class WindowsProductPackagingTests(unittest.TestCase):
     def test_installer_preserves_app_id_while_migrating_branding(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
         self.assertIn("AppId={{0D31F22D-8451-4CF4-9E34-F0D4D857F55F}", installer)
-        self.assertIn("DefaultDirName={localappdata}\\Programs\\ORDAX Studio", installer)
+        self.assertIn("DefaultDirName={localappdata}\\Programs\\ORDAX", installer)
+        self.assertIn("UsePreviousAppDir=no", installer)
         self.assertIn("OutputBaseFilename=ORDAX-Studio-Setup-{#AppVersion}-x64", installer)
         self.assertIn('Name: "{group}\\ORDAX Studio"', installer)
         self.assertIn('Name: "{userdesktop}\\ORDAX Studio"', installer)
@@ -235,3 +236,14 @@ class WindowsProductPackagingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_installer_retires_only_recognized_alternate_install_root(self) -> None:
+        installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
+        self.assertIn("function IsRecognizedOrdaxInstallRoot", installer)
+        self.assertIn("function RetireAlternateInstallRoot", installer)
+        self.assertIn("product-manifest.json", installer)
+        self.assertIn("ordax.windows-product/1", installer)
+        self.assertIn("ORDAX Studio", installer)
+        self.assertIn("DelTree(AlternateRoot, True, True, True)", installer)
+        self.assertIn("LocalAppData\\OrdaX", installer)
+        self.assertNotIn("DelTree(ExpandConstant('{localappdata}\\OrdaX')", installer)

@@ -20,7 +20,8 @@ AppId={{0D31F22D-8451-4CF4-9E34-F0D4D857F55F}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-DefaultDirName={localappdata}\Programs\ORDAX Studio
+DefaultDirName={localappdata}\Programs\ORDAX
+UsePreviousAppDir=no
 DefaultGroupName=ORDAX
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -207,6 +208,74 @@ begin
     Sleep(750);
 end;
 
+function IsRecognizedOrdaxInstallRoot(const Root: String): Boolean;
+var
+  ManifestPath: String;
+  ManifestText: AnsiString;
+begin
+  ManifestPath := AddBackslash(Root) + 'product-manifest.json';
+  if not FileExists(ManifestPath) then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  if not FileExists(AddBackslash(Root) + '{#AppExeName}') then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  if not FileExists(AddBackslash(Root) + '{#RuntimeExeName}') then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  if not LoadStringFromFile(ManifestPath, ManifestText) then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  Result :=
+    (Pos('ordax.windows-product/1', String(ManifestText)) > 0) and
+    (Pos('ORDAX Studio', String(ManifestText)) > 0);
+end;
+
+function RetireAlternateInstallRoot(): Boolean;
+var
+  AlternateRoot: String;
+  CurrentRoot: String;
+begin
+  AlternateRoot := ExpandConstant('{localappdata}\Programs\ORDAX Studio');
+  CurrentRoot := ExpandConstant('{app}');
+
+  if CompareText(RemoveBackslashUnlessRoot(AlternateRoot), RemoveBackslashUnlessRoot(CurrentRoot)) = 0 then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if not DirExists(AlternateRoot) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  { Never delete an arbitrary directory merely because it has the historical
+    name. Only retire it when product markers prove it is an ORDAX install.
+    Durable user/device/project state lives outside Program Files under
+    LocalAppData\OrdaX and is intentionally untouched. }
+  if not IsRecognizedOrdaxInstallRoot(AlternateRoot) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  Result := DelTree(AlternateRoot, True, True, True);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   NeedsRestart := False;
@@ -244,6 +313,12 @@ begin
   if not RetireLegacyScheduledTask() then
   begin
     Result := 'Não foi possível aposentar o supervisor legado OrdaX Dev Agent.';
+    Exit;
+  end;
+
+  if not RetireAlternateInstallRoot() then
+  begin
+    Result := 'Não foi possível aposentar a raiz de instalação antiga do ORDAX Studio.';
     Exit;
   end;
 

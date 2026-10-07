@@ -156,6 +156,21 @@ jobs:
           $upgradeLog = Join-Path $env:RUNNER_TEMP "ordax-studio-upgrade.log"
           Remove-Item $installRoot -Recurse -Force -ErrorAction SilentlyContinue
 
+          # Simulate a stale alternate product root left by older packaging.
+          # The installer may retire it only when strong ORDAX product markers match.
+          $alternateInstallRoot = Join-Path $env:LOCALAPPDATA "Programs\ORDAX Studio"
+          Remove-Item $alternateInstallRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $alternateInstallRoot | Out-Null
+          Set-Content -Path (Join-Path $alternateInstallRoot "product-manifest.json") -Encoding utf8 -Value @'
+          {
+            "schema": "ordax.windows-product/1",
+            "product": "ORDAX Studio",
+            "version": "0.4.1"
+          }
+          '@
+          New-Item -ItemType File -Force -Path (Join-Path $alternateInstallRoot "ORDAX Studio.exe") | Out-Null
+          New-Item -ItemType File -Force -Path (Join-Path $alternateInstallRoot "ORDAX Runtime.exe") | Out-Null
+
           # Simulate the historical pre-0.4 supervisor so the product install proves
           # it retires the duplicate runtime without depending on a preconfigured host.
           $legacyTaskName = "OrdaX Dev Agent"
@@ -187,6 +202,11 @@ jobs:
             throw "legacy OrdaX Dev Agent startup link survived product install"
           }
           Write-Host "LEGACY_ORDAX_STARTUP_REMOVED"
+
+          if (Test-Path $alternateInstallRoot) {
+            throw "recognized alternate ORDAX Studio install root survived product install"
+          }
+          Write-Host "LEGACY_INSTALL_ROOT_REMOVED"
 
           $studioExe = Join-Path $installRoot "ORDAX Studio.exe"
           $legacyStudioExe = Join-Path $installRoot "ORDAX Dev.exe"
@@ -272,6 +292,12 @@ jobs:
             if ($legacyProcess.HasExited) { throw "Synthetic legacy ORDAX Dev process did not start" }
             Write-Host "LEGACY_ORDAX_DEV_PROCESS_RUNNING"
 
+            # Recreate the historical directory name without ORDAX product markers.
+            # A safe migration must leave this unrelated directory untouched.
+            New-Item -ItemType Directory -Force -Path $alternateInstallRoot | Out-Null
+            $alternateSentinel = Join-Path $alternateInstallRoot "user-owned.txt"
+            Set-Content -Path $alternateSentinel -Value "preserve" -Encoding ascii
+
             Write-Host "Upgrade over running ORDAX Runtime and legacy ORDAX Dev launcher"
             $upgradeProcess = Start-Process -FilePath $installer.FullName -ArgumentList @(
               "/VERYSILENT",
@@ -295,6 +321,12 @@ jobs:
               throw "legacy ORDAX Dev process survived Studio upgrade"
             }
             Write-Host "LEGACY_ORDAX_DEV_PROCESS_RETIRED"
+
+            if (-not (Test-Path $alternateSentinel)) {
+              throw "installer removed an unrecognized alternate directory"
+            }
+            Write-Host "UNRECOGNIZED_ALTERNATE_ROOT_PRESERVED"
+            Remove-Item $alternateInstallRoot -Recurse -Force
 
             foreach ($required in @($studioExe, $legacyStudioExe, $runtimeExe, $workbenchExe, $privatePython)) {
               if (-not (Test-Path $required)) {
