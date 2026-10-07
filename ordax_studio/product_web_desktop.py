@@ -96,7 +96,7 @@ class StudioProductApi(StudioApi):
         if not isinstance(session, ProductAuthSession):
             raise ProductAccountError(
                 "product_auth_session_required",
-                "Conecte sua conta ORDAX nesta sess?o para gerenciar autoriza??es remotas.",
+                "Conecte sua conta ORDAX nesta sessão para gerenciar autorizações remotas.",
             )
         return session
 
@@ -109,7 +109,7 @@ class StudioProductApi(StudioApi):
         if not device_id:
             raise ProductAccountError(
                 "product_device_unavailable",
-                "Este computador ainda n?o possui identidade ORDAX ativa.",
+                "Este computador ainda não possui identidade ORDAX ativa.",
             )
         return device_id
 
@@ -118,7 +118,7 @@ class StudioProductApi(StudioApi):
         return {
             "ok": False,
             "code": error.error_code,
-            "summary": "O Control Plane recusou a opera??o de autoriza??o remota.",
+            "summary": "O Control Plane recusou a operação de autorização remota.",
         }
 
     def connect_product_account(self, email: str, password: str) -> dict[str, Any]:
@@ -199,11 +199,11 @@ class StudioProductApi(StudioApi):
             return {
                 "ok": False,
                 "code": "product_remote_unavailable",
-                "summary": f"{type(error).__name__}: autoriza??o remota indispon?vel",
+                "summary": f"{type(error).__name__}: autorização remota indisponível",
             }
         return {
             "ok": True,
-            "summary": "Autoriza??es remotas carregadas",
+            "summary": "Autorizações remotas carregadas",
             "data": {
                 "device_id": device_id,
                 "links": links,
@@ -223,10 +223,17 @@ class StudioProductApi(StudioApi):
             return {
                 "ok": False,
                 "code": "owner_device_grant_mode_not_allowed",
-                "summary": "Perfil de autoriza??o remota n?o permitido nesta interface.",
+                "summary": "Perfil de autorização remota não permitido nesta interface.",
             }
         if normalized_mode == "full-computer-control":
-            local_policy = computer_access_management_status(self.agent.config)
+            try:
+                local_policy = computer_access_management_status(self.agent.config)
+            except (OSError, ValueError):
+                return {
+                    "ok": False,
+                    "code": "local_computer_access_unavailable",
+                    "summary": "A política local de acesso ao computador está indisponível. Corrija as configurações antes de autorizar acesso total remoto.",
+                }
             if not bool(local_policy.get("enabled")) or not bool(local_policy.get("full_access")):
                 return {
                     "ok": False,
@@ -262,9 +269,9 @@ class StudioProductApi(StudioApi):
                 if len(links) != 1:
                     code = "product_device_link_not_found" if not links else "product_device_link_ambiguous"
                     summary = (
-                        "Nenhum v?nculo ativo desta conta corresponde a este computador."
+                        "Nenhum vínculo ativo desta conta corresponde a este computador."
                         if not links else
-                        "H? mais de um v?nculo ativo para este computador; selecione o v?nculo explicitamente."
+                        "Há mais de um vínculo ativo para este computador; selecione o vínculo explicitamente."
                     )
                     return {"ok": False, "code": code, "summary": summary}
                 selected_link = str(links[0].get("link_id") or "")
@@ -283,7 +290,7 @@ class StudioProductApi(StudioApi):
             return {
                 "ok": False,
                 "code": "product_remote_unavailable",
-                "summary": f"{type(error).__name__}: autoriza??o remota indispon?vel",
+                "summary": f"{type(error).__name__}: autorização remota indisponível",
             }
         return {
             "ok": True,
@@ -297,7 +304,7 @@ class StudioProductApi(StudioApi):
             return {
                 "ok": False,
                 "code": "owner_device_grant_id_invalid",
-                "summary": "Identificador de autoriza??o inv?lido.",
+                "summary": "Identificador de autorização inválido.",
             }
         try:
             session = self._product_session_required()
@@ -311,11 +318,11 @@ class StudioProductApi(StudioApi):
             return {
                 "ok": False,
                 "code": "product_remote_unavailable",
-                "summary": f"{type(error).__name__}: autoriza??o remota indispon?vel",
+                "summary": f"{type(error).__name__}: autorização remota indisponível",
             }
         return {
             "ok": True,
-            "summary": "Autoriza??o remota revogada",
+            "summary": "Autorização remota revogada",
             "data": result,
         }
 

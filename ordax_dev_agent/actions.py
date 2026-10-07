@@ -27,7 +27,7 @@ from .preview_actions import PreviewActions
 from .browser_session_actions import BrowserSessionActions
 from .computer_control_actions import ComputerControlActions
 from .computer_parity_actions import ComputerParityActions
-from .computer_filesystem_actions import ComputerFilesystemActions
+from .computer_filesystem_actions import ComputerFilesystemActions, load_computer_access_policy
 from .memory_actions import MemoryActions
 from .application_intelligence_actions import ApplicationIntelligenceActions
 from .component_actions import ComponentActions
@@ -480,6 +480,16 @@ class ActionRegistry(
         if handler is None:
             return ActionResult(False, f"action not allowed: {action}")
         payload = payload or {}
+        # Apply the owner's current policy at the single dispatch boundary,
+        # including nonblocking observations and calls from remote gateways.
+        # access_status remains available so a disabled device is diagnosable.
+        if action.startswith("computer.") and action != "computer.access_status":
+            try:
+                policy = load_computer_access_policy(self.config)
+            except (ValueError, OSError) as error:
+                return ActionResult(False, f"computer access policy is invalid: {error}")
+            if not policy.enabled:
+                return ActionResult(False, "computer access is disabled by local ORDAX policy")
         if action in _NONBLOCKING_OBSERVATION_ACTIONS:
             try:
                 return handler(payload)

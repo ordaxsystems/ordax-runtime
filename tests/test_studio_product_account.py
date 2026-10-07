@@ -389,6 +389,18 @@ class StudioProductAccountTests(unittest.TestCase):
         self.assertEqual("link-1", kwargs["link_id"])
         self.assertEqual("full-computer-control", kwargs["mode"])
 
+    def test_invalid_local_policy_refuses_full_grant_without_remote_call(self) -> None:
+        api = object.__new__(StudioProductApi)
+        api.agent = SimpleNamespace(config=SimpleNamespace())
+        with (
+            patch("ordax_studio.product_web_desktop.computer_access_management_status", side_effect=ValueError("bad configuration")),
+            patch("ordax_studio.product_web_desktop.ProductRemoteClient") as remote,
+        ):
+            result = api.authorize_remote_computer_grant("full-computer-control")
+        self.assertFalse(result["ok"])
+        self.assertEqual("local_computer_access_unavailable", result["code"])
+        remote.assert_not_called()
+
     def test_owner_ui_host_refuses_non_computer_or_unknown_profile(self) -> None:
         api = object.__new__(StudioProductApi)
         api.agent = SimpleNamespace(config=SimpleNamespace(
@@ -450,6 +462,13 @@ class StudioProductAccountTests(unittest.TestCase):
         self.assertNotIn("localStorage", ui_source)
         self.assertNotIn("sessionStorage", ui_source)
         self.assertIn("password.value=''", ui_source)
+
+    def test_host_authorization_messages_use_intact_utf8_portuguese(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "ordax_studio" / "product_web_desktop.py").read_text(encoding="utf-8")
+        for broken in ("autoriza??", "Autoriza??", "n?o", "v?nculo", "sess?o", "opera??o", "indispon?vel", "inv?lido"):
+            self.assertNotIn(broken, source)
+        self.assertIn("Autorizações remotas carregadas", source)
+        self.assertIn("Identificador de autorização inválido.", source)
 
 
 if __name__ == "__main__":
