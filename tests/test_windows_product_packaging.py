@@ -77,7 +77,9 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertNotIn("/IM blender.exe", quiesce)
         self.assertIn("PACKAGED_PRIVATE_PYTHON_ORPHAN_RUNNING", workflow)
         self.assertIn("PACKAGED_PRIVATE_PYTHON_ORPHAN_RETIRED", workflow)
-        self.assertIn("import ssl,time; time.sleep(300)", workflow)
+        self.assertIn("ordax-private-runtime-lock.py", workflow)
+        self.assertIn('"import ssl"', workflow)
+        self.assertIn('"time.sleep(300)"', workflow)
 
     def test_installer_retires_legacy_scheduled_runtime_without_deleting_state(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
