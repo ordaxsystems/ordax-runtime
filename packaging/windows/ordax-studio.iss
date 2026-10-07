@@ -282,38 +282,50 @@ begin
   end;
 end;
 
-function RetireAlternateInstallRoot(): Boolean;
+function RetireHistoricalInstallRoot(const HistoricalRoot: String): Boolean;
 var
-  AlternateRoot: String;
   CurrentRoot: String;
 begin
-  AlternateRoot := ExpandConstant('{localappdata}\Programs\ORDAX Studio');
   CurrentRoot := ExpandConstant('{app}');
 
-  if CompareText(RemoveBackslashUnlessRoot(AlternateRoot), RemoveBackslashUnlessRoot(CurrentRoot)) = 0 then
+  if CompareText(RemoveBackslashUnlessRoot(HistoricalRoot), RemoveBackslashUnlessRoot(CurrentRoot)) = 0 then
   begin
     Result := True;
     Exit;
   end;
 
-  if not DirExists(AlternateRoot) then
+  if not DirExists(HistoricalRoot) then
   begin
     Result := True;
     Exit;
   end;
 
-  { Never delete an arbitrary directory merely because it has the historical
-    name. Only retire it when product markers prove it is an ORDAX install.
+  { Never delete an arbitrary directory merely because it has a historical
+    ORDAX name. Only retire it when strong product markers prove it is an
+    ORDAX install, or when it is a narrowly recognized partial residual.
     Durable user/device/project state lives outside Program Files under
     LocalAppData\OrdaX and is intentionally untouched. }
-  if not IsRecognizedOrdaxInstallRoot(AlternateRoot) and
-     not IsSafePartialOrdaxResidual(AlternateRoot) then
+  if not IsRecognizedOrdaxInstallRoot(HistoricalRoot) and
+     not IsSafePartialOrdaxResidual(HistoricalRoot) then
   begin
     Result := True;
     Exit;
   end;
 
-  Result := DelTree(AlternateRoot, True, True, True);
+  Result := DelTree(HistoricalRoot, True, True, True);
+end;
+
+function RetireHistoricalInstallRoots(): Boolean;
+var
+  LegacyStudioRoot: String;
+  LegacyDevRoot: String;
+begin
+  LegacyStudioRoot := ExpandConstant('{localappdata}\Programs\ORDAX Studio');
+  LegacyDevRoot := ExpandConstant('{localappdata}\Programs\ORDAX Dev');
+
+  Result := RetireHistoricalInstallRoot(LegacyStudioRoot);
+  if Result then
+    Result := RetireHistoricalInstallRoot(LegacyDevRoot);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -356,9 +368,9 @@ begin
     Exit;
   end;
 
-  if not RetireAlternateInstallRoot() then
+  if not RetireHistoricalInstallRoots() then
   begin
-    Result := 'Não foi possível aposentar a raiz de instalação antiga do ORDAX Studio.';
+    Result := 'Não foi possível aposentar uma raiz de instalação histórica do ORDAX Studio.';
     Exit;
   end;
 
