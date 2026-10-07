@@ -251,6 +251,7 @@ jobs:
 
           $upgradedRuntime = $null
           $legacyProcess = $null
+          $orphanPrivatePython = $null
           try {
             $null = Wait-OrdaxReady -Label "ORDAX_RUNTIME"
 
@@ -272,7 +273,22 @@ jobs:
             if ($legacyProcess.HasExited) { throw "Synthetic legacy ORDAX Dev process did not start" }
             Write-Host "LEGACY_ORDAX_DEV_PROCESS_RUNNING"
 
-            Write-Host "Upgrade over running ORDAX Runtime and legacy ORDAX Dev launcher"
+            # Reproduce the real-world upgrade failure where a detached private
+            # Runtime Python process keeps OpenSSL DLLs loaded after the launcher
+            # has already exited. Windows Restart Manager must close this process
+            # before Setup replaces runtime binaries.
+            $orphanPrivatePython = Start-Process -FilePath $privatePython -ArgumentList @(
+              "-c",
+              "import ssl,time; time.sleep(300)"
+            ) -WorkingDirectory $installRoot -PassThru
+            Start-Sleep -Seconds 1
+            $orphanPrivatePython.Refresh()
+            if ($orphanPrivatePython.HasExited) {
+              throw "Synthetic orphan private Runtime Python did not start"
+            }
+            Write-Host "ORPHAN_PRIVATE_RUNTIME_PYTHON_RUNNING"
+
+            Write-Host "Upgrade over running ORDAX Runtime, orphan private Python, and legacy ORDAX Dev launcher"
             $upgradeProcess = Start-Process -FilePath $installer.FullName -ArgumentList @(
               "/VERYSILENT",
               "/SUPPRESSMSGBOXES",
@@ -296,6 +312,12 @@ jobs:
             }
             Write-Host "LEGACY_ORDAX_DEV_PROCESS_RETIRED"
 
+            $orphanPrivatePython.Refresh()
+            if (-not $orphanPrivatePython.HasExited) {
+              throw "orphan private Runtime Python survived Studio upgrade"
+            }
+            Write-Host "ORPHAN_PRIVATE_RUNTIME_PYTHON_RETIRED"
+
             foreach ($required in @($studioExe, $legacyStudioExe, $runtimeExe, $workbenchExe, $privatePython)) {
               if (-not (Test-Path $required)) {
                 if (Test-Path $upgradeLog) { Get-Content $upgradeLog -Tail 200 }
@@ -309,6 +331,9 @@ jobs:
           } finally {
             if ($legacyProcess) {
               Stop-Process -Id $legacyProcess.Id -Force -ErrorAction SilentlyContinue
+            }
+            if ($orphanPrivatePython) {
+              Stop-Process -Id $orphanPrivatePython.Id -Force -ErrorAction SilentlyContinue
             }
             if ($upgradedRuntime) {
               Stop-Process -Id $upgradedRuntime.Id -Force -ErrorAction SilentlyContinue
