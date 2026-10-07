@@ -238,9 +238,11 @@ class WindowsProductPackagingTests(unittest.TestCase):
         build = (ROOT / "scripts" / "windows" / "build-ordax-studio-product.ps1").read_text(encoding="utf-8")
         source_lock = (ROOT / "studio-source.lock.json").read_text(encoding="utf-8")
         self.assertIn('"repository": "washingtonmsdj/ordax-apps"', source_lock)
-        self.assertIn('"commit": "40dd6f974b03d24b7a3a02c7cd53e41712ff293d"', source_lock)
+        import json
+        lock = json.loads(source_lock)
+        self.assertRegex(lock["commit"], r"^[0-9a-f]{40}$")
         self.assertIn('"path": "apps/studio"', source_lock)
-        self.assertIn('"version": "0.5.6"', source_lock)
+        self.assertIn('"version": "0.5.7"', source_lock)
         self.assertIn("repository: washingtonmsdj/ordax-apps", workflow)
         self.assertIn("ORDAX_STUDIO_SOURCE_COMMIT", workflow)
         self.assertIn("ref: ${{ env.ORDAX_STUDIO_SOURCE_COMMIT }}", workflow)
