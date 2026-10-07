@@ -47,6 +47,10 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("CreateEventW", launcher)
         self.assertIn("WaitForMultipleObjects", launcher)
         self.assertIn("TerminateJobObject", launcher)
+        self.assertIn("assigned_to_job = AssignProcessToJobObject", launcher)
+        self.assertIn("if (assigned_to_job)", launcher)
+        self.assertIn("CloseApplications=force", installer)
+        self.assertIn("RestartApplications=no", installer)
         self.assertIn("LegacyAppExeName", installer)
         self.assertIn("StopOrdaxProcess('Local\\ORDAXStudioShutdown', '{#LegacyAppExeName}')", installer)
 
@@ -57,7 +61,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertNotIn("browser_extension", build)
         self.assertNotIn("ordax_chat_app", build)
         self.assertIn("microsoftedgewebview2setup.exe", installer)
-        self.assertIn("closeapplications=no", installer)
+        self.assertIn("closeapplications=force", installer)
         self.assertIn("software\\microsoft\\windows\\currentversion\\run", installer)
 
     def test_installer_retires_legacy_scheduled_runtime_without_deleting_state(self) -> None:
@@ -155,6 +159,9 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("running runtime did not exit during upgrade", workflow)
         self.assertIn("legacy ORDAX Dev process survived Studio upgrade", workflow)
         self.assertIn("LEGACY_ORDAX_DEV_PROCESS_RETIRED", workflow)
+        self.assertIn("ORPHAN_PRIVATE_RUNTIME_PYTHON_RUNNING", workflow)
+        self.assertIn("ORPHAN_PRIVATE_RUNTIME_PYTHON_RETIRED", workflow)
+        self.assertIn("import ssl,time; time.sleep(300)", workflow)
         self.assertIn("ORDAX_LEGACY_ALIAS_IDENTICAL", workflow)
         self.assertIn("LEGACY_ORDAX_TASK_REMOVED", workflow)
         self.assertIn("LEGACY_ORDAX_STARTUP_REMOVED", workflow)
