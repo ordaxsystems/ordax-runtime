@@ -60,6 +60,25 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("closeapplications=no", installer)
         self.assertIn("software\\microsoft\\windows\\currentversion\\run", installer)
 
+    def test_installer_quiesces_only_packaged_process_trees_before_upgrade(self) -> None:
+        installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
+        quiesce = (ROOT / "scripts" / "windows" / "ordax-upgrade-quiesce.ps1").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
+
+        self.assertIn("QuiescePackagedProcesses", installer)
+        self.assertIn("ordax-upgrade-quiesce.ps1", installer)
+        self.assertIn("ExtractTemporaryFile", installer)
+        self.assertIn("Get-CimInstance Win32_Process", quiesce)
+        self.assertIn("StartsWith($rootPrefix)", quiesce)
+        self.assertIn("taskkill.exe", quiesce)
+        self.assertIn("/PID $pidValue /T /F", quiesce)
+        self.assertNotIn("/IM python.exe", quiesce)
+        self.assertNotIn("/IM node.exe", quiesce)
+        self.assertNotIn("/IM blender.exe", quiesce)
+        self.assertIn("PACKAGED_PRIVATE_PYTHON_ORPHAN_RUNNING", workflow)
+        self.assertIn("PACKAGED_PRIVATE_PYTHON_ORPHAN_RETIRED", workflow)
+        self.assertIn("import ssl,time; time.sleep(300)", workflow)
+
     def test_installer_retires_legacy_scheduled_runtime_without_deleting_state(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
         self.assertIn("RetireLegacyScheduledTask", installer)
@@ -167,6 +186,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('- "ordax_dev_agent/**"', workflow)
         self.assertIn('- "ordax_device_agent/**"', workflow)
         self.assertIn('- "ordax_studio/**"', workflow)
+        self.assertIn('- "scripts/windows/ordax-upgrade-quiesce.ps1"', workflow)
 
 
     def test_public_release_requires_trusted_authenticode(self) -> None:
