@@ -91,7 +91,7 @@ class ComputerLaunchAppTests(unittest.TestCase):
         self.state = self.root / "state"
         self.state.mkdir()
         self.actions = _Harness()
-        self.actions.config = SimpleNamespace(state_dir=self.state)
+        self.actions.config = SimpleNamespace(state_dir=self.state, agent_repo_path=self.root / "runtime")
         self._write_policy([])
 
     def _write_policy(self, applications):

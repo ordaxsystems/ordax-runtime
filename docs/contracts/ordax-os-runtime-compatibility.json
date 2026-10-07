@@ -2,7 +2,7 @@
   "$schema": "ordax.studio-runtime-compatibility/1",
   "product": {
     "id": "ordax-studio",
-    "version": "0.4.3",
+    "version": "0.4.4",
     "historical_repository": "washingtonmsdj/mcp-blender",
     "single_product": true,
     "canonical_runtime_repository": "washingtonmsdj/ordax-runtime"
