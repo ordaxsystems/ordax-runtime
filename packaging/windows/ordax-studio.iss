@@ -46,6 +46,10 @@ VersionInfoProductVersion={#AppVersion}
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
+; pip --target upgrades do not remove versioned dist-info directories from a previous
+; installed product. Remove only ORDAX Runtime package metadata before laying down
+; the new private runtime so importlib.metadata cannot resolve a stale version.
+Type: filesandordirs; Name: "{app}\runtime\Lib\site-packages\ordax_runtime-*.dist-info"
 Type: filesandordirs; Name: "{app}\browser_extension"
 Type: filesandordirs; Name: "{app}\runtime\Lib\site-packages\mcp_blender_unity-*.dist-info"
 Type: files; Name: "{app}\runtime\Scripts\mcp-blender.exe"
