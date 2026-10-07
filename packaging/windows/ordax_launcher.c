@@ -164,8 +164,13 @@ static DWORD run_executable_child(
         return GetLastError();
     }
 
-    if (job != NULL) {
-        AssignProcessToJobObject(job, process.hProcess);
+    if (job != NULL && !AssignProcessToJobObject(job, process.hProcess)) {
+        DWORD error = GetLastError();
+        TerminateProcess(process.hProcess, error);
+        WaitForSingleObject(process.hProcess, 5000);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error;
     }
 
     HANDLE wait_handles[2] = { process.hProcess, shutdown_event };
@@ -242,8 +247,13 @@ static DWORD run_python_child(
         return GetLastError();
     }
 
-    if (job != NULL) {
-        AssignProcessToJobObject(job, process.hProcess);
+    if (job != NULL && !AssignProcessToJobObject(job, process.hProcess)) {
+        DWORD error = GetLastError();
+        TerminateProcess(process.hProcess, error);
+        WaitForSingleObject(process.hProcess, 5000);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error;
     }
 
     HANDLE wait_handles[2] = { process.hProcess, shutdown_event };
