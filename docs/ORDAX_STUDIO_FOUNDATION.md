@@ -9,9 +9,9 @@ A primeira regra da evolução é preservar compatibilidade. O aplicativo `C:\Us
 
 ## Decisão de arquitetura
 
-O repositório histórico `mcp-blender` continua sendo a linha de desenvolvimento do agente e pode manter esse nome no Git para preservar integrações existentes. O nome do **produto**, do runtime principal e do MCP canônico, porém, é **ORDAX Studio**. Blender e Unity passam a ser capabilities do ORDAX, não produtos separados.
+O código do produto foi separado em autoridades explícitas. O aplicativo **ORDAX Studio** pertence ao repositório `ordax-apps`; o host Windows, o Device Agent e as capacidades tipadas pertencem ao `ordax-runtime`. Blender e Unity são capacidades do Runtime, não produtos nem repositórios de autoridade separados.
 
-O alias `mcp-blender` permanece válido para clientes antigos, mas resolve para o MCP completo do Studio. A bridge `mcp-blender-unity` fica restrita ao papel de compatibilidade/diagnóstico de baixo nível. O contrato detalhado está em [ORDAX_STUDIO_MCP_ARCHITECTURE.md](ORDAX_STUDIO_MCP_ARCHITECTURE.md).
+O repositório histórico `mcp-blender` está aposentado e pode ser removido sem afetar a linha canônica. O runtime aceita referências a ele somente no caminho de migração de instalações antigas para `ordax-runtime`; novos clientes e novas instalações não recebem aliases de console `mcp-blender`. O módulo interno de integração Blender/Unity continua empacotado pelo Runtime enquanto sua API tipada for necessária, sem dependência do repositório legado. O contrato detalhado está em [ORDAX_STUDIO_MCP_ARCHITECTURE.md](ORDAX_STUDIO_MCP_ARCHITECTURE.md).
 
 ```text
 ChatGPT / cliente MCP
@@ -84,7 +84,7 @@ operações tipadas publicadas pelo `ActionRegistry`, incluindo ARRAY, Geometry
 Nodes surface scatter, o workflow Boolean não destrutivo `preview → commit →
 cancel`, `mesh_cleanup` e o workflow `degenerate_repair_preview → commit/cancel` e
 `merge_by_distance_preview → commit/cancel` com seleção explícita de vértices e
-`boundary_hole_fill_preview â†’ commit/cancel` para um Ãºnico loop fechado de borda selecionado explicitamente.
+`boundary_hole_fill_preview → commit/cancel` para um único loop fechado de borda selecionado explicitamente.
 O quality gate também publica repair hints de topologia: fixes realmente seguros
 podem apontar para uma action revision-guarded, enquanto zero-length edges e faces
 degeneradas apontam apenas para o preview reversível. O Studio não mantém uma
@@ -251,8 +251,8 @@ Ela usa o mesmo `ActionRegistry`, banco de memória e regras de segurança do St
 O workspace segue um contrato estável de três superfícies:
 
 1. **sidebar esquerda — Projetos:** lista apenas workspaces/repositórios, com o projeto ativo destacado; arquivos não competem com projetos nessa navegação;
-2. **centro — Agente:** continuidade, tarefas e futuro transporte de chat ocupam a superfície principal; arquivos, busca, Git, memória e MCP são vistas contextuais do projeto;
-3. **direita — Preview:** superfície visual de primeira classe, independente do arquivo selecionado, com refresh, captura, logs e modo maximizado.
+2. **centro — Assistente:** o modo padrão é um navegador WebView2 nativo do provedor de IA, começando pelo ChatGPT para compatibilidade do plugin. O seletor do host já comporta Grok, Claude, Gemini e provider customizado para validação progressiva. O chat persistente do Runtime permanece como modo secundário **IA local / API**, destinado à IA local e, futuramente, às chaves de API do próprio usuário;
+3. **direita — Workspace/Preview:** superfície visual de primeira classe do projeto, independente do assistente, com preview, navegador, diagnóstico, execuções, arquivos, Git e computador.
 
 Ao clicar em um projeto `web`, o Studio reutiliza o runtime local quando ele já existe ou executa `project.preview_start` automaticamente quando está parado. O `iframe` recebe a URL local do runtime assim que ela fica disponível.
 Projetos Blender/Unity não iniciam engines pesadas apenas por navegação: o painel restaura a captura visual mais recente e permite uma nova captura sob demanda.
