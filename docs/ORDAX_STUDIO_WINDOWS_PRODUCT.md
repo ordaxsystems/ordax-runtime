@@ -16,6 +16,14 @@ Ela instala:
 
 O runtime privado inclui CPython e dependências do produto, sem alterar o PATH do usuário.
 
+As ações tipadas `computer.*` de arquivos preservam uma fronteira independente:
+estado privado, política, identidade do dispositivo e source executável do Runtime
+não são arquivos editáveis por esses grants, mesmo com Full Access local.
+Busca e listagem não percorrem essas raízes; mover/remover uma pasta ancestral
+também é bloqueado. Mudanças de política e atualização usam os ports do owner.
+Essa proteção das APIs de arquivos não transforma acesso a terminal ou controle
+interativo do desktop em sandbox do Windows.
+
 `ORDAX Dev.exe` não é um produto separado, não possui implementação própria e não indica dependência de Codex. Durante a janela de migração ele existe apenas como alias dos mesmos bytes de `ORDAX Studio.exe`. A remoção futura desse alias exige prova de que não há instalações/atalhos suportados que ainda dependam dele.
 
 ## Compatibilidade de upgrade

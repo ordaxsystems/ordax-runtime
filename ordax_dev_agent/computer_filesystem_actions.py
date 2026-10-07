@@ -51,6 +51,8 @@ class ComputerAccessPolicy:
     full_filesystem: bool
     allowed_roots: tuple[Path, ...]
     allowed_applications: tuple[str, ...]
+    # Runtime-owned authority is independent of user folder/app allowlists.
+    protected_roots: tuple[Path, ...] = ()
 
     def application_allowed(self, executable: Path) -> bool:
         if self.full_access:
@@ -264,6 +266,11 @@ def load_computer_access_policy(config) -> ComputerAccessPolicy:
         full_filesystem=full_filesystem,
         allowed_roots=tuple(roots),
         allowed_applications=tuple(applications),
+        protected_roots=(
+            config.state_dir.resolve(),
+            config.agent_repo_path.resolve(),
+            Path(__file__).resolve().parents[1],
+        ),
     )
 
 
@@ -399,6 +406,8 @@ def _bounded_int(
 
 
 def _path_allowed(path: Path, policy: ComputerAccessPolicy) -> bool:
+    if any(path.is_relative_to(root) for root in policy.protected_roots):
+        return False
     if policy.full_access or policy.full_filesystem:
         return True
     for root in policy.allowed_roots:
@@ -419,6 +428,8 @@ class ComputerFilesystemActions:
         raw: Any,
         *,
         must_exist: bool,
+        mutating: bool = False,
+        follow_final_symlink: bool = True,
     ) -> tuple[Path, ComputerAccessPolicy]:
         if not isinstance(raw, str) or not raw.strip() or "\x00" in raw:
             raise ValueError("path is required")
@@ -433,10 +444,18 @@ class ComputerFilesystemActions:
         if not candidate.is_absolute():
             candidate = Path.home() / candidate
         resolved = candidate.resolve(strict=False)
+        if any(
+            resolved.is_relative_to(root) or (mutating and root.is_relative_to(resolved))
+            for root in policy.protected_roots
+        ):
+            raise PermissionError("Runtime state and executable sources are protected; use owner settings or the Runtime updater")
         if not _path_allowed(resolved, policy):
             raise PermissionError("path is outside local ORDAX computer access roots")
-        if must_exist and not resolved.exists():
+        if must_exist and not resolved.exists() and (follow_final_symlink or not candidate.is_symlink()):
             raise FileNotFoundError(resolved)
+        # Move/remove address the link itself, after validating its target.
+        if not follow_final_symlink and candidate.is_symlink():
+            return candidate.parent.resolve() / candidate.name, policy
         return resolved, policy
 
     @staticmethod
@@ -609,7 +628,7 @@ class ComputerFilesystemActions:
         )
 
     def computer_text_write(self, payload: dict[str, Any]) -> ActionResult:
-        path, _ = self._computer_path(payload.get("path"), must_exist=False)
+        path, _ = self._computer_path(payload.get("path"), must_exist=False, mutating=True)
         content = payload.get("content")
         if not isinstance(content, str):
             return ActionResult(False, "content must be a string")
@@ -671,7 +690,7 @@ class ComputerFilesystemActions:
         )
 
     def computer_text_patch(self, payload: dict[str, Any]) -> ActionResult:
-        path, _ = self._computer_path(payload.get("path"), must_exist=True)
+        path, _ = self._computer_path(payload.get("path"), must_exist=True, mutating=True)
         if not path.is_file():
             return ActionResult(False, "path is not a file")
         raw = path.read_bytes()
@@ -747,7 +766,7 @@ class ComputerFilesystemActions:
         )
 
     def computer_directory_create(self, payload: dict[str, Any]) -> ActionResult:
-        path, _ = self._computer_path(payload.get("path"), must_exist=False)
+        path, _ = self._computer_path(payload.get("path"), must_exist=False, mutating=True)
         parents = bool(payload.get("parents", True))
         if path.exists():
             if path.is_dir():
@@ -757,12 +776,20 @@ class ComputerFilesystemActions:
         return ActionResult(True, "computer directory created", {"path": str(path)})
 
     def computer_path_move(self, payload: dict[str, Any]) -> ActionResult:
-        source, source_policy = self._computer_path(payload.get("source"), must_exist=True)
-        destination, _ = self._computer_path(payload.get("destination"), must_exist=False)
+        source, source_policy = self._computer_path(payload.get("source"), must_exist=True, mutating=True, follow_final_symlink=False)
+        destination, _ = self._computer_path(payload.get("destination"), must_exist=False, mutating=True, follow_final_symlink=False)
         if self._is_policy_root(source, source_policy):
             return ActionResult(False, "refusing to move a configured computer access root")
         if source == destination:
             return ActionResult(False, "source and destination are the same path")
+        expected = str(payload.get("expected_sha256") or "").strip().lower()
+        if expected and not source.is_file():
+            return ActionResult(False, "expected_sha256 is supported only for files")
+        if expected and source.is_file():
+            with source.open("rb") as handle:
+                current_sha = hashlib.file_digest(handle, "sha256").hexdigest()
+            if expected != current_sha:
+                return ActionResult(False, "expected_sha256 does not match source file")
         if destination.exists():
             if not bool(payload.get("overwrite", False)):
                 return ActionResult(False, "destination exists; set overwrite=true to replace a file")
@@ -778,10 +805,18 @@ class ComputerFilesystemActions:
         )
 
     def computer_path_remove(self, payload: dict[str, Any]) -> ActionResult:
-        path, policy = self._computer_path(payload.get("path"), must_exist=True)
+        path, policy = self._computer_path(payload.get("path"), must_exist=True, mutating=True, follow_final_symlink=False)
         if self._is_policy_root(path, policy):
             return ActionResult(False, "refusing to remove a configured computer access root")
         recursive = bool(payload.get("recursive", False))
+        expected = str(payload.get("expected_sha256") or "").strip().lower()
+        if expected and not path.is_file():
+            return ActionResult(False, "expected_sha256 is supported only for files")
+        if expected and path.is_file():
+            with path.open("rb") as handle:
+                current_sha = hashlib.file_digest(handle, "sha256").hexdigest()
+            if expected != current_sha:
+                return ActionResult(False, "expected_sha256 does not match current file")
         if path.is_symlink() or path.is_file():
             path.unlink()
             kind = "file"
