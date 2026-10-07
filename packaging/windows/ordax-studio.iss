@@ -13,6 +13,7 @@
 #define AppExeName "ORDAX Studio.exe"
 #define LegacyAppExeName "ORDAX Dev.exe"
 #define RuntimeExeName "ORDAX Runtime.exe"
+#define WorkbenchExeName "ORDAX Workbench.exe"
 
 [Setup]
 AppId={{0D31F22D-8451-4CF4-9E34-F0D4D857F55F}
@@ -225,6 +226,15 @@ begin
     Exit;
   end;
 
+  { Older Studio builds could leave Workbench outside the launcher Job Object.
+    Kill that process tree explicitly before replacing the private Python runtime,
+    because its workbench_bridge child loads DLLs from the installed runtime directory. }
+  if not StopOrdaxProcess('Local\ORDAXWorkbenchShutdown', '{#WorkbenchExeName}') then
+  begin
+    Result := 'Não foi possível encerrar a ORDAX Workbench para atualizar os arquivos.';
+    Exit;
+  end;
+
   if not StopOrdaxProcess('Local\ORDAXRuntimeShutdown', '{#RuntimeExeName}') then
   begin
     Result := 'Não foi possível encerrar o ORDAX Runtime para atualizar os arquivos.';
@@ -246,6 +256,7 @@ begin
   begin
     StopOrdaxProcess('Local\ORDAXStudioShutdown', '{#AppExeName}');
     StopOrdaxProcess('Local\ORDAXStudioShutdown', '{#LegacyAppExeName}');
+    StopOrdaxProcess('Local\ORDAXWorkbenchShutdown', '{#WorkbenchExeName}');
     StopOrdaxProcess('Local\ORDAXRuntimeShutdown', '{#RuntimeExeName}');
     RetireLegacyScheduledTask();
   end;
