@@ -32,7 +32,8 @@ class WindowsProductPackagingTests(unittest.TestCase):
     def test_installer_preserves_app_id_while_migrating_branding(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
         self.assertIn("AppId={{0D31F22D-8451-4CF4-9E34-F0D4D857F55F}", installer)
-        self.assertIn("DefaultDirName={localappdata}\\Programs\\ORDAX", installer)\n        self.assertIn("UsePreviousAppDir=no", installer)
+        self.assertIn("DefaultDirName={localappdata}\\Programs\\ORDAX", installer)
+        self.assertIn("UsePreviousAppDir=no", installer)
         self.assertIn("OutputBaseFilename=ORDAX-Studio-Setup-{#AppVersion}-x64", installer)
         self.assertIn('Name: "{group}\\ORDAX Studio"', installer)
         self.assertIn('Name: "{userdesktop}\\ORDAX Studio"', installer)
