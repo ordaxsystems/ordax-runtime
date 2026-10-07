@@ -46,6 +46,15 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("TerminateProcess(process.hProcess, error)", launcher)
         self.assertNotIn("if (job != NULL) {\n        AssignProcessToJobObject(job, process.hProcess);", launcher)
 
+    def test_installer_removes_stale_runtime_metadata_before_upgrade_copy(self) -> None:
+        installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
+        self.assertIn(
+            'Name: "{app}\\runtime\\Lib\\site-packages\\ordax_runtime-*.dist-info"',
+            installer,
+        )
+        self.assertEqual(installer.count("ordax_runtime-*.dist-info"), 1)
+        self.assertNotIn('Name: "{app}\\runtime\\Lib\\site-packages\\*.dist-info"', installer)
+
     def test_installer_retires_leaked_workbench_tree_before_runtime_files(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
         self.assertIn('#define WorkbenchExeName "ORDAX Workbench.exe"', installer)
