@@ -164,8 +164,9 @@ static DWORD run_executable_child(
         return GetLastError();
     }
 
+    bool assigned_to_job = false;
     if (job != NULL) {
-        AssignProcessToJobObject(job, process.hProcess);
+        assigned_to_job = AssignProcessToJobObject(job, process.hProcess) != FALSE;
     }
 
     HANDLE wait_handles[2] = { process.hProcess, shutdown_event };
@@ -173,7 +174,7 @@ static DWORD run_executable_child(
     DWORD exit_code = 1;
 
     if (wait_result == WAIT_OBJECT_0 + 1) {
-        if (job != NULL) {
+        if (assigned_to_job) {
             TerminateJobObject(job, 0);
         } else {
             TerminateProcess(process.hProcess, 0);
@@ -184,7 +185,7 @@ static DWORD run_executable_child(
         GetExitCodeProcess(process.hProcess, &exit_code);
     } else {
         DWORD error = GetLastError();
-        if (job != NULL) {
+        if (assigned_to_job) {
             TerminateJobObject(job, error);
         } else {
             TerminateProcess(process.hProcess, error);
@@ -242,8 +243,9 @@ static DWORD run_python_child(
         return GetLastError();
     }
 
+    bool assigned_to_job = false;
     if (job != NULL) {
-        AssignProcessToJobObject(job, process.hProcess);
+        assigned_to_job = AssignProcessToJobObject(job, process.hProcess) != FALSE;
     }
 
     HANDLE wait_handles[2] = { process.hProcess, shutdown_event };
@@ -251,7 +253,7 @@ static DWORD run_python_child(
     DWORD exit_code = 1;
 
     if (wait_result == WAIT_OBJECT_0 + 1) {
-        if (job != NULL) {
+        if (assigned_to_job) {
             TerminateJobObject(job, 0);
         } else {
             TerminateProcess(process.hProcess, 0);
@@ -262,7 +264,7 @@ static DWORD run_python_child(
         GetExitCodeProcess(process.hProcess, &exit_code);
     } else {
         DWORD error = GetLastError();
-        if (job != NULL) {
+        if (assigned_to_job) {
             TerminateJobObject(job, error);
         } else {
             TerminateProcess(process.hProcess, error);
