@@ -22,10 +22,6 @@ desktop = [
 ]
 
 [project.scripts]
-# Historical low-level bridge kept for compatibility and targeted diagnostics.
-mcp-blender-unity = "mcp_blender_unity.server:main"
-# Historical connector name now resolves to the full ORDAX Studio MCP.
-mcp-blender = "ordax_studio.mcp_server:main"
 ordax-mcp = "ordax_studio.mcp_server:main"
 ordax-studio-mcp = "ordax_studio.mcp_server:main"
 ordax-project-mcp = "ordax_studio.mcp_server:main"
