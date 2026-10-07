@@ -157,20 +157,23 @@ jobs:
           $repairLog = Join-Path $env:RUNNER_TEMP "ordax-studio-repair.log"
           Remove-Item $installRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-          # Simulate a stale alternate product root left by older packaging.
-          # The installer may retire it only when strong ORDAX product markers match.
+          # Simulate both historical product roots left by older packaging.
+          # The installer may retire them only when strong ORDAX product markers match.
           $alternateInstallRoot = Join-Path $env:LOCALAPPDATA "Programs\ORDAX Studio"
-          Remove-Item $alternateInstallRoot -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $alternateInstallRoot | Out-Null
-          Set-Content -Path (Join-Path $alternateInstallRoot "product-manifest.json") -Encoding utf8 -Value @'
+          $legacyDevInstallRoot = Join-Path $env:LOCALAPPDATA "Programs\ORDAX Dev"
+          foreach ($historicalRoot in @($alternateInstallRoot, $legacyDevInstallRoot)) {
+            Remove-Item $historicalRoot -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $historicalRoot | Out-Null
+            Set-Content -Path (Join-Path $historicalRoot "product-manifest.json") -Encoding utf8 -Value @'
           {
             "schema": "ordax.windows-product/1",
             "product": "ORDAX Studio",
             "version": "0.4.1"
           }
           '@
-          New-Item -ItemType File -Force -Path (Join-Path $alternateInstallRoot "ORDAX Studio.exe") | Out-Null
-          New-Item -ItemType File -Force -Path (Join-Path $alternateInstallRoot "ORDAX Runtime.exe") | Out-Null
+            New-Item -ItemType File -Force -Path (Join-Path $historicalRoot "ORDAX Studio.exe") | Out-Null
+            New-Item -ItemType File -Force -Path (Join-Path $historicalRoot "ORDAX Runtime.exe") | Out-Null
+          }
 
           # Simulate the historical pre-0.4 supervisor so the product install proves
           # it retires the duplicate runtime without depending on a preconfigured host.
@@ -207,7 +210,10 @@ jobs:
           if (Test-Path $alternateInstallRoot) {
             throw "recognized alternate ORDAX Studio install root survived product install"
           }
-          Write-Host "LEGACY_INSTALL_ROOT_REMOVED"
+          if (Test-Path $legacyDevInstallRoot) {
+            throw "recognized legacy ORDAX Dev install root survived product install"
+          }
+          Write-Host "LEGACY_INSTALL_ROOTS_REMOVED"
 
           $studioExe = Join-Path $installRoot "ORDAX Studio.exe"
           $legacyStudioExe = Join-Path $installRoot "ORDAX Dev.exe"
