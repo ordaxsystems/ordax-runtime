@@ -45,5 +45,30 @@
     "runtime_dispatch_enabled": false,
     "remote_action_gateway_activation": "separate-ordax-os-gate",
     "missing_runtime_boot_critical": false
+  },
+  "repository_migration": {
+    "status": "target-ready-cutover-pending",
+    "current_repository": "washingtonmsdj/ordax-runtime",
+    "target_repository": "ordaxsystems/ordax-runtime",
+    "historical_repository": "washingtonmsdj/mcp-blender",
+    "historical_repository_is_provenance_only": true,
+    "redirect_dependency_allowed": false,
+    "mirror_repository_allowed": false,
+    "dual_authority_allowed": false,
+    "rename_during_transfer_allowed": false,
+    "transfer_first_then_repoint": true,
+    "downstream_repository_targets": {
+      "studio_source_current": "washingtonmsdj/ordax-apps",
+      "studio_source_target": "ordaxsystems/ordax-apps"
+    },
+    "cutover_requirements": [
+      "target-organization-membership-confirmed",
+      "open-prs-audited",
+      "main-sha-recorded",
+      "ci-green-before-transfer",
+      "repository-transfer-complete",
+      "runtime-contracts-green-after-transfer",
+      "consumer-remotes-repointed"
+    ]
   }
 }
