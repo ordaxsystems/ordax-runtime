@@ -153,6 +153,31 @@ class StudioProductApi(StudioApi):
             "data": data,
         }
 
+    def assistant_catalog(self) -> dict[str, Any]:
+        result = super().assistant_catalog()
+        if not result.get("ok"):
+            return result
+        data = dict(result.get("data") or {})
+        accounts = [
+            {
+                "id": "ordax",
+                "label": "Conta ORDAX",
+                "connected": isinstance(getattr(self, "_product_session", None), ProductAuthSession),
+            }
+        ]
+        accounts.extend(list(data.get("accounts") or []))
+        data["accounts"] = accounts
+        result["data"] = data
+        return result
+
+    def _assistant_defaults(self) -> tuple[str, str, str]:
+        account_id = (
+            "ordax"
+            if isinstance(getattr(self, "_product_session", None), ProductAuthSession)
+            else "local"
+        )
+        return (account_id, "openai", "gpt-4o")
+
     def remote_computer_grants(self) -> dict[str, Any]:
         try:
             session = self._product_session_required()
