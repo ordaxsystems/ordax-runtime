@@ -1,10 +1,4 @@
-"""Local provider-neutral MCP front end for the ORDAX Runtime.
-
-The historical repository name is ``mcp-blender``. Blender is one capability of
-the broader ORDAX Runtime alongside workspace, Git, preview, memory, Unity and
-other typed adapters. Remote jobs continue through the paired Control Plane;
-this stdio server itself is not public.
-"""
+"""Local provider-neutral MCP front end for the ORDAX Runtime.\n\nBlender is one typed capability of the broader ORDAX Runtime alongside\nworkspace, Git, preview, memory, Unity and other adapters. Remote jobs continue\nthrough the paired Control Plane; this stdio server itself is not public.\n"""
 from __future__ import annotations
 
 import base64
