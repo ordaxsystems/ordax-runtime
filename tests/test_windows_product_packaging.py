@@ -234,20 +234,23 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('"*.json"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-    def test_installer_retires_only_recognized_alternate_install_root(self) -> None:
+    def test_installer_retires_only_recognized_historical_install_roots(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
         self.assertIn("function IsRecognizedOrdaxInstallRoot", installer)
-        self.assertIn("function RetireAlternateInstallRoot", installer)
         self.assertIn("function IsSafePartialOrdaxResidual", installer)
+        self.assertIn("function RetireHistoricalInstallRoot", installer)
+        self.assertIn("function RetireHistoricalInstallRoots", installer)
         self.assertIn("runtime\\python.exe", installer)
         self.assertIn("runtime\\Lib\\site-packages\\ordax_studio", installer)
         self.assertIn("unins000.dat", installer)
         self.assertIn("product-manifest.json", installer)
         self.assertIn("ordax.windows-product/1", installer)
-        self.assertIn("ORDAX Studio", installer)
-        self.assertIn("DelTree(AlternateRoot, True, True, True)", installer)
+        self.assertIn("{localappdata}\\Programs\\ORDAX Studio", installer)
+        self.assertIn("{localappdata}\\Programs\\ORDAX Dev", installer)
+        self.assertIn("DelTree(HistoricalRoot, True, True, True)", installer)
         self.assertIn("LocalAppData\\OrdaX", installer)
         self.assertNotIn("DelTree(ExpandConstant('{localappdata}\\OrdaX')", installer)
+
+
+if __name__ == "__main__":
+    unittest.main()
