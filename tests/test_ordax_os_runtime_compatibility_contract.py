@@ -28,6 +28,38 @@ class OrdaxOsRuntimeCompatibilityContractTests(unittest.TestCase):
         self.assertEqual("washingtonmsdj/mcp-blender", contract_product["historical_repository"])
         self.assertTrue(contract_product["single_product"])
 
+    def test_repository_namespace_migration_is_single_authority_and_cutover_safe(self) -> None:
+        migration = self.contract["repository_migration"]
+        product = self.contract["product"]
+
+        self.assertEqual("target-ready-cutover-pending", migration["status"])
+        self.assertEqual(product["canonical_runtime_repository"], migration["current_repository"])
+        self.assertEqual("ordaxsystems/ordax-runtime", migration["target_repository"])
+        self.assertEqual(product["historical_repository"], migration["historical_repository"])
+        self.assertTrue(migration["historical_repository_is_provenance_only"])
+        self.assertFalse(migration["redirect_dependency_allowed"])
+        self.assertFalse(migration["mirror_repository_allowed"])
+        self.assertFalse(migration["dual_authority_allowed"])
+        self.assertFalse(migration["rename_during_transfer_allowed"])
+        self.assertTrue(migration["transfer_first_then_repoint"])
+
+        downstream = migration["downstream_repository_targets"]
+        self.assertEqual("washingtonmsdj/ordax-apps", downstream["studio_source_current"])
+        self.assertEqual("ordaxsystems/ordax-apps", downstream["studio_source_target"])
+
+        self.assertEqual(
+            [
+                "target-organization-membership-confirmed",
+                "open-prs-audited",
+                "main-sha-recorded",
+                "ci-green-before-transfer",
+                "repository-transfer-complete",
+                "runtime-contracts-green-after-transfer",
+                "consumer-remotes-repointed",
+            ],
+            migration["cutover_requirements"],
+        )
+
     def test_headless_profile_does_not_require_desktop_ui_dependency(self) -> None:
         project = self.pyproject["project"]
         runtime = self.contract["runtime"]
