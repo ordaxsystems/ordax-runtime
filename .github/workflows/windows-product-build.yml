@@ -259,9 +259,14 @@ jobs:
             # Reproduce a package-owned orphan that loads libcrypto and survives
             # the Runtime launcher. This is the real-world upgrade failure that
             # the path-scoped quiesce step must resolve before file replacement.
+            $orphanScript = Join-Path $env:RUNNER_TEMP "ordax-private-runtime-lock.py"
+            @(
+              "import ssl"
+              "import time"
+              "time.sleep(300)"
+            ) | Set-Content -LiteralPath $orphanScript -Encoding ascii
             $orphanPrivatePython = Start-Process -FilePath $privatePython -ArgumentList @(
-              "-c",
-              "import ssl,time; time.sleep(300)"
+              $orphanScript
             ) -PassThru
             Start-Sleep -Seconds 1
             $orphanPrivatePython.Refresh()
