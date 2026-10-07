@@ -14,6 +14,7 @@ class ManagedRuntimeLegacyMigrationContractTests(unittest.TestCase):
 
     def test_only_known_legacy_repository_is_migrated(self):
         self.assertIn("https://github.com/washingtonmsdj/mcp-blender.git", self.source)
+        self.assertIn("https://github.com/ordaxsystems/ordax-runtime.git", self.source)
         self.assertIn("https://github.com/washingtonmsdj/ordax-runtime.git", self.source)
         self.assertIn("MANAGED_REMOTE_MISMATCH", self.source)
         self.assertIn("$isLegacyRemote", self.source)

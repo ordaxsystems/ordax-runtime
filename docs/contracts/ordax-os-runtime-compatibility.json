@@ -5,7 +5,7 @@
     "version": "0.4.4",
     "historical_repository": "washingtonmsdj/mcp-blender",
     "single_product": true,
-    "canonical_runtime_repository": "washingtonmsdj/ordax-runtime"
+    "canonical_runtime_repository": "ordaxsystems/ordax-runtime"
   },
   "runtime": {
     "profile": "headless",
@@ -47,27 +47,28 @@
     "missing_runtime_boot_critical": false
   },
   "repository_migration": {
-    "status": "target-ready-cutover-pending",
-    "current_repository": "washingtonmsdj/ordax-runtime",
-    "target_repository": "ordaxsystems/ordax-runtime",
+    "status": "cutover-complete",
+    "previous_repository": "washingtonmsdj/ordax-runtime",
+    "canonical_repository": "ordaxsystems/ordax-runtime",
     "historical_repository": "washingtonmsdj/mcp-blender",
     "historical_repository_is_provenance_only": true,
     "redirect_dependency_allowed": false,
     "mirror_repository_allowed": false,
     "dual_authority_allowed": false,
     "rename_during_transfer_allowed": false,
-    "transfer_first_then_repoint": true,
     "downstream_repository_targets": {
       "studio_source_current": "washingtonmsdj/ordax-apps",
       "studio_source_target": "ordaxsystems/ordax-apps"
     },
-    "cutover_requirements": [
+    "completed_requirements": [
       "target-organization-membership-confirmed",
       "open-prs-audited",
       "main-sha-recorded",
       "ci-green-before-transfer",
-      "repository-transfer-complete",
-      "runtime-contracts-green-after-transfer",
+      "repository-transfer-complete"
+    ],
+    "pending_requirements": [
+      "runtime-contracts-green-after-repoint",
       "consumer-remotes-repointed"
     ]
   }

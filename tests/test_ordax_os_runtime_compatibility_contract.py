@@ -32,32 +32,28 @@ class OrdaxOsRuntimeCompatibilityContractTests(unittest.TestCase):
         migration = self.contract["repository_migration"]
         product = self.contract["product"]
 
-        self.assertEqual("target-ready-cutover-pending", migration["status"])
-        self.assertEqual(product["canonical_runtime_repository"], migration["current_repository"])
-        self.assertEqual("ordaxsystems/ordax-runtime", migration["target_repository"])
+        self.assertEqual("cutover-complete", migration["status"])
+        self.assertEqual("ordaxsystems/ordax-runtime", product["canonical_runtime_repository"])
+        self.assertEqual("washingtonmsdj/ordax-runtime", migration["previous_repository"])
+        self.assertEqual(product["canonical_runtime_repository"], migration["canonical_repository"])
         self.assertEqual(product["historical_repository"], migration["historical_repository"])
         self.assertTrue(migration["historical_repository_is_provenance_only"])
         self.assertFalse(migration["redirect_dependency_allowed"])
         self.assertFalse(migration["mirror_repository_allowed"])
         self.assertFalse(migration["dual_authority_allowed"])
         self.assertFalse(migration["rename_during_transfer_allowed"])
-        self.assertTrue(migration["transfer_first_then_repoint"])
 
         downstream = migration["downstream_repository_targets"]
         self.assertEqual("washingtonmsdj/ordax-apps", downstream["studio_source_current"])
         self.assertEqual("ordaxsystems/ordax-apps", downstream["studio_source_target"])
 
+        self.assertIn("repository-transfer-complete", migration["completed_requirements"])
         self.assertEqual(
+            migration["pending_requirements"],
             [
-                "target-organization-membership-confirmed",
-                "open-prs-audited",
-                "main-sha-recorded",
-                "ci-green-before-transfer",
-                "repository-transfer-complete",
-                "runtime-contracts-green-after-transfer",
+                "runtime-contracts-green-after-repoint",
                 "consumer-remotes-repointed",
             ],
-            migration["cutover_requirements"],
         )
 
     def test_headless_profile_does_not_require_desktop_ui_dependency(self) -> None:
