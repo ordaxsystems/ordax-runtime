@@ -154,7 +154,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
         self.assertIn("ORDAX-Studio-Setup-*.exe", workflow)
         self.assertIn("ordax-studio-windows-x64", workflow)
-        self.assertIn("Upgrade over running ORDAX Runtime and legacy ORDAX Dev launcher", workflow)
+        self.assertIn("Upgrade over running ORDAX Runtime, orphan private Python, and legacy ORDAX Dev launcher", workflow)
         self.assertIn('Wait-OrdaxReady -Label "ORDAX_UPGRADE_RUNTIME"', workflow)
         self.assertIn("running runtime did not exit during upgrade", workflow)
         self.assertIn("legacy ORDAX Dev process survived Studio upgrade", workflow)
