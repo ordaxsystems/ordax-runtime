@@ -10,6 +10,7 @@ on:
       - "ordax_studio/**"
       - "native/ordax-workbench/**"
       - "scripts/windows/build-ordax-studio-product.ps1"
+      - "scripts/windows/ordax-upgrade-quiesce.ps1"
       - "scripts/windows/assert-release-authenticode.ps1"
       - "tests/test_windows_product_packaging.py"
       - "pyproject.toml"
