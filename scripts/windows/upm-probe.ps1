@@ -21,7 +21,7 @@ if (-not (Test-Path $upm)) {
     exit 2
 }
 
-$probeRoot = Join-Path $env:TEMP "mcp-blender-upm-probe"
+$probeRoot = Join-Path $env:TEMP "ordax-upm-probe"
 New-Item -ItemType Directory -Force -Path $probeRoot | Out-Null
 
 function Invoke-UpmProbe {
