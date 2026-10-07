@@ -139,10 +139,21 @@ class OrchestratorStoreTests(unittest.TestCase):
         )
         self.assertEqual(updated["provider_id"], "xai")
         self.assertEqual(updated["model_id"], "grok")
+        state = self.store.set_assistant_project_state(
+            "demo",
+            active_conversation_id=chat["id"],
+            account_id="ordax",
+            provider_id="xai",
+            model_id="grok",
+        )
+        self.assertEqual(state["active_conversation_id"], chat["id"])
 
         reopened = OrchestratorStore(self.db)
         chats = reopened.assistant_conversations("demo")
         self.assertEqual([item["id"] for item in chats], [chat["id"]])
+        reopened_state = reopened.assistant_project_state("demo")
+        self.assertEqual(reopened_state["active_conversation_id"], chat["id"])
+        self.assertEqual(reopened_state["provider_id"], "xai")
         messages = reopened.assistant_messages(chat["id"])
         self.assertEqual([item["role"] for item in messages], ["user", "assistant"])
         self.assertEqual(messages[0]["content"], "Revise o layout do Studio")
