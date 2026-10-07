@@ -154,6 +154,7 @@ jobs:
           $installRoot = Join-Path $env:RUNNER_TEMP "ordax-studio-install"
           $installLog = Join-Path $env:RUNNER_TEMP "ordax-studio-install.log"
           $upgradeLog = Join-Path $env:RUNNER_TEMP "ordax-studio-upgrade.log"
+          $repairLog = Join-Path $env:RUNNER_TEMP "ordax-studio-repair.log"
           Remove-Item $installRoot -Recurse -Force -ErrorAction SilentlyContinue
 
           # Simulate a stale alternate product root left by older packaging.
@@ -327,6 +328,31 @@ jobs:
             }
             Write-Host "UNRECOGNIZED_ALTERNATE_ROOT_PRESERVED"
             Remove-Item $alternateInstallRoot -Recurse -Force
+
+            # Simulate an interrupted historical-root retirement: product identity
+            # files are already gone, but the private runtime and uninstaller data
+            # remain. A subsequent install must finish this cleanup idempotently.
+            $partialOrdaxMarker = Join-Path $alternateInstallRoot "runtime\Lib\site-packages\ordax_studio"
+            New-Item -ItemType Directory -Force -Path $partialOrdaxMarker | Out-Null
+            New-Item -ItemType File -Force -Path (Join-Path $alternateInstallRoot "runtime\python.exe") | Out-Null
+            New-Item -ItemType File -Force -Path (Join-Path $alternateInstallRoot "unins000.dat") | Out-Null
+            New-Item -ItemType Directory -Force -Path (Join-Path $alternateInstallRoot "scripts") | Out-Null
+
+            $repairProcess = Start-Process -FilePath $installer.FullName -ArgumentList @(
+              "/VERYSILENT",
+              "/SUPPRESSMSGBOXES",
+              "/NORESTART",
+              "/DIR=$installRoot",
+              "/LOG=$repairLog"
+            ) -Wait -PassThru
+            if ($repairProcess.ExitCode -ne 0) {
+              if (Test-Path $repairLog) { Get-Content $repairLog -Tail 200 }
+              throw "ORDAX Studio idempotent repair install failed: $($repairProcess.ExitCode)"
+            }
+            if (Test-Path $alternateInstallRoot) {
+              throw "partial alternate ORDAX install root survived idempotent repair"
+            }
+            Write-Host "PARTIAL_LEGACY_INSTALL_ROOT_REMOVED"
 
             foreach ($required in @($studioExe, $legacyStudioExe, $runtimeExe, $workbenchExe, $privatePython)) {
               if (-not (Test-Path $required)) {
