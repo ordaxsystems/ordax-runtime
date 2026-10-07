@@ -297,25 +297,45 @@ class StudioApi:
             if isinstance(item, dict)
         }
         providers: list[dict[str, Any]] = []
+        declared_pairs: set[tuple[str, str]] = set()
         for provider in _ASSISTANT_PROVIDER_CATALOG:
             models = []
             provider_id = str(provider["id"])
             for model in provider["models"]:
                 model_id = str(model["id"])
-                session_available = (
-                    provider_id.lower(),
-                    model_id.lower(),
-                ) in active_pairs
+                normalized_pair = (provider_id.lower(), model_id.lower())
+                declared_pairs.add(normalized_pair)
                 models.append({
                     "id": model_id,
                     "label": str(model["label"]),
-                    "session_available": session_available,
+                    "session_available": normalized_pair in active_pairs,
                     "can_send": False,
                 })
             providers.append({
                 "id": provider_id,
                 "label": str(provider["label"]),
                 "models": models,
+            })
+        for active_provider, active_model in sorted(active_pairs - declared_pairs):
+            provider_entry = next(
+                (
+                    item for item in providers
+                    if str(item.get("id") or "").lower() == active_provider
+                ),
+                None,
+            )
+            if provider_entry is None:
+                provider_entry = {
+                    "id": active_provider,
+                    "label": active_provider,
+                    "models": [],
+                }
+                providers.append(provider_entry)
+            provider_entry["models"].append({
+                "id": active_model,
+                "label": active_model,
+                "session_available": True,
+                "can_send": False,
             })
         return {
             "ok": True,
