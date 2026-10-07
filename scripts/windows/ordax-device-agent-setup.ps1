@@ -11,7 +11,7 @@ if ([string]::IsNullOrWhiteSpace($ControlPlaneUrl)) {
 $ControlPlaneUrl = $ControlPlaneUrl.TrimEnd('/')
 $stateDir = Join-Path $env:LOCALAPPDATA 'OrdaX\DevAgent'
 $repo = Join-Path $stateDir 'src'
-$remote = 'https://github.com/washingtonmsdj/ordax-runtime.git'
+$remote = 'https://github.com/ordaxsystems/ordax-runtime.git'
 $taskName = 'OrdaX Dev Agent'
 $mutex = New-Object System.Threading.Mutex($false, 'Local\OrdaXDeviceSetup')
 $restartExisting = $false
@@ -19,12 +19,15 @@ $changedLocation = $false
 $legacyRemotes = @(
     'https://github.com/washingtonmsdj/mcp-blender.git',
     'https://github.com/washingtonmsdj/mcp-blender',
-    'git@github.com:washingtonmsdj/mcp-blender.git'
+    'git@github.com:washingtonmsdj/mcp-blender.git',
+    'https://github.com/washingtonmsdj/ordax-runtime.git',
+    'https://github.com/washingtonmsdj/ordax-runtime',
+    'git@github.com:washingtonmsdj/ordax-runtime.git'
 )
 $canonicalRemotes = @(
     $remote,
-    'https://github.com/washingtonmsdj/ordax-runtime',
-    'git@github.com:washingtonmsdj/ordax-runtime.git'
+    'https://github.com/ordaxsystems/ordax-runtime',
+    'git@github.com:ordaxsystems/ordax-runtime.git'
 )
 $migrationStage = $null
 $migrationBackup = $null
