@@ -39,6 +39,20 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('Name: "{group}\\ORDAX Dev.lnk"', installer)
         self.assertIn('Name: "{userdesktop}\\ORDAX Dev.lnk"', installer)
 
+    def test_launchers_fail_closed_when_job_supervision_cannot_be_applied(self) -> None:
+        launcher = (ROOT / "packaging" / "windows" / "ordax_launcher.c").read_text(encoding="utf-8")
+        self.assertGreaterEqual(launcher.count("!AssignProcessToJobObject(job, process.hProcess)"), 2)
+        self.assertIn("TerminateProcess(process.hProcess, error)", launcher)
+        self.assertNotIn("if (job != NULL) {\n        AssignProcessToJobObject(job, process.hProcess);", launcher)
+
+    def test_installer_retires_leaked_workbench_tree_before_runtime_files(self) -> None:
+        installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
+        self.assertIn('#define WorkbenchExeName "ORDAX Workbench.exe"', installer)
+        self.assertIn("StopOrdaxProcess('Local\\ORDAXWorkbenchShutdown', '{#WorkbenchExeName}')", installer)
+        workbench_stop = installer.index("StopOrdaxProcess('Local\\ORDAXWorkbenchShutdown', '{#WorkbenchExeName}')")
+        runtime_stop = installer.index("StopOrdaxProcess('Local\\ORDAXRuntimeShutdown', '{#RuntimeExeName}')")
+        self.assertLess(workbench_stop, runtime_stop)
+
     def test_launchers_expose_cooperative_shutdown_for_updates(self) -> None:
         launcher = (ROOT / "packaging" / "windows" / "ordax_launcher.c").read_text(encoding="utf-8")
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
