@@ -75,6 +75,29 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("closeapplications=no", installer)
         self.assertIn("software\\microsoft\\windows\\currentversion\\run", installer)
 
+    def test_legacy_mcp_blender_identity_is_retired_from_product_surface(self) -> None:
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        server = (ROOT / "ordax_dev_agent" / "mcp_server.py").read_text(encoding="utf-8")
+        studio_server = (ROOT / "ordax_studio" / "mcp_server.py").read_text(encoding="utf-8")
+        installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
+        setup = (ROOT / "scripts" / "windows" / "ordax-device-agent-setup.ps1").read_text(encoding="utf-8")
+
+        self.assertNotIn('mcp-blender = "ordax_studio.mcp_server:main"', pyproject)
+        self.assertNotIn('mcp-blender-unity = "mcp_blender_unity.server:main"', pyproject)
+        self.assertNotIn('"repository_alias": "mcp-blender"', server)
+        self.assertNotIn("historical connector alias: mcp-blender", studio_server)
+        self.assertIn("mcp_blender_unity-*.dist-info", installer)
+        self.assertIn("mcp-blender.exe", installer)
+        self.assertIn("mcp-blender-unity.exe", installer)
+
+        # The only accepted historical repository references are migration input:
+        # an existing managed checkout can be cut over to ordax-runtime safely.
+        self.assertIn("$legacyRemotes", setup)
+        self.assertIn("washingtonmsdj/mcp-blender.git", setup)
+        self.assertIn("LEGACY_MIGRATION", setup)
+        self.assertIn("washingtonmsdj/ordax-runtime.git", setup)
+
+
     def test_installer_retires_legacy_scheduled_runtime_without_deleting_state(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
         self.assertIn("RetireLegacyScheduledTask", installer)
