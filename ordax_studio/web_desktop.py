@@ -20,6 +20,24 @@ from .instance_lock import SingleInstanceLock
 
 APP_NAME = "ORDAX Studio"
 
+_ASSISTANT_PROVIDER_CATALOG = (
+    {
+        "id": "openai",
+        "label": "OpenAI",
+        "models": ({"id": "gpt-4o", "label": "GPT-4o"},),
+    },
+    {
+        "id": "xai",
+        "label": "xAI",
+        "models": ({"id": "grok", "label": "Grok"},),
+    },
+    {
+        "id": "anthropic",
+        "label": "Anthropic",
+        "models": ({"id": "claude", "label": "Claude"},),
+    },
+)
+
 
 class StudioApi:
     def __init__(self, agent: ActionRegistry | None = None):
@@ -262,6 +280,240 @@ class StudioApi:
         except Exception as error:
             return {"ok": False, "summary": f"{type(error).__name__}: {error}", "data": {}}
         return {"ok": True, "data": data}
+
+    def assistant_catalog(self) -> dict[str, Any]:
+        """Return declarative assistant choices and truthful runtime capability."""
+        try:
+            orchestrator = self.orchestrator.status(self.project)
+        except Exception:
+            orchestrator = {}
+        active_sessions = orchestrator.get("active_sessions") or []
+        active_pairs = {
+            (
+                str(item.get("provider") or "").strip().lower(),
+                str(item.get("model") or "").strip().lower(),
+            )
+            for item in active_sessions
+            if isinstance(item, dict)
+        }
+        providers: list[dict[str, Any]] = []
+        for provider in _ASSISTANT_PROVIDER_CATALOG:
+            models = []
+            provider_id = str(provider["id"])
+            for model in provider["models"]:
+                model_id = str(model["id"])
+                session_available = (
+                    provider_id.lower(),
+                    model_id.lower(),
+                ) in active_pairs
+                models.append({
+                    "id": model_id,
+                    "label": str(model["label"]),
+                    "session_available": session_available,
+                    "can_send": False,
+                })
+            providers.append({
+                "id": provider_id,
+                "label": str(provider["label"]),
+                "models": models,
+            })
+        return {
+            "ok": True,
+            "data": {
+                "accounts": [
+                    {
+                        "id": "local",
+                        "label": "Sessão local",
+                        "connected": True,
+                    }
+                ],
+                "providers": providers,
+                "send_supported": False,
+                "send_summary": (
+                    "O Runtime ainda não possui um adapter de envio direto para provedores. "
+                    "O Studio persiste chats e seleção sem simular respostas."
+                ),
+            },
+        }
+
+    def _assistant_defaults(self) -> tuple[str, str, str]:
+        return ("local", "openai", "gpt-4o")
+
+    def assistant_state(self) -> dict[str, Any]:
+        account_id, provider_id, model_id = self._assistant_defaults()
+        try:
+            conversations = self.orchestrator.assistant_conversations(self.project)
+            state = self.orchestrator.assistant_project_state(
+                self.project,
+                default_account_id=account_id,
+                default_provider_id=provider_id,
+                default_model_id=model_id,
+            )
+            if not conversations:
+                created = self.orchestrator.create_assistant_conversation(
+                    self.project,
+                    title="Chat 1",
+                    account_id=state["account_id"] or account_id,
+                    provider_id=state["provider_id"] or provider_id,
+                    model_id=state["model_id"] or model_id,
+                )
+                conversations = [created]
+                state = self.orchestrator.set_assistant_project_state(
+                    self.project,
+                    active_conversation_id=created["id"],
+                    account_id=created["account_id"],
+                    provider_id=created["provider_id"],
+                    model_id=created["model_id"],
+                )
+            active_id = str(state.get("active_conversation_id") or "")
+            if not any(str(item.get("id") or "") == active_id for item in conversations):
+                active = conversations[0]
+                state = self.orchestrator.set_assistant_project_state(
+                    self.project,
+                    active_conversation_id=str(active["id"]),
+                    account_id=str(active["account_id"]),
+                    provider_id=str(active["provider_id"]),
+                    model_id=str(active["model_id"]),
+                )
+                active_id = str(active["id"])
+            messages = self.orchestrator.assistant_messages(active_id)
+        except Exception as error:
+            return {
+                "ok": False,
+                "summary": f"{type(error).__name__}: {error}",
+                "data": {},
+            }
+        catalog = self.assistant_catalog()
+        return {
+            "ok": True,
+            "data": {
+                "project": self.project,
+                "selection": state,
+                "conversations": conversations,
+                "messages": messages,
+                "catalog": catalog.get("data", {}),
+            },
+        }
+
+    def assistant_create_chat(
+        self,
+        title: str = "",
+        account_id: str = "",
+        provider_id: str = "",
+        model_id: str = "",
+    ) -> dict[str, Any]:
+        default_account, default_provider, default_model = self._assistant_defaults()
+        try:
+            existing = self.orchestrator.assistant_conversations(self.project)
+            created = self.orchestrator.create_assistant_conversation(
+                self.project,
+                title=str(title or "").strip() or f"Chat {len(existing) + 1}",
+                account_id=str(account_id or "").strip() or default_account,
+                provider_id=str(provider_id or "").strip() or default_provider,
+                model_id=str(model_id or "").strip() or default_model,
+            )
+            state = self.orchestrator.set_assistant_project_state(
+                self.project,
+                active_conversation_id=str(created["id"]),
+                account_id=str(created["account_id"]),
+                provider_id=str(created["provider_id"]),
+                model_id=str(created["model_id"]),
+            )
+        except Exception as error:
+            return {"ok": False, "summary": f"{type(error).__name__}: {error}", "data": {}}
+        return {"ok": True, "data": {"conversation": created, "selection": state}}
+
+    def assistant_select_chat(self, conversation_id: str) -> dict[str, Any]:
+        try:
+            conversation = self.orchestrator.assistant_conversation(conversation_id)
+            if conversation["project_slug"] != self.project or conversation.get("archived_at"):
+                raise ValueError("assistant conversation is unavailable for this project")
+            state = self.orchestrator.set_assistant_project_state(
+                self.project,
+                active_conversation_id=str(conversation["id"]),
+                account_id=str(conversation["account_id"]),
+                provider_id=str(conversation["provider_id"]),
+                model_id=str(conversation["model_id"]),
+            )
+            messages = self.orchestrator.assistant_messages(str(conversation["id"]))
+        except Exception as error:
+            return {"ok": False, "summary": f"{type(error).__name__}: {error}", "data": {}}
+        return {
+            "ok": True,
+            "data": {
+                "conversation": conversation,
+                "selection": state,
+                "messages": messages,
+            },
+        }
+
+    def assistant_update_chat(
+        self,
+        conversation_id: str,
+        title: str | None = None,
+        account_id: str | None = None,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            current = self.orchestrator.assistant_conversation(conversation_id)
+            if current["project_slug"] != self.project or current.get("archived_at"):
+                raise ValueError("assistant conversation is unavailable for this project")
+            updated = self.orchestrator.update_assistant_conversation(
+                conversation_id,
+                title=title,
+                account_id=account_id,
+                provider_id=provider_id,
+                model_id=model_id,
+            )
+            state = self.orchestrator.assistant_project_state(self.project)
+            if str(state.get("active_conversation_id") or "") == str(conversation_id):
+                state = self.orchestrator.set_assistant_project_state(
+                    self.project,
+                    active_conversation_id=str(updated["id"]),
+                    account_id=str(updated["account_id"]),
+                    provider_id=str(updated["provider_id"]),
+                    model_id=str(updated["model_id"]),
+                )
+        except Exception as error:
+            return {"ok": False, "summary": f"{type(error).__name__}: {error}", "data": {}}
+        return {"ok": True, "data": {"conversation": updated, "selection": state}}
+
+    def assistant_close_chat(self, conversation_id: str) -> dict[str, Any]:
+        try:
+            current = self.orchestrator.assistant_conversation(conversation_id)
+            if current["project_slug"] != self.project:
+                raise ValueError("assistant conversation belongs to another project")
+            self.orchestrator.archive_assistant_conversation(conversation_id)
+            conversations = self.orchestrator.assistant_conversations(self.project)
+            if not conversations:
+                created = self.orchestrator.create_assistant_conversation(
+                    self.project,
+                    title="Chat 1",
+                    account_id=str(current["account_id"]),
+                    provider_id=str(current["provider_id"]),
+                    model_id=str(current["model_id"]),
+                )
+                conversations = [created]
+            active = conversations[0]
+            state = self.orchestrator.set_assistant_project_state(
+                self.project,
+                active_conversation_id=str(active["id"]),
+                account_id=str(active["account_id"]),
+                provider_id=str(active["provider_id"]),
+                model_id=str(active["model_id"]),
+            )
+            messages = self.orchestrator.assistant_messages(str(active["id"]))
+        except Exception as error:
+            return {"ok": False, "summary": f"{type(error).__name__}: {error}", "data": {}}
+        return {
+            "ok": True,
+            "data": {
+                "conversations": conversations,
+                "selection": state,
+                "messages": messages,
+            },
+        }
 
     def computer_access_settings(self) -> dict[str, Any]:
         try:
