@@ -76,6 +76,14 @@ jobs:
         env:
           ORDAX_STUDIO_APP_SOURCE: ${{ github.workspace }}\.ordax\apps\apps\studio
         run: .\scripts\windows\build-ordax-studio-product.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\dist\windows"
+      - name: Verify build did not rewrite Runtime Studio sources
+        shell: powershell
+        run: |
+          $sourceChanges = @(git status --porcelain -- ordax_studio)
+          if ($LASTEXITCODE -ne 0 -or $sourceChanges.Count -ne 0) {
+            throw "Windows build modified Runtime Studio checkout sources instead of installer staging"
+          }
+          Write-Host "ORDAX_STUDIO_RUNTIME_SOURCE_UNCHANGED"
       - name: Write checksums
         shell: powershell
         run: |
