@@ -54,7 +54,7 @@ jobs:
       - name: Checkout canonical ORDAX Studio app source
         uses: actions/checkout@v4
         with:
-          repository: washingtonmsdj/ordax-apps
+          repository: ordaxsystems/ordax-apps
           ref: ${{ env.ORDAX_STUDIO_SOURCE_COMMIT }}
           path: .ordax/apps
 
