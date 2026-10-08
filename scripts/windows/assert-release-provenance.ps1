@@ -1,5 +1,5 @@
-# Verify the exact canonical source/version, installer identity and uploaded bytes
-# before considering a tagged Windows release for Authenticode verification.
+# Verify the canonical source/version, installer identity, and uploaded bytes
+# before allowing a tagged Windows release to reach Authenticode verification.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
@@ -51,19 +51,7 @@ $checksumLines = @(Get-Content -LiteralPath $checksumPath | Where-Object {
 if ($checksumLines.Count -ne 1) {
     throw "Release checksum manifest must have one strict SHA-256 entry"
 }
-$checksumMatch = [regex]::Match($checksumLines[0], '^([a-f0-9]{64})  ([A-Za-z0-9._-]+)
-if ($checksumFileName -cne $expectedName) {
-    throw "Release checksum does not refer to canonical installer"
-}
-$actualHash = (Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actualHash -cne $expectedHash) {
-    throw "Release artifact SHA-256 does not match verified checksum manifest"
-}
-
-Write-Host "ORDAX_RELEASE_PROVENANCE_VALID"
-Write-Host "ORDAX_STUDIO_RELEASE_VERSION=$version"
-Write-Host "ORDAX_STUDIO_RELEASE_SOURCE_COMMIT=$($lock.commit)"
-)
+$checksumMatch = [regex]::Match($checksumLines[0], '^([a-f0-9]{64})  ([A-Za-z0-9._-]+)$')
 if (-not $checksumMatch.Success) {
     throw "Release checksum manifest must have one strict SHA-256 entry"
 }
