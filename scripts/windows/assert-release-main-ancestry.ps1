@@ -28,14 +28,14 @@ function Git-Output {
     return ([string]($output | Select-Object -Last 1)).Trim()
 }
 
-$shallow = Git-Output @("rev-parse", "--is-shallow-repository") "determine Git history depth"
+$shallow = Git-Output -Arguments @("rev-parse", "--is-shallow-repository") -Description "determine Git history depth"
 if ($shallow -cne "false") {
     throw "Release provenance requires full Git history; shallow checkout is not accepted"
 }
 
-$head = Git-Output @("rev-parse", "--verify", "HEAD^{commit}") "resolve checked-out Runtime commit"
-$tagCommit = Git-Output @("rev-parse", "--verify", "refs/tags/$Tag^{commit}") "resolve exact release tag"
-$mainCommit = Git-Output @("rev-parse", "--verify", "refs/remotes/origin/main^{commit}") "resolve canonical origin/main"
+$head = Git-Output -Arguments @("rev-parse", "--verify", "HEAD^{commit}") -Description "resolve checked-out Runtime commit"
+$tagCommit = Git-Output -Arguments @("rev-parse", "--verify", "refs/tags/$Tag^{commit}") -Description "resolve exact release tag"
+$mainCommit = Git-Output -Arguments @("rev-parse", "--verify", "refs/remotes/origin/main^{commit}") -Description "resolve canonical origin/main"
 
 if ($head -cne $ExpectedCommit -or $tagCommit -cne $ExpectedCommit) {
     throw "Release tag, checked-out Runtime HEAD, and trusted GitHub event SHA disagree"
