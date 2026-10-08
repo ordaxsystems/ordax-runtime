@@ -46,7 +46,13 @@ Provider web views are auxiliary user-visible surfaces. They are not an automati
 
 ## Canonical implementation
 
-- Shared project surface: `ordax_studio/studio_product.html` + `ordax_studio/assets/studio.css` + `ordax_studio/assets/studio.js`; owner-local Computer Control settings live in the dedicated `computer_access.js/.css` surface module.
+- **Fonte portátil autoritativa do Studio:** `ordaxsystems/ordax-apps/apps/studio/`. O instalador Windows deve consumir o snapshot pinado desse repositório; cópias históricas em `ordax_studio/` não são uma segunda fonte de produto. O adapter `ordax_studio/host_bridge.js` permanece específico do host Windows.
 - Windows native host: `native/ordax-workbench/`.
 - Headless local capability runtime: `ordax_dev_agent` / `ordax_device_agent`.
 - Remote authority: Product Action Gateway + MCP + Cloudflare control plane + grants.
+
+## Privileged Studio WebView2 origin boundary
+
+A janela Windows usa três superfícies separadas: o **StudioView** privilegiado (bridge RPC/MCP), o **ProviderView** de navegação web do usuário e o navegador/preview auxiliares. O StudioView não é um navegador geral: somente o documento local canônico `https://ordax.local/studio_product.html`, servido por mapeamento de recursos do próprio host, pode emitir mensagens ao bridge. A política verifica a origem/path exatos de **cada evento** `WebMessageReceived.Source` antes do parse ou dispatch e bloqueia navegação/popup que saia desse documento. Validar apenas a URL atualmente mostrada não é suficiente contra troca de origem durante navegação.
+
+O ProviderView (ChatGPT, Grok e outras páginas) é **não privilegiado** e não recebe esse bridge; interações automáticas com sistemas locais seguem Control Plane/MCP, grants e actions tipadas. Geometrias recebidas para o overlay exigem valores finitos e dimensões válidas. Esses controles pertencem ao host Windows e não são copiados para os assets portáteis do Studio.
