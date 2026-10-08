@@ -11,6 +11,7 @@ on:
       - "native/ordax-workbench/**"
       - "scripts/windows/build-ordax-studio-product.ps1"
       - "scripts/windows/ordax-studio-start.ps1"
+      - "scripts/windows/ordax-upgrade-quiesce.ps1"
       - "scripts/windows/assert-release-authenticode.ps1"
       - "scripts/windows/assert-release-provenance.ps1"
       - "scripts/windows/assert-release-main-ancestry.ps1"

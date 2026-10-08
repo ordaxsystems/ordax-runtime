@@ -43,6 +43,7 @@ VersionInfoProductName={#AppName}
 VersionInfoProductVersion={#AppVersion}
 
 [Files]
+Source: "{#StageDir}\scripts\windows\ordax-upgrade-quiesce.ps1"; Flags: dontcopy
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
@@ -161,6 +162,33 @@ begin
   Result := (ResultCode = 0) or (ResultCode = 128);
   if Result then
     Sleep(500);
+end;
+
+function QuiescePackagedProcesses(): Boolean;
+var
+  ResultCode: Integer;
+  Started: Boolean;
+  ScriptPath: String;
+  Parameters: String;
+begin
+  ExtractTemporaryFile('ordax-upgrade-quiesce.ps1');
+  ScriptPath := ExpandConstant('{tmp}\ordax-upgrade-quiesce.ps1');
+  Parameters :=
+    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+    ScriptPath +
+    '" -InstallRoot "' +
+    ExpandConstant('{app}') +
+    '"';
+
+  Started := Exec(
+    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    Parameters,
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  );
+  Result := Started and (ResultCode = 0);
 end;
 
 function LegacyScheduledTaskExists(): Boolean;
@@ -374,6 +402,12 @@ begin
   if not RetireLegacyScheduledTask() then
   begin
     Result := 'Não foi possível aposentar o supervisor legado OrdaX Dev Agent.';
+    Exit;
+  end;
+
+  if not QuiescePackagedProcesses() then
+  begin
+    Result := 'Não foi possível liberar processos pertencentes à instalação atual do ORDAX.';
     Exit;
   end;
 
