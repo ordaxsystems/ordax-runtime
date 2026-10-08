@@ -1,13 +1,20 @@
-# Start the installed, canonical ORDAX Studio product. No Runtime-source UI fallback.
+# Launch only the installed ORDAX Studio application at its authoritative Inno Setup location.
+# Never start a Runtime-checkout HTML snapshot or a Python source-shell fallback.
 param([switch]$Foreground)
 
 $ErrorActionPreference = "Stop"
-if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
-    throw "LOCALAPPDATA unavailable; ORDAX Studio must be installed for the current user."
+
+$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{0D31F22D-8451-4CF4-9E34-F0D4D857F55F}_is1'
+$product = Get-ItemProperty -LiteralPath $uninstallKey -ErrorAction SilentlyContinue
+$installLocation = [string]$product.InstallLocation
+if ([string]::IsNullOrWhiteSpace($installLocation) -or
+    -not [System.IO.Path]::IsPathRooted($installLocation)) {
+    throw "ORDAX Studio is not registered for the current Windows user. Install the signed product release; Runtime source is not a Studio UI."
 }
-$studioExe = Join-Path $env:LOCALAPPDATA "Programs\ORDAX\ORDAX Studio.exe"
+
+$studioExe = Join-Path $installLocation "ORDAX Studio.exe"
 if (-not (Test-Path -LiteralPath $studioExe -PathType Leaf)) {
-    throw "ORDAX Studio is not installed at its canonical product path: $studioExe. Install the signed product release; the Runtime source does not include a UI."
+    throw "The registered ORDAX Studio installation has no executable: $studioExe. Repair the installed product instead of starting source-tree UI."
 }
 if ($Foreground) {
     & $studioExe
