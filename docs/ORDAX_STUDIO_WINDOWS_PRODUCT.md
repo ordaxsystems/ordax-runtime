@@ -133,3 +133,13 @@ O gate de proveniência é `scripts/windows/assert-release-provenance.ps1`, com 
 - Testes de assinatura em `tests/test_release_signer_identity.py` usam dados simulados **apenas para provar a política do gate**; não substituem assinatura real nem smoke dos bytes assinados.
 
 A ausência atual de um serviço de assinatura de produção segue registrada na issue #49. O build de PR ainda produz somente candidato interno; não iniciar publicação por tag até a assinatura e o teste do artefato assinado estarem integrados ao workflow autorizado.
+
+## Interface única e remoção dos snapshots históricos
+
+O proprietário exclusivo de UI, estilos, scripts e manifestos do Studio é `ordaxsystems/ordax-apps/apps/studio`. O Runtime possui somente host/adapters e o `studio-source.lock.json`; não distribui mais `ordax_studio/studio.html`, `studio_product.html` nem `ordax_studio/assets/**` como source.
+
+O build Windows verifica a revisão exata do lock, materializa HTML e assets **exclusivamente no site-packages privado do staging**, compara inventário e SHA-256 e executa instalação/upgrade/uninstall em Windows. Em um Runtime clonado sem esse instalador, não existe UI local de fallback; isso é intencional e fail-closed. Os testes visuais/funcionais portáteis pertencem a `ordax-apps/apps/studio/tests`; os testes do Runtime cobrem APIs, política local, bridge, isolamento e pacote Windows.
+
+O comando histórico `ordax-studio-web` foi aposentado. A entrada de conveniência `scripts/windows/ordax-studio-start.ps1` consulta exclusivamente a localização registrada pelo **Inno Setup AppId canônico** do usuário no Registro do Windows e lança o `ORDAX Studio.exe` instalado. Não presume a pasta default, não inicia HTML do repositório nem força instalação de candidato de CI. O executável instalado e o Runtime continuam possuindo versionamento independente.
+
+Compatibilidades de upgrade estritamente necessárias — como o executável `ORDAX Dev.exe` byte-idêntico ao `ORDAX Studio.exe` — permanecem somente pelo contrato explícito de migração Windows, sem uma segunda implementação funcional. Sua retirada exige prova de upgrade de instalações antigas.
