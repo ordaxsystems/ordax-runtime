@@ -14,6 +14,7 @@ on:
       - "scripts/windows/assert-release-provenance.ps1"
       - "tests/test_release_provenance.py"
       - "tests/test_windows_product_packaging.py"
+      - "tests/test_release_signer_identity.py"
       - "pyproject.toml"
       - "studio-source.lock.json"
       - ".github/workflows/windows-product-build.yml"
@@ -34,7 +35,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
-        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance
+        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance tests.test_release_signer_identity
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
