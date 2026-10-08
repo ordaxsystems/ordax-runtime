@@ -88,7 +88,9 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('"scripts/windows/ordax-upgrade-quiesce.ps1"', workflow)
         self.assertIn("ORDAX_PACKAGED_PRIVATE_PYTHON_ORPHAN_RUNNING", smoke)
         self.assertIn("ORDAX_PACKAGED_PRIVATE_PYTHON_ORPHAN_RETIRED", smoke)
-        self.assertIn('import ssl,time; time.sleep(300)', smoke)
+        self.assertIn("ordax-private-runtime-lock.py", smoke)
+        self.assertIn('"import ssl"', smoke)
+        self.assertIn('"time.sleep(300)"', smoke)
 
     def test_launchers_expose_cooperative_shutdown_for_updates(self) -> None:
         launcher = (ROOT / "packaging" / "windows" / "ordax_launcher.c").read_text(encoding="utf-8")
