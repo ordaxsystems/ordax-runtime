@@ -59,6 +59,20 @@ class StudioHostTransportBoundaryTests(unittest.TestCase):
         self.assertIn("!double.IsFinite(viewportWidth)", native)
         self.assertIn("!double.IsFinite(width)", native)
 
+    def test_late_web_provider_start_cannot_reactivate_hidden_surface(self) -> None:
+        native = (ROOT / "native" / "ordax-workbench" / "MainWindow.xaml.cs").read_text(encoding="utf-8")
+        section = native.split("private async Task ApplyAssistantSurfaceAsync(", 1)[1].split("private void LoadProviders()", 1)[0]
+        request = section.index("var generation = ++_assistantSurfaceGeneration;")
+        deactivate = section.index("ProviderSurfaceHost.Visibility = Visibility.Collapsed;")
+        initialize = section.index("await EnsureProviderViewAsync();")
+        check = section.index("if (generation != _assistantSurfaceGeneration)")
+        reactivate = section.rindex("ProviderSurfaceHost.Visibility = Visibility.Visible;")
+        self.assertLess(request, deactivate)
+        self.assertLess(deactivate, initialize)
+        self.assertLess(initialize, check)
+        self.assertLess(check, reactivate)
+        self.assertIn("return;", section[check:reactivate])
+
     def test_package_contains_only_host_adapter_not_portable_source(self) -> None:
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         package_data = project["tool"]["setuptools"]["package-data"]["ordax_studio"]
