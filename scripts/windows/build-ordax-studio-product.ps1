@@ -10,19 +10,41 @@ if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repoRoot "dist\windows"
 }
 
-$canonicalVersion = [string]$env:ORDAX_STUDIO_CANONICAL_VERSION
-$canonicalVersion = $canonicalVersion.Trim()
-$canonicalVersionSource = if ($canonicalVersion) { "canonical-environment" } else { "" }
-
+$requestedCanonicalVersion = ([string]$env:ORDAX_STUDIO_CANONICAL_VERSION).Trim()
 $studioAppSource = ([string]$env:ORDAX_STUDIO_APP_SOURCE).Trim()
+if (-not $studioAppSource) {
+    throw "ORDAX_STUDIO_APP_SOURCE is required: the Windows installer must use the pinned ordax-apps Studio package, never the Runtime's historical UI copy"
+}
+$studioAppSource = (Resolve-Path -LiteralPath $studioAppSource -ErrorAction Stop).Path
 if ($studioAppSource) {
     $sourceLockPath = Join-Path $repoRoot "studio-source.lock.json"
     if (-not (Test-Path $sourceLockPath)) { throw "Studio source lock is missing" }
     $sourceLock = Get-Content $sourceLockPath -Raw | ConvertFrom-Json
     if ($sourceLock.schema -ne "ordax.studio-source-lock/1") { throw "Studio source lock schema is invalid" }
-    if ($sourceLock.repository -ne "washingtonmsdj/ordax-apps") { throw "Studio source repository is not canonical" }
+    if ($sourceLock.repository -ne "ordaxsystems/ordax-apps") { throw "Studio source repository is not canonical" }
     if ($sourceLock.path -ne "apps/studio") { throw "Studio source path is not canonical" }
     if ($sourceLock.authority -ne "none") { throw "Studio source lock must not carry authority" }
+    if ([string]$sourceLock.commit -notmatch '^[0-9a-f]{40}$') { throw "Studio source lock commit must be immutable" }
+
+    # The source cannot be a same-version folder or a dirty local copy.
+    # Git checkout HEAD and the portable path must match the locked revision.
+    $checkoutRoot = (& git -C $studioAppSource rev-parse --show-toplevel)
+    if ($LASTEXITCODE -ne 0 -or -not $checkoutRoot) { throw "Studio source must be a Git checkout" }
+    $checkoutRoot = (Resolve-Path -LiteralPath $checkoutRoot.Trim() -ErrorAction Stop).Path
+    $expectedStudioPath = [System.IO.Path]::GetFullPath(
+        (Join-Path $checkoutRoot ($sourceLock.path.Replace("/", [System.IO.Path]::DirectorySeparatorChar)))
+    )
+    if ([System.IO.Path]::GetFullPath($studioAppSource) -ne $expectedStudioPath) {
+        throw "Studio source path does not match the canonical lock"
+    }
+    $checkedOutCommit = (& git -C $checkoutRoot rev-parse HEAD)
+    if ($LASTEXITCODE -ne 0 -or $checkedOutCommit.Trim() -ne [string]$sourceLock.commit) {
+        throw "Studio source checkout must match the exact pinned Git commit"
+    }
+    $sourceChanges = @(& git -C $checkoutRoot status --porcelain -- $sourceLock.path)
+    if ($LASTEXITCODE -ne 0 -or $sourceChanges.Count -ne 0) {
+        throw "Studio source checkout contains local changes or untracked files"
+    }
 
     $studioAppManifestPath = Join-Path $studioAppSource "app.json"
     if (-not (Test-Path $studioAppManifestPath)) { throw "Canonical Studio app manifest is missing: $studioAppManifestPath" }
@@ -32,6 +54,9 @@ if ($studioAppSource) {
     }
     if ([string]$studioAppManifest.version -ne [string]$sourceLock.version) {
         throw "Canonical Studio version does not match studio-source.lock.json"
+    }
+    if ($requestedCanonicalVersion -and $requestedCanonicalVersion -ne [string]$sourceLock.version) {
+        throw "ORDAX Studio canonical environment version conflicts with the locked app manifest"
     }
 
     $studioAiManifestPath = Join-Path $studioAppSource "ai\\manifest.json"
@@ -88,7 +113,13 @@ if ($studioAppSource) {
         $appIntelligenceRegistryJson,
         [System.Text.UTF8Encoding]::new($false)
     )
-    Copy-Item (Join-Path $studioAppSource "assets\*") (Join-Path $targetStudio "assets") -Recurse -Force
+    # Never leave stale, unversioned Runtime assets in the distributable tree.
+    $targetAssets = Join-Path $targetStudio "assets"
+    if (Test-Path -LiteralPath $targetAssets) {
+        Remove-Item -LiteralPath $targetAssets -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $targetAssets -Force | Out-Null
+    Copy-Item (Join-Path $studioAppSource "assets\*") $targetAssets -Recurse -Force
     Copy-Item (Join-Path $studioAppSource "src\host_contract.js") (Join-Path $targetStudio "host_contract.js") -Force
     $portableHtml = Get-Content (Join-Path $studioAppSource "src\index.html") -Raw
     $portableHtml = $portableHtml.Replace("../assets/", "assets/")
@@ -104,32 +135,15 @@ if ($studioAppSource) {
 }
 
 
-if (-not $canonicalVersion -and $env:GITHUB_REF_TYPE -eq "tag") {
-    $tagName = ([string]$env:GITHUB_REF_NAME).Trim()
-    if ($tagName -notmatch '^v(.+)$') {
-        throw "ORDAX Studio release tag must use v<semver>: $tagName"
-    }
-    $canonicalVersion = $Matches[1]
-    $canonicalVersionSource = "github-tag"
-}
-
+# The application manifest in the pinned checkout is the only release-version
+# authority. A tag, pyproject or explicit argument cannot silently replace it.
 $Version = $Version.Trim()
-$versionSource = "explicit-argument"
-
-if ($canonicalVersion) {
-    if ($Version -and $Version -ne $canonicalVersion) {
-        throw "ORDAX Studio version mismatch: explicit version '$Version' differs from canonical version '$canonicalVersion'"
-    }
-    $Version = $canonicalVersion
-    $versionSource = $canonicalVersionSource
-} elseif (-not $Version) {
-    $pyproject = Get-Content (Join-Path $repoRoot "pyproject.toml") -Raw
-    if ($pyproject -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
-        throw "Unable to read project version from pyproject.toml"
-    }
-    $Version = $Matches[1]
-    $versionSource = "historical-pyproject"
+if ($Version -and $Version -ne $canonicalVersion) {
+    throw "ORDAX Studio version mismatch: explicit version '$Version' differs from canonical version '$canonicalVersion'"
 }
+$Version = $canonicalVersion
+$versionSource = "ordax-apps-lock"
+
 
 if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
     throw "ORDAX Studio version is not valid semantic version syntax: $Version"
