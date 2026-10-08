@@ -171,6 +171,26 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("repository: ordaxsystems/ordax-apps", workflow)
         self.assertIn("ORDAX_STUDIO_APP_SOURCE:", workflow)
 
+    def test_windows_package_materializes_studio_outside_the_runtime_checkout(self) -> None:
+        build = (ROOT / "scripts" / "windows" / "build-ordax-studio-product.ps1").read_text(encoding="utf-8")
+        self.assertIn('$packagedStudio = Join-Path $sitePackages "ordax_studio"', build)
+        self.assertIn('$targetAssets = Join-Path $packagedStudio "assets"', build)
+        self.assertIn('Join-Path $packagedStudio "studio_product.html"', build)
+        self.assertIn('Join-Path $packagedStudio "app_intelligence_registry.json"', build)
+        self.assertIn('Join-Path $packagedStudio "host_contract.js"', build)
+        self.assertIn("Get-FileHash -Algorithm SHA256 -LiteralPath $sourceAsset.FullName", build)
+        self.assertIn("Packaged Studio asset inventory differs from canonical source", build)
+        self.assertIn("ORDAX_STUDIO_PACKAGE_SOURCE_VERIFIED=", build)
+        self.assertNotIn('$targetStudio = Join-Path $repoRoot "ordax_studio"', build)
+        self.assertNotIn('Copy-Item (Join-Path $studioAppSource "assets\\*") (Join-Path $repoRoot', build)
+        self.assertNotIn('Join-Path $repoRoot "ordax_studio\\assets"', build)
+
+    def test_windows_ci_rejects_any_mutation_of_runtime_studio_sources(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
+        self.assertIn("Verify build did not rewrite Runtime Studio sources", workflow)
+        self.assertIn("git status --porcelain -- ordax_studio", workflow)
+        self.assertIn("ORDAX_STUDIO_RUNTIME_SOURCE_UNCHANGED", workflow)
+
     def test_product_shell_is_project_host_not_embedded_chat(self) -> None:
         product = (ROOT / "ordax_studio" / "studio_product.html").read_text(encoding="utf-8")
         script = (ROOT / "ordax_studio" / "assets" / "studio.js").read_text(encoding="utf-8")

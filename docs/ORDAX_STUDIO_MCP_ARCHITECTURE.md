@@ -39,9 +39,16 @@ O instalador Windows **não pode usar os assets do Runtime como fallback**.
 O build exige `ORDAX_STUDIO_APP_SOURCE` como checkout Git limpo, cujo `HEAD`
 coincida exatamente com `studio-source.lock.json#commit`, usando o path
 `apps/studio` e o owner `ordaxsystems/ordax-apps`. A versão vem exclusivamente
-de `apps/studio/app.json` naquele commit. O build substitui integralmente
-`ordax_studio/assets` pelos assets fixados e injeta somente o host bridge
-Windows no HTML portátil.
+de `apps/studio/app.json` naquele commit. O build **não escreve** em `ordax_studio/` do checkout Git: após
+instalar o host Python, materializa o Studio exclusivamente em
+`build/windows-product/stage/runtime/Lib/site-packages/ordax_studio/`.
+Substitui integralmente os assets empacotados por arquivos do commit pinado,
+verifica inventário e SHA-256 de cada asset e injeta somente o host bridge
+Windows no HTML portátil. Um gate da CI executa
+`git status --porcelain -- ordax_studio` após o build e recusa qualquer
+alteração na fonte do Runtime. Os snapshots do checkout permanecem apenas
+para os consumidores de compatibilidade e testes já identificados, não são
+input da distribuição Windows.
 
 A cópia de oito assets atualmente versionada em `ordax_studio/assets` é
 **resíduo de desenvolvimento/compatibilidade, não fonte de distribuição**.
