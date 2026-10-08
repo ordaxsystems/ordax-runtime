@@ -250,26 +250,48 @@ class WindowsProductPackagingTests(unittest.TestCase):
 
     def test_windows_ci_proves_branding_migration_and_running_runtime_upgrade(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
-        self.assertIn("ORDAX-Studio-Setup-*.exe", workflow)
+        smoke = (ROOT / "scripts" / "windows" / "test-ordax-studio-install-smoke.ps1").read_text(encoding="utf-8")
         self.assertIn("ordax-studio-windows-x64", workflow)
-        self.assertIn("Upgrade over running ORDAX Runtime and legacy ORDAX Dev launcher", workflow)
-        self.assertIn('Wait-OrdaxReady -Label "ORDAX_UPGRADE_RUNTIME"', workflow)
-        self.assertIn("running runtime did not exit during upgrade", workflow)
-        self.assertIn("legacy ORDAX Dev process survived Studio upgrade", workflow)
-        self.assertIn("LEGACY_ORDAX_DEV_PROCESS_RETIRED", workflow)
-        self.assertIn("ORDAX_LEGACY_ALIAS_IDENTICAL", workflow)
-        self.assertIn("LEGACY_ORDAX_TASK_REMOVED", workflow)
-        self.assertIn("LEGACY_ORDAX_STARTUP_REMOVED", workflow)
-        self.assertIn("ORDAX_WORKBENCH_READY", workflow)
-        self.assertIn("STUDIO_STARTED_RUNTIME", workflow)
-        self.assertIn("ORDAX_RUNTIME_OUTLIVED_STUDIO", workflow)
-        self.assertIn('Wait-OrdaxReady -Label "ORDAX_STUDIO_RUNTIME"', workflow)
-        self.assertIn("workbench\\ORDAX Workbench.exe", workflow)
-        self.assertIn('- "ordax_core/**"', workflow)
-        self.assertIn('- "ordax_dev_agent/**"', workflow)
-        self.assertIn('- "ordax_device_agent/**"', workflow)
-        self.assertIn('- "ordax_studio/**"', workflow)
+        self.assertIn("Upgrade over running ORDAX Runtime and legacy ORDAX Dev launcher", smoke)
+        self.assertIn('Wait-OrdaxReady -Label "ORDAX_UPGRADE_RUNTIME"', smoke)
+        self.assertIn("running runtime did not exit during upgrade", smoke)
+        self.assertIn("legacy ORDAX Dev process survived Studio upgrade", smoke)
+        for marker in (
+            "LEGACY_ORDAX_DEV_PROCESS_RETIRED",
+            "ORDAX_LEGACY_ALIAS_IDENTICAL", "LEGACY_ORDAX_TASK_REMOVED",
+            "LEGACY_ORDAX_STARTUP_REMOVED", "ORDAX_WORKBENCH_READY",
+            "STUDIO_STARTED_RUNTIME", "ORDAX_RUNTIME_OUTLIVED_STUDIO",
+        ):
+            self.assertIn(marker, smoke)
+        self.assertIn('Wait-OrdaxReady -Label "ORDAX_STUDIO_RUNTIME"', smoke)
+        self.assertIn("workbench\\ORDAX Workbench.exe", smoke)
+        self.assertIn("[string]$ArtifactDirectory", smoke)
+        self.assertIn("Exactly one ORDAX Studio installer", smoke)
+        for source in ("ordax_core", "ordax_dev_agent", "ordax_device_agent", "ordax_studio"):
+            self.assertIn(f'- "{source}/**"', workflow)
 
+    def test_signed_release_reuses_exact_same_smoke_and_checks_digest_after(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
+        release = workflow.split("  publish-release:", 1)[1]
+        candidate = workflow.split("  install-smoke:", 1)[1].split("  publish-release:", 1)[0]
+        script = r".\scripts\windows\test-ordax-studio-install-smoke.ps1"
+        self.assertIn("Checkout pinned Runtime smoke implementation", candidate)
+        self.assertIn(script, candidate)
+        self.assertIn(script, release)
+        self.assertEqual(2, workflow.count(f"run: {script}"))
+        self.assertIn("environment: windows-production-release", release)
+        self.assertIn("Install and upgrade from final signed release bytes", release)
+        self.assertIn("Reverify final installer SHA-256 after signed installation smoke", release)
+        self.assertLess(release.index("Verify release provenance and artifact digest"),
+                        release.index("Verify production Authenticode signature"))
+        self.assertLess(release.index("Verify production Authenticode signature"),
+                        release.index("Install and upgrade from final signed release bytes"))
+        self.assertLess(release.index("Install and upgrade from final signed release bytes"),
+                        release.index("Reverify final installer SHA-256 after signed installation smoke"))
+        self.assertLess(release.index("Reverify final installer SHA-256 after signed installation smoke"),
+                        release.index("Publish GitHub Release assets"))
+        self.assertEqual(2, release.count("assert-release-provenance.ps1"))
+        self.assertIn('- "scripts/windows/test-ordax-studio-install-smoke.ps1"', workflow)
 
     def test_public_release_requires_trusted_authenticode(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
