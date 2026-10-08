@@ -164,3 +164,16 @@ O único teste de ponta a ponta Windows é `scripts/windows/test-ordax-studio-in
 Não existe uma segunda implementação do smoke nem publicação baseada apenas em build de candidato. Se um serviço de assinatura alterar os bytes, seu resultado assinado, o checksum final e a assinatura precisam estar disponíveis **antes** de `publish-release`, e precisam permanecer inalterados até a publicação. Uma assinatura adicionada após o smoke de candidato não satisfaz o gate de release.
 
 **Ainda pendente (issue #49):** contratar e integrar um assinador Authenticode de produção com custódia autorizada; configurar proteção/revisão do GitHub Environment. O fluxo atual continua falhando fechado diante de candidato sem assinatura e não publica releases apenas porque o CI de PR passou. A introdução desses controles não significa que um serviço de assinatura já esteja operacional.
+
+## Gate Git de origem da release
+
+Uma tag com nome `vX.Y.Z` e instalador com SHA-256 correto **não prova que o Runtime distribuído pertence à linha de desenvolvimento aprovada**. Por isso o job `publish-release`, antes de ler o instalador ou chegar ao Authenticode, faz checkout com histórico completo e executa `scripts/windows/assert-release-main-ancestry.ps1`:
+
+- a tag deve possuir sintaxe estável `vMAJOR.MINOR.PATCH`, resolver para um commit Git e coincidir com o `HEAD` obtido pelo checkout e com o SHA do evento GitHub Actions;
+- a referência `refs/remotes/origin/main` deve existir com histórico completo; o commit da tag precisa ser ancestral dessa `main`;
+- tags criadas em branches isoladas, tag/checkout/SHA divergentes, repositório raso ou falta de `origin/main` são rejeitados, sem fallback a branch local, versão textual ou reescrita de referência;
+- a checagem de ancestralidade é **adicional** ao source lock do Studio, Authenticode autorizado, checksum final e smoke de instalação dos bytes assinados.
+
+O teste `tests/test_release_main_ancestry.py` constrói commits/tags em um repositório Git descartável e verifica cenários positivos e negativos. Os demais gates de release continuam no mesmo workflow e no owner `ordax-runtime`; não foi criado um segundo controlador de publicação.
+
+**Configuração externa indispensável:** proteger a branch `main`, criação/movimentação de tags de release e os GitHub Environments de aprovação/assinatura. A prova de ancestralidade sozinha não impede que alguém autorizado a alterar a `main` introduza conteúdo malicioso. A issue #49 continua responsável pela assinatura real e pelas aprovações operacionais.

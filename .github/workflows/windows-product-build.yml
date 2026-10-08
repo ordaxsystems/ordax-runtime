@@ -13,6 +13,8 @@ on:
       - "scripts/windows/ordax-studio-start.ps1"
       - "scripts/windows/assert-release-authenticode.ps1"
       - "scripts/windows/assert-release-provenance.ps1"
+      - "scripts/windows/assert-release-main-ancestry.ps1"
+      - "tests/test_release_main_ancestry.py"
       - "scripts/windows/test-ordax-studio-install-smoke.ps1"
       - "tests/test_release_provenance.py"
       - "tests/test_windows_product_packaging.py"
@@ -37,7 +39,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
-        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance tests.test_release_signer_identity
+        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance tests.test_release_signer_identity tests.test_release_main_ancestry
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -137,6 +139,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Verify tagged Runtime commit belongs to canonical main
+        shell: powershell
+        run: .\scripts\windows\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
       - name: Download validated Windows installer
         uses: actions/download-artifact@v4
         with:

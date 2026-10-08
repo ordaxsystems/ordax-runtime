@@ -316,6 +316,29 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertLess(workflow.index("Verify production Authenticode signature"),
                         workflow.index("Publish GitHub Release assets"))
 
+    def test_release_tag_must_be_in_canonical_main_history_before_publisher_runs(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
+        script = (ROOT / "scripts" / "windows" / "assert-release-main-ancestry.ps1").read_text(encoding="utf-8")
+        publish = workflow.split("  publish-release:", 1)[1]
+        self.assertIn("fetch-depth: 0", publish)
+        self.assertIn("assert-release-main-ancestry.ps1", publish)
+        self.assertIn('-ExpectedCommit "$env:GITHUB_SHA"', publish)
+        self.assertLess(
+            publish.index("Verify tagged Runtime commit belongs to canonical main"),
+            publish.index("Download validated Windows installer"),
+        )
+        self.assertLess(
+            publish.index("Verify tagged Runtime commit belongs to canonical main"),
+            publish.index("Verify production Authenticode signature"),
+        )
+        self.assertIn("refs/remotes/origin/main^{commit}", script)
+        self.assertIn("refs/tags/$Tag^{commit}", script)
+        self.assertIn("merge-base --is-ancestor", script)
+        self.assertIn("not an ancestor of canonical origin/main", script)
+        self.assertIn('tests.test_release_main_ancestry', workflow)
+        self.assertIn('- "scripts/windows/assert-release-main-ancestry.ps1"', workflow)
+        self.assertIn('- "tests/test_release_main_ancestry.py"', workflow)
+
     def test_release_publish_handles_missing_release_without_powershell_error_stream_failure(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
         self.assertIn('$ErrorActionPreference = "Stop"', workflow)
