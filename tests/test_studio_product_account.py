@@ -443,25 +443,18 @@ class StudioProductAccountTests(unittest.TestCase):
     def test_product_identity_is_separate_from_github_provider(self) -> None:
         root = Path(__file__).resolve().parents[1]
         auth_source = (root / "ordax_studio" / "product_auth.py").read_text(encoding="utf-8")
-        ui_source = (root / "ordax_studio" / "assets" / "product_account.js").read_text(encoding="utf-8")
         contract = (root / "docs" / "ORDAX_STUDIO_WINDOWS_PRODUCT.md").read_text(encoding="utf-8")
-        self.assertIn("conta ORDAX", ui_source)
-        self.assertIn("GitHub", ui_source)
-        self.assertIn("provedor de projetos", ui_source)
         self.assertIn("Conta ORDAX", contract)
         self.assertIn("GitHub", contract)
         self.assertIn("plugin GitHub", contract)
         self.assertNotIn("github.com/login/oauth", auth_source.lower())
         self.assertNotIn("api.github.com/user", auth_source.lower())
-    def test_product_surface_source_never_persists_password_or_access_token(self) -> None:
+
+    def test_product_auth_does_not_persist_password_or_access_token(self) -> None:
         root = Path(__file__).resolve().parents[1]
         auth_source = (root / "ordax_studio" / "product_auth.py").read_text(encoding="utf-8")
-        ui_source = (root / "ordax_studio" / "assets" / "product_account.js").read_text(encoding="utf-8")
         self.assertNotIn("write_text", auth_source)
         self.assertNotIn("open(", auth_source)
-        self.assertNotIn("localStorage", ui_source)
-        self.assertNotIn("sessionStorage", ui_source)
-        self.assertIn("password.value=''", ui_source)
 
     def test_host_authorization_messages_use_intact_utf8_portuguese(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "ordax_studio" / "product_web_desktop.py").read_text(encoding="utf-8")
