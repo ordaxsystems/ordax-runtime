@@ -44,6 +44,7 @@ _ALLOWED_METHODS = frozenset(
         "assistant_select_chat",
         "assistant_update_chat",
         "assistant_close_chat",
+        "assistant_send_message",
         "connect_product_account",
         "remote_computer_grants",
         "authorize_remote_computer_grant",
@@ -95,7 +96,13 @@ def _invoke(api: StudioProductApi, method: str, args: Any) -> Any:
 
 
 def main() -> int:
-    api = StudioProductApi(ActionRegistry(AgentConfig.from_env()))
+    # DEV-only provider interface; never activated by a normal installer.
+    import os
+    if os.environ.get("ORDAX_STUDIO_DEV_NATIVE_CHAT") == "1":
+        from .dev_chatgpt_bridge import StudioDevChatApi
+        api = StudioDevChatApi(ActionRegistry(AgentConfig.from_env()))
+    else:
+        api = StudioProductApi(ActionRegistry(AgentConfig.from_env()))
     for raw in sys.stdin:
         line = raw.strip()
         if not line:
