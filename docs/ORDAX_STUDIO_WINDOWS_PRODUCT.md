@@ -153,3 +153,14 @@ Também foram removidos a interface Tkinter `ordax_studio/desktop.py`, o seu pre
 O script `scripts/windows/ordax-studio-start.ps1` é apenas lançador do produto registrado com o **AppId Inno Setup** do usuário: não instala nada, não clona Git, não cria agendadores/atalhos e não inicia o source Python. Sem produto instalado, falha com orientação para obter uma distribuição oficial assinada.
 
 Compatibilidade de upgrade é diferente de manter UI duplicada: a migração pelo instalador canônico ainda reconhece `ORDAX Dev.exe`, atalhos e tarefas do runtime histórico **somente para aposentá-los sem perda de dados**. Não voltar a registrar essas entradas no computador.
+
+## Verificação dos bytes finais antes da publicação
+
+O único teste de ponta a ponta Windows é `scripts/windows/test-ordax-studio-install-smoke.ps1`, invocado pelo **mesmo contrato** em duas etapas do workflow `windows-product-build.yml`:
+
+1. Em `install-smoke`, a revisão exata da PR/tag usa o candidato do job de build para provar instalação limpa, encerramento/upgrade do Runtime ativo, migração e desinstalação.
+2. Em `publish-release` (somente tag com ambiente protegido), o job verifica o source lock, a versão/tag e o SHA-256 do instalador final, exige assinatura Authenticode válida com timestamp e **certificado autorizado**, e **executa novamente o mesmo teste sobre o arquivo assinado que será publicado**. Após o smoke, recalcula o hash/confronta `SHA256SUMS.txt` e a proveniência antes do `gh release create`, que não sobrescreve releases existentes.
+
+Não existe uma segunda implementação do smoke nem publicação baseada apenas em build de candidato. Se um serviço de assinatura alterar os bytes, seu resultado assinado, o checksum final e a assinatura precisam estar disponíveis **antes** de `publish-release`, e precisam permanecer inalterados até a publicação. Uma assinatura adicionada após o smoke de candidato não satisfaz o gate de release.
+
+**Ainda pendente (issue #49):** contratar e integrar um assinador Authenticode de produção com custódia autorizada; configurar proteção/revisão do GitHub Environment. O fluxo atual continua falhando fechado diante de candidato sem assinatura e não publica releases apenas porque o CI de PR passou. A introdução desses controles não significa que um serviço de assinatura já esteja operacional.
