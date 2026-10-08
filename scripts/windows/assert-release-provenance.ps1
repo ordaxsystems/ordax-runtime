@@ -1,0 +1,67 @@
+# Verify the exact canonical source/version, installer identity and uploaded bytes
+# before considering a tagged Windows release for Authenticode verification.
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)][string]$Tag,
+    [Parameter(Mandatory = $true)][string]$SourceLock,
+    [Parameter(Mandatory = $true)][string]$ArtifactDirectory
+)
+
+$ErrorActionPreference = "Stop"
+
+if (-not (Test-Path -LiteralPath $SourceLock -PathType Leaf)) {
+    throw "Canonical Studio source lock is missing"
+}
+if (-not (Test-Path -LiteralPath $ArtifactDirectory -PathType Container)) {
+    throw "Validated Windows artifact directory is missing"
+}
+
+$lock = Get-Content -LiteralPath $SourceLock -Raw | ConvertFrom-Json
+if ($lock.schema -cne "ordax.studio-source-lock/1" -or
+    $lock.repository -cne "ordaxsystems/ordax-apps" -or
+    $lock.path -cne "apps/studio" -or
+    $lock.authority -cne "none" -or
+    [string]$lock.commit -cnotmatch '^[a-f0-9]{40}$') {
+    throw "Canonical Studio source lock identity/provenance is invalid"
+}
+$version = [string]$lock.version
+if ($version -cnotmatch '^\d+\.\d+\.\d+$') {
+    throw "Canonical Studio version must be a stable three-part version"
+}
+$expectedTag = "v$version"
+if ($Tag -cne $expectedTag) {
+    throw "Release tag does not match canonical Studio version ($expectedTag)"
+}
+
+$expectedName = "ORDAX-Studio-Setup-$version-x64.exe"
+$executables = @(Get-ChildItem -LiteralPath $ArtifactDirectory -File | Where-Object {
+    $_.Extension -ieq ".exe"
+})
+if ($executables.Count -ne 1 -or $executables[0].Name -cne $expectedName) {
+    throw "Release artifact must contain exactly the canonical Studio installer ($expectedName)"
+}
+
+$checksumPath = Join-Path $ArtifactDirectory "SHA256SUMS.txt"
+if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) {
+    throw "Release artifact is missing SHA256SUMS.txt"
+}
+$checksumLines = @(Get-Content -LiteralPath $checksumPath | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_)
+})
+if ($checksumLines.Count -ne 1 -or
+    $checksumLines[0] -cnotmatch '^([a-f0-9]{64})  ([A-Za-z0-9._-]+)$') {
+    throw "Release checksum manifest must have one strict SHA-256 entry"
+}
+$expectedHash = $Matches[1]
+$checksumFileName = $Matches[2]
+if ($checksumFileName -cne $expectedName) {
+    throw "Release checksum does not refer to canonical installer"
+}
+$actualHash = (Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualHash -cne $expectedHash) {
+    throw "Release artifact SHA-256 does not match verified checksum manifest"
+}
+
+Write-Host "ORDAX_RELEASE_PROVENANCE_VALID"
+Write-Host "ORDAX_STUDIO_RELEASE_VERSION=$version"
+Write-Host "ORDAX_STUDIO_RELEASE_SOURCE_COMMIT=$($lock.commit)"
