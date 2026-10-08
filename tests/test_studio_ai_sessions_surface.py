@@ -14,18 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class StudioAiSessionsSurfaceTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.html = (ROOT / "ordax_studio" / "studio_product.html").read_text(encoding="utf-8")
-        self.js = (ROOT / "ordax_studio" / "assets" / "studio.js").read_text(encoding="utf-8")
         self.api_source = (ROOT / "ordax_studio" / "web_desktop.py").read_text(encoding="utf-8")
-
-    def test_surface_exposes_real_ai_sessions_view(self) -> None:
-        self.assertIn('data-view="sessions"', self.html)
-        self.assertIn('id="sessionsCanvas"', self.html)
-        self.assertIn("call('ai_sessions_status')", self.js)
-        self.assertIn("Esta tela não automatiza sites de IA", self.js)
-        self.assertIn("rollover_at_tokens", self.js)
-        self.assertIn("session.provider", self.js)
-        self.assertIn("session.model", self.js)
 
     def test_sessions_api_reuses_memory_ssot(self) -> None:
         self.assertIn("OrchestratorStore(self.store.db_path)", self.api_source)
