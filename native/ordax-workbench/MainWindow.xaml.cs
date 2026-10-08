@@ -349,7 +349,22 @@ public partial class MainWindow : Window
             return;
         }
 
-        await EnsureProviderViewAsync();
+        try
+        {
+            await EnsureProviderViewAsync();
+        }
+        catch (Exception error)
+        {
+            // This is a host initialization error, not a provider HTTP/network error.
+            // Report only a bounded state to the privileged Studio document.
+            // An obsolete failed initialization must not affect a newer local/Web choice.
+            if (generation != _assistantSurfaceGeneration)
+                return;
+            ProviderSurfaceHost.Visibility = Visibility.Collapsed;
+            PostProviderNavigationState("unavailable");
+            LogActivity($"Navegador Web nativo indisponível: {error.Message}");
+            return;
+        }
         if (generation != _assistantSurfaceGeneration)
             return;
 
