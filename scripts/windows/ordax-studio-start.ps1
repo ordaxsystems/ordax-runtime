@@ -1,32 +1,16 @@
-param(
-    [string]$PythonPath = "",
-    [switch]$Foreground
-)
+# Start the installed, canonical ORDAX Studio product. No Runtime-source UI fallback.
+param([switch]$Foreground)
 
 $ErrorActionPreference = "Stop"
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-
-if (-not $PythonPath) {
-    $repoPythonw = Join-Path $RepoRoot ".venv\Scripts\pythonw.exe"
-    $repoPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
-    if (Test-Path $repoPythonw) { $PythonPath = $repoPythonw }
-    elseif (Test-Path $repoPython) { $PythonPath = $repoPython }
-    else {
-        $command = Get-Command pythonw.exe -ErrorAction SilentlyContinue
-        if (-not $command) { $command = Get-Command python.exe -ErrorAction Stop }
-        $PythonPath = $command.Source
-    }
+if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    throw "LOCALAPPDATA unavailable; ORDAX Studio must be installed for the current user."
 }
-
-if (-not (Test-Path $PythonPath)) {
-    throw "Python executable not found: $PythonPath"
+$studioExe = Join-Path $env:LOCALAPPDATA "Programs\ORDAX\ORDAX Studio.exe"
+if (-not (Test-Path -LiteralPath $studioExe -PathType Leaf)) {
+    throw "ORDAX Studio is not installed at its canonical product path: $studioExe. Install the signed product release; the Runtime source does not include a UI."
 }
-
-$env:PYTHONPATH = $RepoRoot
-$arguments = @("-m", "ordax_studio.web_desktop")
 if ($Foreground) {
-    & $PythonPath @arguments
+    & $studioExe
     exit $LASTEXITCODE
 }
-
-Start-Process -FilePath $PythonPath -ArgumentList $arguments -WorkingDirectory $RepoRoot
+Start-Process -FilePath $studioExe -WorkingDirectory (Split-Path -Parent $studioExe)
