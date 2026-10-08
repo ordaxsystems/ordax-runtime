@@ -22,7 +22,7 @@ O módulo ordax_studio/codex_app_server.py implementa **somente a camada privada
 - pedido espontâneo de permissão pelo servidor é **rejeitado** até existir fluxo de autorização local apropriado;
 - desconexão, erros de protocolo e saturação falham fechados; close() encerra apenas o filho próprio.
 
-Há testes E2E **do transporte contra processo fake local**, sem API key, sem assinatura ChatGPT, sem login e sem conceder autoridade.
+Há testes do transporte contra processo fake local e um **smoke real, opcional e isolado** com o binário oficial do Codex. `ordax_studio/codex_events.py` normaliza apenas eventos selecionados (deltas de mensagens, início/fim de turnos e metadados de itens), exigindo `threadId` e `turnId` válidos, com limites e sem expor comandos, caminhos ou saídas de ferramentas. Esse mapeamento é privado: nenhum evento vira concessão de authority.
 
 ## Bloqueios antes de ligar o botão Enviar do Studio
 
@@ -37,13 +37,26 @@ Há testes E2E **do transporte contra processo fake local**, sem API key, sem as
 
 | Camada | Situação neste incremento |
 |---|---|
-| Cliente JSONL stdio e handshake | Implementado; testes com fake local |
-| Correlacionar RPC e receber eventos | Implementado; testes com fake local |
+| Cliente JSONL stdio e handshake | Implementado; validado com fake e Codex CLI oficial 0.162.0 no Windows |
+| Correlacionar RPC e receber eventos | Implementado; fake para streaming + smoke real para RPC |
 | Rejeitar solicitação do servidor | Implementado; fail-closed |
 | Token/OAuth e direito de uso comercial | Não integrado; owner externo |
 | Sandbox/grants integrados | Não integrado; **não liberar ações** |
 | Adaptador tipado Runtime → Studio | Não integrado |
 | Chat nativo enviando ao Codex | Não integrado |
-| E2E com Codex real no Windows | Não executado |
+| Handshake/RPC com Codex real no Windows | Executado em 2026-10-08: `initialize`, `config/read` e encerramento, sem conta/modelo | 
+| E2E de conversa/turno com modelo real no Windows | Não executado |
+
+## Evidência de testes (Windows, 2026-10-08)
+
+Em checkout separado de `ordax-runtime`, com Python 3.13.14, **13/13 testes passaram**, incluindo 7 testes de transporte fake, 5 de normalização e 1 smoke real. O smoke usou `@openai/codex@0.162.0`, `codex.exe app-server` e `CODEX_HOME` temporário sem reutilizar a sessão ChatGPT. O teste opcional `tests/test_codex_app_server_official_smoke.py` só roda quando `CODEX_APP_SERVER_BINARY` aponta para um executável local; não baixa nada em CI e, sem o binário, é ignorado. Comandos:
+
+```powershell
+$env:PYTHONPATH='.'
+$env:CODEX_APP_SERVER_BINARY='C:\\caminho\\para\\codex.exe'
+py -3 -m unittest discover -s tests -p 'test_codex*.py' -v
+```
+
+Esse resultado **não autoriza** o Codex a ler projetos, executar tarefas ou acessar modelos. A integração E2E de produto permanece pendente.
 
 Essa PR é uma fundação isolada; **não** anuncia o Studio como integrado ao Codex nem muda a readiness do MVP.
