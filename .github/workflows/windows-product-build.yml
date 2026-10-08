@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "packaging/windows/**"
+      - "native/ordax-workbench/**"
+      - "tests/test_studio_host_transport_boundary.py"
       - "ordax_core/**"
       - "ordax_dev_agent/**"
       - "ordax_device_agent/**"
@@ -40,7 +42,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
-        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance tests.test_release_signer_identity tests.test_release_main_ancestry
+        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance tests.test_release_signer_identity tests.test_release_main_ancestry tests.test_studio_host_transport_boundary
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
