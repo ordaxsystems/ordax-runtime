@@ -89,7 +89,9 @@ if ($studioAppSource) {
         throw "Canonical Studio Application Action manifest is incompatible"
     }
 
-    $targetStudio = Join-Path $repoRoot "ordax_studio"
+    # Produce only immutable app metadata here. Runtime Git sources are NEVER
+    # rewritten by a Studio installer build; inject the portable bundle below,
+    # into private Python site-packages after pip has installed the host.
     $appIntelligenceRegistry = [ordered]@{
         schema = "ordax.app-intelligence-registry/1"
         authority = "none"
@@ -107,27 +109,12 @@ if ($studioAppSource) {
         )
     }
     $appIntelligenceRegistryJson = $appIntelligenceRegistry | ConvertTo-Json -Depth 20
-    $appIntelligenceRegistryPath = Join-Path $targetStudio "app_intelligence_registry.json"
-    [System.IO.File]::WriteAllText(
-        $appIntelligenceRegistryPath,
-        $appIntelligenceRegistryJson,
-        [System.Text.UTF8Encoding]::new($false)
-    )
-    # Never leave stale, unversioned Runtime assets in the distributable tree.
-    $targetAssets = Join-Path $targetStudio "assets"
-    if (Test-Path -LiteralPath $targetAssets) {
-        Remove-Item -LiteralPath $targetAssets -Recurse -Force
-    }
-    New-Item -ItemType Directory -Path $targetAssets -Force | Out-Null
-    Copy-Item (Join-Path $studioAppSource "assets\*") $targetAssets -Recurse -Force
-    Copy-Item (Join-Path $studioAppSource "src\host_contract.js") (Join-Path $targetStudio "host_contract.js") -Force
     $portableHtml = Get-Content (Join-Path $studioAppSource "src\index.html") -Raw
     $portableHtml = $portableHtml.Replace("../assets/", "assets/")
     $portableHtml = $portableHtml.Replace(
         '<script src="host_contract.js"></script>',
         '<script src="host_bridge.js"></script>' + [Environment]::NewLine + '<script src="host_contract.js"></script>'
     )
-    Set-Content (Join-Path $targetStudio "studio_product.html") -Value $portableHtml -Encoding UTF8
     $canonicalVersion = [string]$studioAppManifest.version
     $canonicalVersionSource = "ordax-apps-lock"
     Write-Output "ORDAX_STUDIO_PORTABLE_SOURCE=$studioAppSource"
@@ -191,6 +178,47 @@ $desktopPackage = ('{0}[desktop]' -f $repoRoot)
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to install ORDAX desktop runtime into the private Python distribution"
 }
+
+# The installer package is the only materialization destination for the
+# portable Studio UI. Do not create or overwrite ordax_studio/assets in Git.
+$packagedStudio = Join-Path $sitePackages "ordax_studio"
+if (-not (Test-Path -LiteralPath (Join-Path $packagedStudio "host_bridge.js"))) {
+    throw "Installed Runtime is missing its Windows Studio host bridge"
+}
+$targetAssets = Join-Path $packagedStudio "assets"
+if (Test-Path -LiteralPath $targetAssets) {
+    Remove-Item -LiteralPath $targetAssets -Recurse -Force
+}
+New-Item -ItemType Directory -Path $targetAssets -Force | Out-Null
+Copy-Item (Join-Path $studioAppSource "assets\*") $targetAssets -Recurse -Force
+Copy-Item (Join-Path $studioAppSource "src\host_contract.js") (Join-Path $packagedStudio "host_contract.js") -Force
+[System.IO.File]::WriteAllText(
+    (Join-Path $packagedStudio "studio_product.html"),
+    $portableHtml,
+    [System.Text.UTF8Encoding]::new($false)
+)
+[System.IO.File]::WriteAllText(
+    (Join-Path $packagedStudio "app_intelligence_registry.json"),
+    $appIntelligenceRegistryJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
+
+# Fail closed if the installed assets diverge from the exact pinned source.
+$sourceAssets = @(Get-ChildItem -LiteralPath (Join-Path $studioAppSource "assets") -File -Recurse)
+$packagedAssets = @(Get-ChildItem -LiteralPath $targetAssets -File -Recurse)
+if ($sourceAssets.Count -ne $packagedAssets.Count) {
+    throw "Packaged Studio asset inventory differs from canonical source"
+}
+foreach ($sourceAsset in $sourceAssets) {
+    $relative = $sourceAsset.FullName.Substring((Join-Path $studioAppSource "assets").Length).TrimStart('\', '/')
+    $packagedAsset = Join-Path $targetAssets $relative
+    if (-not (Test-Path -LiteralPath $packagedAsset) -or
+        (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceAsset.FullName).Hash -ne
+        (Get-FileHash -Algorithm SHA256 -LiteralPath $packagedAsset).Hash) {
+        throw "Packaged Studio asset does not match pinned canonical source: $relative"
+    }
+}
+Write-Output "ORDAX_STUDIO_PACKAGE_SOURCE_VERIFIED=$($sourceLock.commit)"
 
 Copy-Item (Join-Path $repoRoot "scripts") (Join-Path $stageRoot "scripts") -Recurse -Force
 
