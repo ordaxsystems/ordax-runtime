@@ -82,6 +82,12 @@ class StudioHostTransportBoundaryTests(unittest.TestCase):
         self.assertIn('JsonSerializer.Serialize(new { type = "ordax-assistant-surface-status", state })', native)
         self.assertIn('PostProviderNavigationState(_providerNavigationState);', native)
         self.assertIn('PostProviderNavigationState("hidden");', native)
+        # A failed WebView2 initialization must not silently leave the UI pending.
+        section = native.split("private async Task ApplyAssistantSurfaceAsync(", 1)[1].split("private void LoadProviders()", 1)[0]
+        self.assertIn("catch (Exception error)", section)
+        self.assertIn('PostProviderNavigationState("unavailable");', section)
+        self.assertLess(section.index("if (generation != _assistantSurfaceGeneration)"), section.index('PostProviderNavigationState("unavailable");'))
+        self.assertIn("'unavailable'", self.host)
         self.assertIn("if (!IsTrustedStudioSource(e.Source))", native)
         self.assertIn("window.dispatchEvent(new CustomEvent('ordax-assistant-surface-status'", self.host)
         self.assertIn("detail:{state:message.state}", self.host)
