@@ -1,6 +1,7 @@
-﻿# Studio host compatibility during repository cutover
+# Studio host adapter — source canônico
 
-The Python ordax_studio package is retained here temporarily because the Windows launcher/installer still hosts the portable UI through this package.
+A interface portátil e os manifestos do **OrdaX Studio** pertencem exclusivamente a `ordaxsystems/ordax-apps/apps/studio`.
 
-Canonical portable UI/product source is ordaxsystems/ordax-apps/apps/studio. New portable product logic must not be added here. This compatibility package must be reduced to host adapters once the Windows package consumes the external Studio artifact.
+Este pacote `ordax_studio` contém apenas APIs/transportes/adaptadores necessários ao **OrdaX Runtime Windows**, não o source da UI. O pipeline `scripts/windows/build-ordax-studio-product.ps1` exige o checkout exato de `studio-source.lock.json` e materializa HTML/assets apenas dentro do `site-packages/ordax_studio` privado do instalador.
 
+Não existe fallback para UI histórica, `latest`, cópia no checkout Runtime, second source ou iframe. A interface instalada deve funcionar offline a partir do pacote versionado. Executar `ordax-studio-web` diretamente no source não inicia uma UI obsoleta e informa o launcher correto. Preservar o host-bridge, grants e MCP stdio necessários ao Runtime.
