@@ -184,8 +184,27 @@ Write-Host "ORDAX_RUNTIME_OUTLIVED_STUDIO"
 
 $upgradedRuntime = $null
 $legacyProcess = $null
+$orphanPrivatePython = $null
 try {
   $null = Wait-OrdaxReady -Label "ORDAX_RUNTIME"
+
+  # This private Python orphan loads OpenSSL from the installed ORDAX runtime
+  # and survives its launcher. It must be retired before DLL replacement.
+  $orphanScript = Join-Path $env:RUNNER_TEMP "ordax-private-runtime-lock.py"
+  @(
+    "import ssl"
+    "import time"
+    "time.sleep(300)"
+  ) | Set-Content -LiteralPath $orphanScript -Encoding ascii
+  $orphanPrivatePython = Start-Process -FilePath $privatePython -ArgumentList @(
+    ('"{0}"' -f $orphanScript)
+  ) -WorkingDirectory $installRoot -PassThru
+  Start-Sleep -Seconds 1
+  $orphanPrivatePython.Refresh()
+  if ($orphanPrivatePython.HasExited) {
+    throw "Synthetic packaged private Python orphan did not start"
+  }
+  Write-Host "ORDAX_PACKAGED_PRIVATE_PYTHON_ORPHAN_RUNNING"
 
   # Simulate a pre-shutdown-event historical ORDAX Dev process. It runs
   # outside the installation and has no ORDAX cooperative event, so only
@@ -234,6 +253,11 @@ try {
     throw "legacy ORDAX Dev process survived Studio upgrade"
   }
   Write-Host "LEGACY_ORDAX_DEV_PROCESS_RETIRED"
+  $orphanPrivatePython.Refresh()
+  if (-not $orphanPrivatePython.HasExited) {
+    throw "packaged private Python orphan survived upgrade"
+  }
+  Write-Host "ORDAX_PACKAGED_PRIVATE_PYTHON_ORPHAN_RETIRED"
 
   if (-not (Test-Path $alternateSentinel)) {
     throw "installer removed an unrecognized alternate directory"
@@ -279,6 +303,9 @@ try {
 } finally {
   if ($legacyProcess) {
     Stop-Process -Id $legacyProcess.Id -Force -ErrorAction SilentlyContinue
+  }
+  if ($orphanPrivatePython) {
+    Stop-Process -Id $orphanPrivatePython.Id -Force -ErrorAction SilentlyContinue
   }
   if ($upgradedRuntime) {
     Stop-Process -Id $upgradedRuntime.Id -Force -ErrorAction SilentlyContinue
