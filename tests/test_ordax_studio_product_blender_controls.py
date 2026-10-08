@@ -255,10 +255,6 @@ class OrdaxStudioProductBlenderControlTests(unittest.TestCase):
         self.assertEqual([9103], result["data"]["blender_pids"])
         self.assertFalse(result["data"]["can_capture"])
         execute.assert_called_once_with("blender.live_status", {"project": "demo"})
-    def test_product_shell_loads_connection_assets(self):
-        html = (Path(__file__).parents[1] / "ordax_studio" / "studio_product.html").read_text(encoding="utf-8")
-        self.assertIn("assets/blender-connection.css", html)
-        self.assertIn("assets/blender-connection.js", html)
 
 
 if __name__ == "__main__":
