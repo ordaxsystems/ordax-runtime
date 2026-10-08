@@ -157,6 +157,12 @@ try {
   if (-not $workbench) {
     throw "ORDAX Studio supervisor did not launch native Workbench"
   }
+  # A running Workbench PID alone does not prove a usable Studio window.
+  # Validate the installed bytes and real WPF HWND, not only source assets.
+  & (Join-Path $PSScriptRoot "assert-installed-studio-ux.ps1") `
+    -InstallRoot $installRoot `
+    -WorkbenchProcessId $workbench.Id `
+    -WindowTimeoutSeconds 60
   Write-Host "ORDAX_WORKBENCH_READY"
 
   $null = Wait-OrdaxReady -Label "ORDAX_STUDIO_RUNTIME"
