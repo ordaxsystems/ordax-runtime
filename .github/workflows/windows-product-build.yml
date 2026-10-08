@@ -11,6 +11,8 @@ on:
       - "native/ordax-workbench/**"
       - "scripts/windows/build-ordax-studio-product.ps1"
       - "scripts/windows/assert-release-authenticode.ps1"
+      - "scripts/windows/assert-release-provenance.ps1"
+      - "tests/test_release_provenance.py"
       - "tests/test_windows_product_packaging.py"
       - "pyproject.toml"
       - "studio-source.lock.json"
@@ -32,7 +34,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
-        run: python -m unittest tests.test_windows_product_packaging
+        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -414,11 +416,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout tagged Runtime source and canonical Studio lock
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Download validated Windows installer
         uses: actions/download-artifact@v4
         with:
           name: ordax-studio-windows-x64
           path: artifact
+      - name: Verify release provenance and artifact digest
+        shell: powershell
+        run: |
+          .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Verify production Authenticode signature
         shell: powershell
         run: |
@@ -438,8 +448,7 @@ jobs:
           cmd /c "gh release view $tag --repo $env:GITHUB_REPOSITORY >nul 2>nul"
           $releaseExists = $LASTEXITCODE -eq 0
           if ($releaseExists) {
-            gh release upload $tag $installer.FullName $checksums.FullName --clobber --repo $env:GITHUB_REPOSITORY
-          } else {
-            gh release create $tag $installer.FullName $checksums.FullName --verify-tag --title "ORDAX Studio $tag" --generate-notes --repo $env:GITHUB_REPOSITORY
+            throw "Release tag already published. Refusing to replace immutable installer assets."
           }
+          gh release create $tag $installer.FullName $checksums.FullName --verify-tag --title "ORDAX Studio $tag" --generate-notes --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) { throw "GitHub Release publication failed" }

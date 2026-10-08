@@ -107,3 +107,17 @@ O pipeline `.github/workflows/windows-product-build.yml` deve provar em cada mud
 - desinstalação e remoção do autorun do Runtime.
 
 A compatibilidade legada existe para permitir uma migração correta; ela não redefine o nome atual do produto.
+
+## Publicação Windows: proveniência e assinatura
+
+Uma execução de PR de `Windows Product Build` produz **candidato de instalador para validação**, não um release público. A publicação pública ocorre exclusivamente por tag e segue gates na ordem:
+
+1. resolver `studio-source.lock.json` da própria revisão tagueada, mantendo `ordaxsystems/ordax-apps` como SSOT do source Studio;
+2. exigir que a tag seja exatamente `v<version>` do lock, com um único `ORDAX-Studio-Setup-<version>-x64.exe`;
+3. verificar que `SHA256SUMS.txt` possui exatamente um hash SHA-256 válido desse instalador e que os bytes reais conferem;
+4. exigir assinatura Authenticode válida, timestamp confiável e cadeia não autoassinada;
+5. publicar **somente se a tag não tiver release anterior**, sem sobrescrever binários já distribuídos.
+
+O gate de proveniência é `scripts/windows/assert-release-provenance.ps1`, com cenários positivos e negativos exercitados no Windows CI. O verificador da assinatura permanece `scripts/windows/assert-release-authenticode.ps1`. A etapa de publicação faz checkout da revisão marcada pela tag antes de chamar os scripts; nenhum verificador é inferido de artefatos de outro job.
+
+**Dependência operacional externa:** atualmente o pipeline possui verificação de assinatura, mas não provisiona nem executa um assinador de produção. Portanto **não há release público pronto apenas porque o build e o smoke passaram**. Não adicionar certificados autoassinados, chaves privadas em source/CI ou publicar candidato sem o gate. Integrar um serviço de assinatura autorizado, com custódia/rotação/auditoria, pertence ao processo de release da plataforma e exige configuração real separada. Também não presumir que o computador do usuário foi atualizado quando há apenas package candidate CI.
