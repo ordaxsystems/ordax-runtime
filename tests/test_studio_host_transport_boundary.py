@@ -63,6 +63,26 @@ class StudioHostTransportBoundaryTests(unittest.TestCase):
         self.assertIn('"authorize_remote_app_intelligence_grant"', bridge)
         self.assertIn('"revoke_remote_app_intelligence_grant"', bridge)
 
+    def test_privileged_studio_webview_rejects_foreign_navigation_and_messages(self) -> None:
+        native = (ROOT / "native" / "ordax-workbench" / "MainWindow.xaml.cs").read_text(encoding="utf-8")
+        self.assertIn('TrustedStudioDocument = "https://ordax.local/studio_product.html"', native)
+        self.assertIn("StudioView.CoreWebView2.NavigationStarting +=", native)
+        self.assertIn("StudioView.CoreWebView2.NewWindowRequested +=", native)
+        self.assertIn("args.Cancel = true", native)
+        self.assertIn("args.Handled = true", native)
+        self.assertIn("IsTrustedStudioSource(args.Uri)", native)
+        self.assertIn("IsTrustedStudioSource(e.Source)", native)
+        self.assertIn('uri.UserInfo.Length == 0', native)
+        self.assertIn('uri.Query.Length == 0', native)
+        self.assertIn('"/studio_product.html"', native)
+        self.assertLess(
+            native.index("if (!IsTrustedStudioSource(e.Source))"),
+            native.index("JsonDocument.Parse(e.WebMessageAsJson)"),
+            "untrusted messages must be rejected before parsing or dispatch",
+        )
+        self.assertIn("!double.IsFinite(viewportWidth)", native)
+        self.assertIn("!double.IsFinite(width)", native)
+
     def test_host_bridge_is_in_python_package_data(self) -> None:
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         package_data = project["tool"]["setuptools"]["package-data"]["ordax_studio"]
