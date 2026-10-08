@@ -39,7 +39,7 @@
       const message=event.data||{};
       if(message.type==='ordax-assistant-surface-status'){
         // Native host owns navigation state. Never accept provider URLs, cookies or auth claims.
-        if(['loading','ready','error','hidden'].includes(message.state)){
+        if(['loading','ready','error','unavailable','hidden'].includes(message.state)){
           window.dispatchEvent(new CustomEvent('ordax-assistant-surface-status',{
             detail:{state:message.state}
           }));

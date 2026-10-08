@@ -28,10 +28,10 @@ function fixture(){
 
 test('native provider status is forwarded through the existing host bridge',()=>{
   const f=fixture();
-  for(const state of ['loading','ready','error','hidden']){
+  for(const state of ['loading','ready','error','unavailable','hidden']){
     f.events.get('message')({data:{type:'ordax-assistant-surface-status',state}});
   }
-  assert.deepEqual(f.dispatched.map(e=>e.detail.state),['loading','ready','error','hidden']);
+  assert.deepEqual(f.dispatched.map(e=>e.detail.state),['loading','ready','error','unavailable','hidden']);
   assert.ok(f.dispatched.every(e=>e.type==='ordax-assistant-surface-status'));
 });
 
@@ -50,4 +50,12 @@ test('assistant status never replaces or triggers an RPC method',()=>{
   f.events.get('message')({data:{type:'ordax-assistant-surface-status',state:'loading',id:'rpc-1-123',result:'fake'}});
   assert.equal(f.dispatched.length,1);
   assert.equal(f.dispatched[0].detail.state,'loading');
+});
+
+test('WebView2 init failures are surfaced as bounded unavailable status, not credentials',()=>{
+  const f=fixture();
+  f.events.get('message')({data:{type:'ordax-assistant-surface-status',state:'unavailable',access_token:'private',url:'https://secret.invalid'}});
+  assert.equal(f.dispatched.length,1);
+  assert.equal(f.dispatched[0].detail.state,'unavailable');
+  assert.deepEqual(Object.keys(f.dispatched[0].detail),['state']);
 });
