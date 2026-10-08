@@ -428,7 +428,7 @@ jobs:
       - name: Verify release provenance and artifact digest
         shell: powershell
         run: |
-          .\\scripts\\windows\\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\\studio-source.lock.json" -ArtifactDirectory ".\\artifact"
+          .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Verify production Authenticode signature
         shell: powershell
         run: |
