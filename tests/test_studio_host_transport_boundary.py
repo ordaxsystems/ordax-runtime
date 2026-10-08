@@ -73,6 +73,28 @@ class StudioHostTransportBoundaryTests(unittest.TestCase):
         self.assertLess(check, reactivate)
         self.assertIn("return;", section[check:reactivate])
 
+    def test_native_provider_navigation_status_stays_bounded_and_origin_safe(self) -> None:
+        native = (ROOT / "native" / "ordax-workbench" / "MainWindow.xaml.cs").read_text(encoding="utf-8")
+        self.assertIn('ProviderView.CoreWebView2.NavigationStarting +=', native)
+        self.assertIn('ProviderView.CoreWebView2.NavigationCompleted +=', native)
+        self.assertIn('args.NavigationId != _providerNavigationId', native)
+        self.assertIn('args.IsSuccess ? "ready" : "error"', native)
+        self.assertIn('JsonSerializer.Serialize(new { type = "ordax-assistant-surface-status", state })', native)
+        self.assertIn('PostProviderNavigationState(_providerNavigationState);', native)
+        self.assertIn('PostProviderNavigationState("hidden");', native)
+        self.assertIn("if (!IsTrustedStudioSource(e.Source))", native)
+        self.assertIn("window.dispatchEvent(new CustomEvent('ordax-assistant-surface-status'", self.host)
+        self.assertIn("detail:{state:message.state}", self.host)
+
+    @unittest.skipUnless(shutil.which("node"), "node is required for JS event contract tests")
+    def test_native_provider_event_bridge_works_in_js_vm(self) -> None:
+        subprocess.run(
+            [shutil.which("node") or "node", "--test", str(ROOT / "tests" / "studio_native_provider_status.test.mjs")],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
     def test_package_contains_only_host_adapter_not_portable_source(self) -> None:
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         package_data = project["tool"]["setuptools"]["package-data"]["ordax_studio"]

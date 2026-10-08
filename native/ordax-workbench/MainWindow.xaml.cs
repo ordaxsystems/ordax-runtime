@@ -43,6 +43,8 @@ public partial class MainWindow : Window
     private bool _previewViewReady;
     private bool _browserViewReady;
     private long _assistantSurfaceGeneration;
+    private ulong _providerNavigationId;
+    private string _providerNavigationState = "loading";
 
     public MainWindow()
     {
@@ -172,6 +174,18 @@ public partial class MainWindow : Window
 
     private void ConfigureProviderView()
     {
+        ProviderView.CoreWebView2.NavigationStarting += (_, args) =>
+        {
+            _providerNavigationId = args.NavigationId;
+            SetProviderNavigationState("loading");
+        };
+        ProviderView.CoreWebView2.NavigationCompleted += (_, args) =>
+        {
+            // Ignore a superseded navigation, including redirects or provider changes.
+            if (args.NavigationId != _providerNavigationId)
+                return;
+            SetProviderNavigationState(args.IsSuccess ? "ready" : "error");
+        };
         ProviderView.CoreWebView2.SourceChanged += (_, _) =>
         {
             ProviderAddress.Text = ProviderView.Source?.ToString() ?? "";
@@ -272,6 +286,22 @@ public partial class MainWindow : Window
         }
     }
 
+    private void SetProviderNavigationState(string state)
+    {
+        _providerNavigationState = state;
+        if (ProviderSurfaceHost.Visibility == Visibility.Visible)
+            PostProviderNavigationState(state);
+    }
+
+    private void PostProviderNavigationState(string state)
+    {
+        if (!_studioViewReady || StudioView.CoreWebView2 is null)
+            return;
+        // Only bounded navigation state: never provider URL, browser tokens or login claims.
+        StudioView.CoreWebView2.PostWebMessageAsJson(
+            JsonSerializer.Serialize(new { type = "ordax-assistant-surface-status", state }));
+    }
+
     private async Task ApplyAssistantSurfaceAsync(JsonElement root)
     {
         // Every request invalidates outstanding asynchronous provider initialization.
@@ -282,6 +312,7 @@ public partial class MainWindow : Window
         if (!active)
         {
             ProviderSurfaceHost.Visibility = Visibility.Collapsed;
+            PostProviderNavigationState("hidden");
             return;
         }
 
@@ -289,6 +320,7 @@ public partial class MainWindow : Window
             !root.TryGetProperty("viewport", out var viewport))
         {
             ProviderSurfaceHost.Visibility = Visibility.Collapsed;
+            PostProviderNavigationState("hidden");
             return;
         }
 
@@ -313,6 +345,7 @@ public partial class MainWindow : Window
             StudioView.ActualWidth <= 0 || StudioView.ActualHeight <= 0)
         {
             ProviderSurfaceHost.Visibility = Visibility.Collapsed;
+            PostProviderNavigationState("hidden");
             return;
         }
 
@@ -331,6 +364,7 @@ public partial class MainWindow : Window
         ProviderSurfaceHost.Width = hostWidth;
         ProviderSurfaceHost.Height = hostHeight;
         ProviderSurfaceHost.Visibility = Visibility.Visible;
+        PostProviderNavigationState(_providerNavigationState);
     }
 
     private void LoadProviders()
