@@ -121,3 +121,15 @@ Uma execução de PR de `Windows Product Build` produz **candidato de instalador
 O gate de proveniência é `scripts/windows/assert-release-provenance.ps1`, com cenários positivos e negativos exercitados no Windows CI. O verificador da assinatura permanece `scripts/windows/assert-release-authenticode.ps1`. A etapa de publicação faz checkout da revisão marcada pela tag antes de chamar os scripts; nenhum verificador é inferido de artefatos de outro job.
 
 **Dependência operacional externa:** atualmente o pipeline possui verificação de assinatura, mas não provisiona nem executa um assinador de produção. Portanto **não há release público pronto apenas porque o build e o smoke passaram**. Não adicionar certificados autoassinados, chaves privadas em source/CI ou publicar candidato sem o gate. Integrar um serviço de assinatura autorizado, com custódia/rotação/auditoria, pertence ao processo de release da plataforma e exige configuração real separada. Também não presumir que o computador do usuário foi atualizado quando há apenas package candidate CI.
+
+## Identidade autorizada do publicador Windows
+
+**Assinatura válida não implica assinatura autorizada pelo OrdaX.** O gate `scripts/windows/assert-release-authenticode.ps1` verifica, além da validade Authenticode, timestamp e rejeição de certificado autoassinado, que o thumbprint do certificado emissor esteja na lista de publicadores aprovada para distribuição ORDAX.
+
+- SSOT da identidade de assinatura: variável de ambiente GitHub `ORDAX_RELEASE_SIGNER_THUMBPRINTS` no ambiente de deployment `windows-production-release`. Seu valor deve ser um thumbprint SHA-1 de certificado (40 caracteres hexadecimais), ou uma lista de até quatro separados por vírgula para rotação controlada. Thumbprint identifica o certificado, **não** substitui SHA-256 do instalador.
+- A promoção da tag usa `environment: windows-production-release`. Os responsáveis precisam configurar explicitamente as regras de proteção/revisão do ambiente nas configurações do GitHub; declarar o nome do ambiente no YAML **não cria aprovação obrigatória por si só**.
+- Variável ausente, lista inválida/duplicada, certificado diferente, assinatura inválida/ausente, timestamp ausente e certificado autoassinado bloqueiam publicação, sem fallback para qualquer outro signer Windows confiável.
+- A identidade aprovada deve vir do certificado real da organização, verificada por processo independente, nunca ser inferida do próprio binário recebido. A manutenção e rotação dessa identidade cabem ao owner do processo de release do Runtime. Não gravar chaves privadas ou tokens de signing em código, workflows, logs ou arquivos de teste.
+- Testes de assinatura em `tests/test_release_signer_identity.py` usam dados simulados **apenas para provar a política do gate**; não substituem assinatura real nem smoke dos bytes assinados.
+
+A ausência atual de um serviço de assinatura de produção segue registrada na issue #49. O build de PR ainda produz somente candidato interno; não iniciar publicação por tag até a assinatura e o teste do artefato assinado estarem integrados ao workflow autorizado.

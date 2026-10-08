@@ -14,6 +14,7 @@ on:
       - "scripts/windows/assert-release-provenance.ps1"
       - "tests/test_release_provenance.py"
       - "tests/test_windows_product_packaging.py"
+      - "tests/test_release_signer_identity.py"
       - "pyproject.toml"
       - "studio-source.lock.json"
       - ".github/workflows/windows-product-build.yml"
@@ -34,7 +35,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
-        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance
+        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance tests.test_release_signer_identity
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -409,6 +410,7 @@ jobs:
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/v')
+    environment: windows-production-release
     needs:
       - build-installer
       - install-smoke
@@ -429,12 +431,14 @@ jobs:
         shell: powershell
         run: |
           .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
-      - name: Verify production Authenticode signature
+      - name: Verify production Authenticode signature and authorized publisher
         shell: powershell
+        env:
+          ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
         run: |
           $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
           if (-not $installer) { throw "Validated ORDAX Studio installer is missing" }
-          .\scripts\windows\assert-release-authenticode.ps1 -Path $installer.FullName
+          .\scripts\windows\assert-release-authenticode.ps1 -Path $installer.FullName -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS
       - name: Publish GitHub Release assets
         shell: powershell
         env:
