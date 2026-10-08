@@ -204,7 +204,10 @@ class WindowsProductPackagingTests(unittest.TestCase):
     def test_windows_start_script_uses_only_installed_product_not_runtime_source(self) -> None:
         script = (ROOT / "scripts" / "windows" / "ordax-studio-start.ps1").read_text(encoding="utf-8")
         project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn("Programs\\ORDAX\\ORDAX Studio.exe", script)
+        self.assertIn("HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{0D31F22D-8451-4CF4-9E34-F0D4D857F55F}_is1", script)
+        self.assertIn("$product.InstallLocation", script)
+        self.assertIn("Join-Path $installLocation \"ORDAX Studio.exe\"", script)
+        self.assertNotIn("Programs\\ORDAX\\ORDAX Studio.exe", script)
         self.assertIn("Start-Process -FilePath $studioExe", script)
         self.assertIn("Install the signed product release", script)
         self.assertNotIn("ordax_studio.web_desktop", script)
