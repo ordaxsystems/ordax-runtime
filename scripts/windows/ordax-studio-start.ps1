@@ -1,32 +1,23 @@
-param(
-    [string]$PythonPath = "",
-    [switch]$Foreground
-)
+# Launch only the installed ORDAX Studio application at its authoritative Inno Setup location.
+# Never start a Runtime-checkout HTML snapshot or a Python source-shell fallback.
+param([switch]$Foreground)
 
 $ErrorActionPreference = "Stop"
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
-if (-not $PythonPath) {
-    $repoPythonw = Join-Path $RepoRoot ".venv\Scripts\pythonw.exe"
-    $repoPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
-    if (Test-Path $repoPythonw) { $PythonPath = $repoPythonw }
-    elseif (Test-Path $repoPython) { $PythonPath = $repoPython }
-    else {
-        $command = Get-Command pythonw.exe -ErrorAction SilentlyContinue
-        if (-not $command) { $command = Get-Command python.exe -ErrorAction Stop }
-        $PythonPath = $command.Source
-    }
+$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{0D31F22D-8451-4CF4-9E34-F0D4D857F55F}_is1'
+$product = Get-ItemProperty -LiteralPath $uninstallKey -ErrorAction SilentlyContinue
+$installLocation = [string]$product.InstallLocation
+if ([string]::IsNullOrWhiteSpace($installLocation) -or
+    -not [System.IO.Path]::IsPathRooted($installLocation)) {
+    throw "ORDAX Studio is not registered for the current Windows user. Install the signed product release; Runtime source is not a Studio UI."
 }
 
-if (-not (Test-Path $PythonPath)) {
-    throw "Python executable not found: $PythonPath"
+$studioExe = Join-Path $installLocation "ORDAX Studio.exe"
+if (-not (Test-Path -LiteralPath $studioExe -PathType Leaf)) {
+    throw "The registered ORDAX Studio installation has no executable: $studioExe. Repair the installed product instead of starting source-tree UI."
 }
-
-$env:PYTHONPATH = $RepoRoot
-$arguments = @("-m", "ordax_studio.web_desktop")
 if ($Foreground) {
-    & $PythonPath @arguments
+    & $studioExe
     exit $LASTEXITCODE
 }
-
-Start-Process -FilePath $PythonPath -ArgumentList $arguments -WorkingDirectory $RepoRoot
+Start-Process -FilePath $studioExe -WorkingDirectory (Split-Path -Parent $studioExe)

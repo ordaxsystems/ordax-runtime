@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -16,7 +15,6 @@ from ordax_dev_agent.computer_filesystem_actions import (
 )
 
 from .blender_connection import prepare_blender_connection
-from .instance_lock import SingleInstanceLock
 
 APP_NAME = "ORDAX Studio"
 
@@ -761,29 +759,11 @@ class StudioApi:
 
 
 def main() -> int:
-    try:
-        import webview
-    except ImportError as error:
-        raise SystemExit("pywebview is required for ORDAX Studio WebView shell") from error
-    config = AgentConfig.from_env()
-    lock = SingleInstanceLock(config.state_dir / "studio-web.lock")
-    if not lock.acquire():
-        return 0
-    try:
-        api = StudioApi(ActionRegistry(config))
-        html = Path(__file__).with_name("studio.html").resolve()
-        webview.create_window(
-            APP_NAME,
-            url=html.as_uri(),
-            js_api=api,
-            width=1600,
-            height=960,
-            min_size=(1180, 720),
-        )
-        webview.start(gui="edgechromium", debug=False)
-        return 0
-    finally:
-        lock.release()
+    raise SystemExit(
+        "A interface historica 'ordax-studio-web' foi descontinuada. "
+        "Abra o ORDAX Studio.exe instalado, que utiliza somente o Studio "
+        "canonico de ordax-apps, fixado pelo Runtime no empacotamento Windows."
+    )
 
 
 if __name__ == "__main__":

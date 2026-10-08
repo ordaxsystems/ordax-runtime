@@ -359,36 +359,12 @@ class OrdaxStudioWebTests(unittest.TestCase):
             get.assert_any_call("https://example.test/health", timeout=4.0, follow_redirects=False)
 
 
-    def test_web_shell_contains_repository_first_home_and_preview_workspace(self):
+    def test_host_runtime_has_no_second_portable_studio_source(self):
         root = Path(__file__).resolve().parents[1] / "ordax_studio"
-        html = (root / "studio.html").read_text(encoding="utf-8")
-        script = (root / "assets" / "studio.js").read_text(encoding="utf-8")
-        stylesheet = (root / "assets" / "studio.css").read_text(encoding="utf-8")
-        self.assertIn('id="projectHome"', html)
-        self.assertIn('id="projectGrid"', html)
-        self.assertIn('id="workspace"', html)
-        self.assertIn('id="workspaceProjectList"', html)
-        self.assertIn('id="overviewCanvas"', html)
-        self.assertIn('id="webPreview"', html)
-        self.assertIn('class="projectSidebar"', html)
-        self.assertIn('class="mainPane"', html)
-        self.assertIn('class="previewPane"', html)
-        self.assertIn('data-view="overview"', html)
-        self.assertIn('data-view="mcp"', html)
-        self.assertIn("projects_catalog", script)
-        self.assertIn("openProject", script)
-        self.assertIn("prepareProjectPreview", script)
-        self.assertIn("blender_prepare", script)
-        self.assertIn("MODELAGEM BLENDER TIPADA", script)
-        self.assertIn("workflow_actions", script)
-        self.assertIn("state.bootstrap?.modeling", script)
-        self.assertIn("product_status", script)
-        self.assertIn("CONEXÃO DO PRODUTO", script)
-        self.assertIn("adotado", script)
-        self.assertIn("preview_start", script)
-        self.assertIn("preview_capture", script)
-        self.assertIn("workspaceProjectList", stylesheet)
-        self.assertIn("previewFocus", stylesheet)
+        self.assertFalse((root / "studio.html").exists())
+        self.assertFalse((root / "studio_product.html").exists())
+        self.assertFalse((root / "assets").exists())
+
 
 
 if __name__ == "__main__":

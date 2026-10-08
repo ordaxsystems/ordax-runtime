@@ -79,11 +79,6 @@ class StudioProjectResumeContractTests(unittest.TestCase):
                 self.assertEqual("alpha", api.project)
                 self.assertIsNone(api.session_id)
 
-    def test_shared_surface_prefers_explicit_startup_then_persisted_active(self) -> None:
-        script = (Path(__file__).resolve().parents[1] / "ordax_studio" / "assets" / "studio.js").read_text(encoding="utf-8")
-        self.assertIn("data.startup_project||data.active_project||null", script)
-        self.assertIn("state.projects.some(project=>project.slug===requested)", script)
-        self.assertNotIn("state.projects[0]", script)
 
 
 if __name__ == "__main__":

@@ -761,6 +761,11 @@ def main() -> int:
     try:
         api = StudioProductApi(ActionRegistry(config))
         html = Path(__file__).with_name("studio_product.html").resolve()
+        if not html.is_file():
+            raise SystemExit(
+                "UI canonica do Studio nao instalada. Use o instalador oficial do ORDAX Studio; "
+                "o source do Runtime nao inclui HTML/assets portateis."
+            )
         webview.create_window(
             APP_NAME,
             url=html.as_uri(),
