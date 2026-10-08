@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private bool _providerViewReady;
     private bool _previewViewReady;
     private bool _browserViewReady;
+    private long _assistantSurfaceGeneration;
 
     public MainWindow()
     {
@@ -273,6 +274,9 @@ public partial class MainWindow : Window
 
     private async Task ApplyAssistantSurfaceAsync(JsonElement root)
     {
+        // Every request invalidates outstanding asynchronous provider initialization.
+        // A late activation must not reveal the browser after the user chose Local.
+        var generation = ++_assistantSurfaceGeneration;
         var active = root.TryGetProperty("active", out var activeElement) &&
                      activeElement.ValueKind == JsonValueKind.True;
         if (!active)
@@ -313,6 +317,8 @@ public partial class MainWindow : Window
         }
 
         await EnsureProviderViewAsync();
+        if (generation != _assistantSurfaceGeneration)
+            return;
 
         var scaleX = StudioView.ActualWidth / viewportWidth;
         var scaleY = StudioView.ActualHeight / viewportHeight;
