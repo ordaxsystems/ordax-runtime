@@ -191,16 +191,15 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("git status --porcelain -- ordax_studio", workflow)
         self.assertIn("ORDAX_STUDIO_RUNTIME_SOURCE_UNCHANGED", workflow)
 
-    def test_product_shell_is_project_host_not_embedded_chat(self) -> None:
-        product = (ROOT / "ordax_studio" / "studio_product.html").read_text(encoding="utf-8")
-        script = (ROOT / "ordax_studio" / "assets" / "studio.js").read_text(encoding="utf-8")
-        self.assertIn("ORDAX Studio", product)
-        self.assertIn("Visão geral", product)
-        self.assertIn("MCP", product)
-        self.assertNotIn("Agent / Responses", product)
-        self.assertNotIn("Browser Companion", product)
-        self.assertNotIn("Chat normal", product)
-        self.assertNotIn("agentPrompt", script)
+    def test_portable_studio_source_is_owned_only_by_ordax_apps(self) -> None:
+        build = (ROOT / "scripts" / "windows" / "build-ordax-studio-product.ps1").read_text(encoding="utf-8")
+        package = ROOT / "ordax_studio"
+        self.assertFalse((package / "studio_product.html").exists())
+        self.assertFalse((package / "studio.html").exists())
+        self.assertFalse((package / "assets").exists())
+        self.assertIn('Copy-Item (Join-Path $studioAppSource "assets\\*") $targetAssets', build)
+        self.assertIn('Join-Path $packagedStudio "studio_product.html"', build)
+        self.assertIn("ORDAX_STUDIO_PACKAGE_SOURCE_VERIFIED", build)
 
     def test_native_workbench_is_provider_neutral_and_uses_webview2(self) -> None:
         project = (ROOT / "native" / "ordax-workbench" / "Ordax.Workbench.csproj").read_text(encoding="utf-8")
@@ -208,9 +207,6 @@ class WindowsProductPackagingTests(unittest.TestCase):
         code = (ROOT / "native" / "ordax-workbench" / "MainWindow.xaml.cs").read_text(encoding="utf-8")
         bridge = (ROOT / "ordax_studio" / "workbench_bridge.py").read_text(encoding="utf-8")
         host_bridge = (ROOT / "ordax_studio" / "host_bridge.js").read_text(encoding="utf-8")
-        studio_js = (ROOT / "ordax_studio" / "assets" / "studio.js").read_text(encoding="utf-8")
-        blender_js = (ROOT / "ordax_studio" / "assets" / "blender-connection.js").read_text(encoding="utf-8")
-        account_js = (ROOT / "ordax_studio" / "assets" / "product_account.js").read_text(encoding="utf-8")
 
         self.assertIn("Microsoft.Web.WebView2", project)
         self.assertIn("WebView2CompositionControl", xaml)
@@ -231,10 +227,6 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("window.chrome?.webview", host_bridge)
         self.assertIn("window.pywebview?.api", host_bridge)
         self.assertIn("Object.defineProperty(window,'ordaxStudioHost'", host_bridge)
-        for portable in (studio_js, blender_js, account_js):
-            self.assertNotIn("window.chrome", portable)
-            self.assertNotIn("window.pywebview", portable)
-            self.assertNotIn("pywebviewready", portable)
 
     def test_runtime_supervisor_is_client_neutral(self) -> None:
         launcher = (ROOT / "packaging" / "windows" / "ordax_launcher.c").read_text(encoding="utf-8").lower()
