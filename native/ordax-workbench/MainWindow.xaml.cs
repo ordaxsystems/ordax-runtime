@@ -16,6 +16,22 @@ public partial class MainWindow : Window
 {
     private sealed record ProviderDefinition(string Id, string Label, string Url);
 
+    // Only the signed, local Studio entrypoint may issue privileged host bridge calls.
+    // The provider and preview WebViews deliberately do not share this transport.
+    private const string TrustedStudioDocument = "https://ordax.local/studio_product.html";
+
+    private static bool IsTrustedStudioSource(string? source)
+    {
+        if (!Uri.TryCreate(source, UriKind.Absolute, out var uri))
+            return false;
+        return uri.Scheme == Uri.UriSchemeHttps
+            && string.Equals(uri.Host, "ordax.local", StringComparison.OrdinalIgnoreCase)
+            && uri.IsDefaultPort
+            && uri.UserInfo.Length == 0
+            && string.Equals(uri.AbsolutePath, "/studio_product.html", StringComparison.Ordinal)
+            && uri.Query.Length == 0;
+    }
+
     private readonly DispatcherTimer _runtimeTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly List<ProviderDefinition> _providers = new();
     private StudioBridgeClient? _bridge;
@@ -174,8 +190,21 @@ public partial class MainWindow : Window
             assets,
             CoreWebView2HostResourceAccessKind.Allow
         );
+        // This is the privileged Studio document, not a general-purpose browser.
+        StudioView.CoreWebView2.NavigationStarting += (_, args) =>
+        {
+            if (IsTrustedStudioSource(args.Uri))
+                return;
+            args.Cancel = true;
+            LogActivity("Navegação externa bloqueada na superfície privilegiada do Studio.");
+        };
+        StudioView.CoreWebView2.NewWindowRequested += (_, args) =>
+        {
+            args.Handled = true;
+            LogActivity("Janela externa bloqueada na superfície privilegiada do Studio.");
+        };
         StudioView.CoreWebView2.WebMessageReceived += StudioWebMessageReceived;
-        StudioView.Source = new Uri("https://ordax.local/studio_product.html");
+        StudioView.Source = new Uri(TrustedStudioDocument);
     }
 
     private void ConfigureWorkbenchBrowser()
@@ -194,6 +223,13 @@ public partial class MainWindow : Window
 
     private async void StudioWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
+        // Source is taken from the WebMessage event itself; checking only StudioView.Source
+        // would permit a navigation race or messages from an unexpected document.
+        if (!IsTrustedStudioSource(e.Source))
+        {
+            LogActivity("Mensagem descartada: origem não autorizada para o bridge do Studio.");
+            return;
+        }
         string? requestId = null;
         try
         {
@@ -266,7 +302,10 @@ public partial class MainWindow : Window
         var width = ReadNumber(rect, "width");
         var height = ReadNumber(rect, "height");
 
-        if (viewportWidth <= 0 || viewportHeight <= 0 || width <= 1 || height <= 1 ||
+        if (!double.IsFinite(viewportWidth) || !double.IsFinite(viewportHeight) ||
+            !double.IsFinite(left) || !double.IsFinite(top) ||
+            !double.IsFinite(width) || !double.IsFinite(height) ||
+            viewportWidth <= 0 || viewportHeight <= 0 || width <= 1 || height <= 1 ||
             StudioView.ActualWidth <= 0 || StudioView.ActualHeight <= 0)
         {
             ProviderSurfaceHost.Visibility = Visibility.Collapsed;
