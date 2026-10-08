@@ -201,6 +201,16 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('Join-Path $packagedStudio "studio_product.html"', build)
         self.assertIn("ORDAX_STUDIO_PACKAGE_SOURCE_VERIFIED", build)
 
+    def test_windows_start_script_uses_only_installed_product_not_runtime_source(self) -> None:
+        script = (ROOT / "scripts" / "windows" / "ordax-studio-start.ps1").read_text(encoding="utf-8")
+        project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn("Programs\\ORDAX\\ORDAX Studio.exe", script)
+        self.assertIn("Start-Process -FilePath $studioExe", script)
+        self.assertIn("Install the signed product release", script)
+        self.assertNotIn("ordax_studio.web_desktop", script)
+        self.assertNotIn("$env:PYTHONPATH", script)
+        self.assertNotIn('ordax-studio-web =', project)
+
     def test_native_workbench_is_provider_neutral_and_uses_webview2(self) -> None:
         project = (ROOT / "native" / "ordax-workbench" / "Ordax.Workbench.csproj").read_text(encoding="utf-8")
         xaml = (ROOT / "native" / "ordax-workbench" / "MainWindow.xaml").read_text(encoding="utf-8")
