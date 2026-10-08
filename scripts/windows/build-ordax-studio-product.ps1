@@ -19,7 +19,7 @@ $studioAppSource = (Resolve-Path -LiteralPath $studioAppSource -ErrorAction Stop
 if ($studioAppSource) {
     $sourceLockPath = Join-Path $repoRoot "studio-source.lock.json"
     if (-not (Test-Path $sourceLockPath)) { throw "Studio source lock is missing" }
-    $sourceLock = Get-Content $sourceLockPath -Raw | ConvertFrom-Json
+    $sourceLock = Get-Content $sourceLockPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($sourceLock.schema -ne "ordax.studio-source-lock/1") { throw "Studio source lock schema is invalid" }
     if ($sourceLock.repository -ne "ordaxsystems/ordax-apps") { throw "Studio source repository is not canonical" }
     if ($sourceLock.path -ne "apps/studio") { throw "Studio source path is not canonical" }
@@ -48,7 +48,7 @@ if ($studioAppSource) {
 
     $studioAppManifestPath = Join-Path $studioAppSource "app.json"
     if (-not (Test-Path $studioAppManifestPath)) { throw "Canonical Studio app manifest is missing: $studioAppManifestPath" }
-    $studioAppManifest = Get-Content $studioAppManifestPath -Raw | ConvertFrom-Json
+    $studioAppManifest = Get-Content $studioAppManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($studioAppManifest.schema -ne "ordax.component-manifest/1" -or $studioAppManifest.id -ne "studio") {
         throw "Canonical Studio app manifest is incompatible"
     }
@@ -63,7 +63,7 @@ if ($studioAppSource) {
     if (-not (Test-Path $studioAiManifestPath)) {
         throw "Canonical Studio App Intelligence manifest is missing: $studioAiManifestPath"
     }
-    $studioAiManifest = Get-Content $studioAiManifestPath -Raw | ConvertFrom-Json
+    $studioAiManifest = Get-Content $studioAiManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if (
         $studioAiManifest.schema -ne "ordax.app-intelligence-manifest/1" -or
         $studioAiManifest.appId -ne "studio" -or
@@ -78,7 +78,7 @@ if ($studioAppSource) {
     if (-not (Test-Path $studioActionManifestPath)) {
         throw "Canonical Studio Application Action manifest is missing: $studioActionManifestPath"
     }
-    $studioActionManifest = Get-Content $studioActionManifestPath -Raw | ConvertFrom-Json
+    $studioActionManifest = Get-Content $studioActionManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if (
         $studioActionManifest.schema -ne "ordax.application-action-manifest/1" -or
         $studioActionManifest.appId -ne "studio" -or
@@ -109,7 +109,9 @@ if ($studioAppSource) {
         )
     }
     $appIntelligenceRegistryJson = $appIntelligenceRegistry | ConvertTo-Json -Depth 20
-    $portableHtml = Get-Content (Join-Path $studioAppSource "src\index.html") -Raw
+    # PowerShell 5.1 defaults Get-Content to the Windows ANSI code page.
+    # Explicit UTF-8 prevents irreversible mojibake before writing packaged HTML.
+    $portableHtml = Get-Content (Join-Path $studioAppSource "src\index.html") -Raw -Encoding UTF8
     $portableHtml = $portableHtml.Replace("../assets/", "assets/")
     $portableHtml = $portableHtml.Replace(
         '<script src="host_contract.js"></script>',
