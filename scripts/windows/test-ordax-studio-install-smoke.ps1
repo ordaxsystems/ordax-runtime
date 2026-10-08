@@ -190,8 +190,14 @@ try {
 
   # This private Python orphan loads OpenSSL from the installed ORDAX runtime
   # and survives its launcher. It must be retired before DLL replacement.
+  $orphanScript = Join-Path $env:RUNNER_TEMP "ordax-private-runtime-lock.py"
+  @(
+    "import ssl"
+    "import time"
+    "time.sleep(300)"
+  ) | Set-Content -LiteralPath $orphanScript -Encoding ascii
   $orphanPrivatePython = Start-Process -FilePath $privatePython -ArgumentList @(
-    "-c", "import ssl,time; time.sleep(300)"
+    ('"{0}"' -f $orphanScript)
   ) -WorkingDirectory $installRoot -PassThru
   Start-Sleep -Seconds 1
   $orphanPrivatePython.Refresh()
