@@ -265,7 +265,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
             self.assertIn(marker, smoke)
         self.assertIn('Wait-OrdaxReady -Label "ORDAX_STUDIO_RUNTIME"', smoke)
         self.assertIn("workbench\\ORDAX Workbench.exe", smoke)
-        self.assertIn("-ArtifactDirectory", smoke)
+        self.assertIn("[string]$ArtifactDirectory", smoke)
         self.assertIn("Exactly one ORDAX Studio installer", smoke)
         for source in ("ordax_core", "ordax_dev_agent", "ordax_device_agent", "ordax_studio"):
             self.assertIn(f'- "{source}/**"', workflow)
