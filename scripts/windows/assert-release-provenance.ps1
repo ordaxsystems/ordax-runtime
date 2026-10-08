@@ -60,7 +60,17 @@ $checksumFileName = $checksumMatch.Groups[2].Value
 if ($checksumFileName -cne $expectedName) {
     throw "Release checksum does not refer to canonical installer"
 }
-$actualHash = (Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+$installerStream = [System.IO.File]::OpenRead($executables[0].FullName)
+try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $actualHash = ([System.BitConverter]::ToString($sha256.ComputeHash($installerStream))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
+} finally {
+    $installerStream.Dispose()
+}
 if ($actualHash -cne $expectedHash) {
     throw "Release artifact SHA-256 does not match verified checksum manifest"
 }
