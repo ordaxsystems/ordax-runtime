@@ -275,6 +275,13 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("SignatureStatus]::Valid", gate)
         self.assertIn("TimeStamperCertificate", gate)
         self.assertIn("self-signed certificate", gate)
+        self.assertIn("Checkout tagged Runtime source and canonical Studio lock", workflow)
+        self.assertIn("Verify release provenance and artifact digest", workflow)
+        self.assertIn("assert-release-provenance.ps1", workflow)
+        self.assertLess(workflow.index("Verify release provenance and artifact digest"),
+                        workflow.index("Verify production Authenticode signature"))
+        self.assertLess(workflow.index("Verify production Authenticode signature"),
+                        workflow.index("Publish GitHub Release assets"))
 
     def test_release_publish_handles_missing_release_without_powershell_error_stream_failure(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
@@ -282,7 +289,9 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('cmd /c "gh release view $tag --repo $env:GITHUB_REPOSITORY >nul 2>nul"', workflow)
         self.assertIn("$releaseExists = $LASTEXITCODE -eq 0", workflow)
         self.assertNotIn('gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null', workflow)
-        self.assertIn("gh release upload $tag", workflow)
+        self.assertNotIn("gh release upload $tag", workflow)
+        self.assertNotIn("--clobber", workflow)
+        self.assertIn("Release tag already published. Refusing to replace immutable installer assets.", workflow)
         self.assertIn("gh release create $tag", workflow)
 
 
