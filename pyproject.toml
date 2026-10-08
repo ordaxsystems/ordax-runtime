@@ -41,4 +41,4 @@ include = ["mcp_blender_unity*", "ordax_core*", "ordax_studio*", "ordax_dev_agen
 
 [tool.setuptools.package-data]
 ordax_dev_agent = ["assets/*.py", "assets/*.cs", "assets/*.json"]
-ordax_studio = ["*.html", "*.js", "*.json", "assets/*.js", "assets/*.css"]
+ordax_studio = ["host_bridge.js", "*.json"]
