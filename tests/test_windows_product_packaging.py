@@ -295,7 +295,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         lock = json.loads(source_lock)
         self.assertRegex(lock["commit"], r"^[0-9a-f]{40}$")
         self.assertIn('"path": "apps/studio"', source_lock)
-        self.assertIn('"version": "0.5.7"', source_lock)
+        self.assertIn('"version": "0.5.8"', source_lock)
         self.assertIn("repository: ordaxsystems/ordax-apps", workflow)
         self.assertIn("ORDAX_STUDIO_SOURCE_COMMIT", workflow)
         self.assertIn("ref: ${{ env.ORDAX_STUDIO_SOURCE_COMMIT }}", workflow)
