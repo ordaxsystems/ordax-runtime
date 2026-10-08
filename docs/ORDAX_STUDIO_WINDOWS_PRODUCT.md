@@ -143,3 +143,13 @@ O build Windows verifica a revisão exata do lock, materializa HTML e assets **e
 O comando histórico `ordax-studio-web` foi aposentado. A entrada de conveniência `scripts/windows/ordax-studio-start.ps1` consulta exclusivamente a localização registrada pelo **Inno Setup AppId canônico** do usuário no Registro do Windows e lança o `ORDAX Studio.exe` instalado. Não presume a pasta default, não inicia HTML do repositório nem força instalação de candidato de CI. O executável instalado e o Runtime continuam possuindo versionamento independente.
 
 Compatibilidades de upgrade estritamente necessárias — como o executável `ORDAX Dev.exe` byte-idêntico ao `ORDAX Studio.exe` — permanecem somente pelo contrato explícito de migração Windows, sem uma segunda implementação funcional. Sua retirada exige prova de upgrade de instalações antigas.
+
+## Aposentadoria de instaladores e shells paralelos
+
+O instalador Inno Setup `packaging/windows/ordax-studio.iss` e o pipeline `windows-product-build.yml` são os únicos proprietários da distribuição Windows. O script experimental `scripts/windows/ordax-studio-install.ps1` foi removido: ele criava um ambiente Python/Git gerenciado, lançava um HTML local e recriava atalhos `ORDAX Dev` fora do instalador canônico, com estado e ciclo de vida paralelos.
+
+Também foram removidos a interface Tkinter `ordax_studio/desktop.py`, o seu preview `ordax_studio/preview.py`, o comando `ordax-studio desktop` e o executável Python `ordax-studio-desktop`. Não existe mais um segundo shell desktop a manter/testar. O comando `ordax-studio` permanece como CLI de diagnóstico/contexto e `ordax-mcp` continua atendendo o mesmo Runtime; o host Windows usa a UI versionada de `ordax-apps`.
+
+O script `scripts/windows/ordax-studio-start.ps1` é apenas lançador do produto registrado com o **AppId Inno Setup** do usuário: não instala nada, não clona Git, não cria agendadores/atalhos e não inicia o source Python. Sem produto instalado, falha com orientação para obter uma distribuição oficial assinada.
+
+Compatibilidade de upgrade é diferente de manter UI duplicada: a migração pelo instalador canônico ainda reconhece `ORDAX Dev.exe`, atalhos e tarefas do runtime histórico **somente para aposentá-los sem perda de dados**. Não voltar a registrar essas entradas no computador.

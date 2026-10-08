@@ -47,7 +47,6 @@ def build_parser() -> argparse.ArgumentParser:
     checkpoint.add_argument("summary")
     finish = sub.add_parser("finish", help="finish a persistent session")
     finish.add_argument("session_id", type=int)
-    sub.add_parser("desktop", help="open the ORDAX Studio desktop shell")
     sub.add_parser("mcp", help="start the local ORDAX project MCP server")
     return parser
 
@@ -58,9 +57,6 @@ def main(argv: list[str] | None = None) -> int:
         from ordax_dev_agent.mcp_server import main as mcp_main
         mcp_main()
         return 0
-    if args.command == "desktop":
-        from .desktop import main as desktop_main
-        return desktop_main([])
     agent = registry()
     if args.command == "status":
         emit(status(agent))

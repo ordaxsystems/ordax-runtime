@@ -1,40 +1,34 @@
-import io
-import json
-import os
-import tempfile
+from __future__ import annotations
+
+import tomllib
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
 
-from ordax_studio.desktop import main
+from ordax_studio.cli import build_parser
 
 
-class OrdaxStudioDesktopTests(unittest.TestCase):
-    def test_smoke_uses_registered_projects_without_gui(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            project = root / "project"
-            project.mkdir()
-            (root / "agent-settings.json").write_text(json.dumps({
-                "default_project": "demo",
-                "projects": {"demo": {"path": str(project), "apps": ["blender", "unity"]}},
-            }), encoding="utf-8")
-            env = {
-                "ORDAX_AGENT_STATE_DIR": str(root),
-                "ORDAX_MEMORY_DB": str(root / "memory.db"),
-            }
+ROOT = Path(__file__).resolve().parents[1]
 
-            with patch.dict(os.environ, env, clear=False):
-                output = io.StringIO()
-                with redirect_stdout(output):
-                    self.assertEqual(main(["--smoke"]), 0)
-                payload = json.loads(output.getvalue())
-                self.assertEqual(payload["product"], "ORDAX Studio")
-                self.assertEqual(payload["default_project"], "demo")
-                self.assertEqual(payload["projects"][0]["apps"], ["blender", "unity"])
-                self.assertGreater(payload["action_count"], 0)
-                self.assertEqual(payload["memory"]["counts"]["sessions"], 0)
+
+class OrdaxStudioSingleDesktopTests(unittest.TestCase):
+    def test_tkinter_desktop_and_preview_are_not_shipped(self) -> None:
+        self.assertFalse((ROOT / "ordax_studio" / "desktop.py").exists())
+        self.assertFalse((ROOT / "ordax_studio" / "preview.py").exists())
+        self.assertFalse((ROOT / "ordax_studio" / "assets").exists())
+
+    def test_cli_does_not_offer_a_second_desktop_implementation(self) -> None:
+        parser = build_parser()
+        subcommands = next(a.choices for a in parser._actions if hasattr(a, "choices") and isinstance(a.choices, dict))
+        self.assertNotIn("desktop", subcommands)
+        self.assertIn("status", subcommands)
+        self.assertIn("mcp", subcommands)
+
+    def test_python_package_has_no_parallel_studio_desktop_entrypoint(self) -> None:
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        scripts = pyproject["project"]["scripts"]
+        self.assertNotIn("ordax-studio-desktop", scripts)
+        self.assertEqual("ordax_studio.cli:main", scripts["ordax-studio"])
+        self.assertEqual("ordax_studio.product_web_desktop:main", scripts["ordax-dev"])
 
 
 if __name__ == "__main__":

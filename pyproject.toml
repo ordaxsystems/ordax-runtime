@@ -32,7 +32,6 @@ ordax-product-mcp = "ordax_dev_agent.product_mcp_server:main"
 ordax-studio-remote-mcp = "ordax_dev_agent.product_mcp_server:main"
 ordax-device-pair = "ordax_dev_agent.product_pair_cli:main"
 ordax-studio = "ordax_studio.cli:main"
-ordax-studio-desktop = "ordax_studio.desktop:main"
 ordax-dev = "ordax_studio.product_web_desktop:main"
 
 [tool.setuptools.packages.find]
