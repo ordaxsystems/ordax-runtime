@@ -34,7 +34,7 @@ if ($Tag -cne $expectedTag) {
 }
 
 $expectedName = "ORDAX-Studio-Setup-$version-x64.exe"
-$executables = @(Get-ChildItem -LiteralPath $ArtifactDirectory -File | Where-Object {
+$executables = @(Get-ChildItem -LiteralPath $ArtifactDirectory -File -Force | Where-Object {
     $_.Extension -ieq ".exe"
 })
 if ($executables.Count -ne 1 -or $executables[0].Name -cne $expectedName) {
@@ -48,12 +48,27 @@ if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) {
 $checksumLines = @(Get-Content -LiteralPath $checksumPath | Where-Object {
     -not [string]::IsNullOrWhiteSpace($_)
 })
-if ($checksumLines.Count -ne 1 -or
-    $checksumLines[0] -cnotmatch '^([a-f0-9]{64})  ([A-Za-z0-9._-]+)$') {
+if ($checksumLines.Count -ne 1) {
     throw "Release checksum manifest must have one strict SHA-256 entry"
 }
-$expectedHash = $Matches[1]
-$checksumFileName = $Matches[2]
+$checksumMatch = [regex]::Match($checksumLines[0], '^([a-f0-9]{64})  ([A-Za-z0-9._-]+)
+if ($checksumFileName -cne $expectedName) {
+    throw "Release checksum does not refer to canonical installer"
+}
+$actualHash = (Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualHash -cne $expectedHash) {
+    throw "Release artifact SHA-256 does not match verified checksum manifest"
+}
+
+Write-Host "ORDAX_RELEASE_PROVENANCE_VALID"
+Write-Host "ORDAX_STUDIO_RELEASE_VERSION=$version"
+Write-Host "ORDAX_STUDIO_RELEASE_SOURCE_COMMIT=$($lock.commit)"
+)
+if (-not $checksumMatch.Success) {
+    throw "Release checksum manifest must have one strict SHA-256 entry"
+}
+$expectedHash = $checksumMatch.Groups[1].Value
+$checksumFileName = $checksumMatch.Groups[2].Value
 if ($checksumFileName -cne $expectedName) {
     throw "Release checksum does not refer to canonical installer"
 }
