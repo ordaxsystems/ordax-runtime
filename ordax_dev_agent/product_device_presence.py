@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -46,7 +47,7 @@ class ProductPresenceSnapshot:
             raise ValueError("runtime_kind not allowed")
         if self.agent_version is not None and (
             type(self.agent_version) is not str
-            or not 1 <= len(self.agent_version) <= 80
+            or not 1 <= len(self.agent_version.encode("utf-16-le", errors="surrogatepass")) // 2 <= 80
             or self.agent_version.strip() != self.agent_version
             or any(ord(ch) < 32 or ord(ch) == 127 for ch in self.agent_version)
         ):
@@ -148,6 +149,11 @@ class ProductDevicePresenceClient:
         if not isinstance(snapshot, ProductPresenceSnapshot):
             raise ValueError("Canonical Product presence snapshot is required")
         data = snapshot.as_wire()
+        # An injected transport must not silently attach account credentials to
+        # a device-authenticated observation. Fail before contacting the server.
+        if "authorization" in self.http.headers or self.http.auth is not None:
+            raise ValueError("Product presence transport must not inherit account authentication")
+        deadline = time.monotonic() + self.timeout_seconds
         try:
             # No bearer account credential. No log/query string, redirects or
             # retry: failure after delivery is an uncertain receipt.
@@ -172,10 +178,14 @@ class ProductDevicePresenceClient:
                 chunks: list[bytes] = []
                 size = 0
                 for chunk in response.iter_bytes():
+                    if time.monotonic() >= deadline:
+                        raise ProductPresenceError("product_presence_uncertain")
                     size += len(chunk)
                     if size > _MAX_RESPONSE_BYTES:
                         raise ProductPresenceError("product_presence_invalid_response")
                     chunks.append(chunk)
+                if time.monotonic() >= deadline:
+                    raise ProductPresenceError("product_presence_uncertain")
             data_obj = json.loads(
                 b"".join(chunks).decode("utf-8", "strict"),
                 object_pairs_hook=_object_pairs,

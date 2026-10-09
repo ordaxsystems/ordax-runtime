@@ -11,3 +11,8 @@ authenticated action-status endpoint. See [Product action recovery](docs/PRODUCT
 for request identity, transport limits, uncertain submission/completion and the
 separate PostgreSQL cutover dependencies. Source version is owned exclusively by
 `pyproject.toml`; source tests do not establish an installed or production release.
+
+Device-only presence uses the existing [Product presence client](docs/PRODUCT-DEVICE-PRESENCE-CLIENT.md)
+with a verified canonical UUID/credential, bounded receipts and a total deadline.
+It rejects inherited account authentication. The normal legacy heartbeat is not
+rewired automatically; production cutover remains a separate coordinated gate.

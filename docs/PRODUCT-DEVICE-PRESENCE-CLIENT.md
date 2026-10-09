@@ -21,7 +21,10 @@ com `ProductPresenceReceipt` sem autoridade de execução.
 O módulo verifica HTTPS e origin restrito, status, MIME, limite máximo de
 resposta **8 KiB descomprimidos**, UTF-8, JSON sem campos ou chaves duplicados
 e correspondência exata do `device_id` retornado. Não segue redirecionamento,
-não tenta repetir POST após timeout ou ACK inválido, e não expõe stack/segredo
+recusa autenticação de conta herdada do transporte antes da rede e aplica
+prazo total de confirmação, inclusive a respostas lentas em vários chunks.
+O tamanho de `agent_version` segue as 80 unidades UTF-16 do contrato Platform.
+Não tenta repetir POST após timeout ou ACK inválido, e não expõe stack/segredo
 do servidor. Erros são códigos públicos curtos e nunca sinalizam
 `online:true` com base em um timeout, timestamp ou alegação do cliente.
 
@@ -59,3 +62,11 @@ revogação, 307 e falhas 408/429/5xx sem retry, resposta com token privado,
 MIME/JSON/UTF-8/bomba gzip fora do limite, campos extras, receipt incorreto
 e preservação do owner. A suíte faz parte de `ORDAX Runtime Contracts` no CI
 Windows do repositório. Sem credenciais, deploy ou sessão real.
+
+Seis checks de source do Worker foram transferidos para o owner Platform na
+[PR 116](https://github.com/ordaxsystems/ordax-platform/pull/116);
+os 14 testes do transporte Runtime permanecem aqui e passam a executar na CI.
+As verificações migradas seguem o registro canônico de ações de navegador e
+a revogação administrativa atual. A antiga afirmação de retenção agendada
+foi substituída pela prova do bloqueio de retenção no gate canônico existente.
+Nenhum serviço D1 obsoleto foi restaurado e nenhum gate foi removido.
