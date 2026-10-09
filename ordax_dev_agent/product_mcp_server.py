@@ -4,6 +4,7 @@ from functools import wraps
 from typing import Any, Callable
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from . import product_mcp_handlers as handlers
 from .product_action_scope import DEVICE_SCOPED_ACTIONS
@@ -52,15 +53,18 @@ def _invoke(
     )
 
 
-def _register_delegate(name: str) -> None:
+def _register_delegate(name: str, *, annotations: ToolAnnotations | None = None) -> None:
     function = _delegate(getattr(handlers, name))
     globals()[name] = function
-    mcp.tool()(function)
+    mcp.tool(annotations=annotations)(function)
 
 
 # Product/account discovery remains unchanged.
 _register_delegate("product_session")
 _register_delegate("product_targets")
+_register_delegate("product_action_status", annotations=ToolAnnotations(
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+))
 
 # All non-overridden tools reuse the existing typed handlers. Computer actions
 # that were already device-scoped (filesystem/process/access status) are also

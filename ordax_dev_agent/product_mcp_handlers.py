@@ -5,7 +5,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .product_remote_client import ProductRemoteClient
+from .product_remote_client import ProductActionWaitTimeout, ProductRemoteClient, ProductRemoteError
 
 
 mcp = FastMCP("ordax-studio-remote")
@@ -37,18 +37,25 @@ def _invoke(
     arguments: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     token = _access_token()
-    with ProductRemoteClient(_base_url()) as client:
-        request_id = client.submit_action(
-            token,
-            device_id=device_id,
-            action=action,
-            project=project,
-            space_id=space_id,
-            arguments=arguments,
-        )
-        result = client.wait_action(token, request_id)
+    try:
+        with ProductRemoteClient(_base_url()) as client:
+            request_id = client.submit_action(
+                token,
+                device_id=device_id,
+                action=action,
+                project=project,
+                space_id=space_id,
+                arguments=arguments,
+            )
+            result = client.wait_action(token, request_id)
+    except (ProductRemoteError, ProductActionWaitTimeout) as error:
+        return _action_failure(error)
+    return _action_receipt(result)
+
+
+def _action_receipt(result: dict[str, Any]) -> dict[str, Any]:
     return {
-        "request_id": request_id,
+        "request_id": result.get("request_id"),
         "status": result.get("status"),
         "result": result.get("result"),
         "error_code": result.get("error_code"),
@@ -56,6 +63,37 @@ def _invoke(
         "started_at": result.get("started_at"),
         "finished_at": result.get("finished_at"),
     }
+
+
+def _action_failure(error: ProductRemoteError | ProductActionWaitTimeout) -> dict[str, Any]:
+    response: dict[str, Any] = {
+        "ok": False,
+        "error": ("product_action_wait_timeout" if isinstance(error, ProductActionWaitTimeout)
+                  else error.error_code),
+    }
+    if error.request_id is not None:
+        response.update({
+            "request_id": error.request_id,
+            "completion_unknown": True,
+            "next_step": "Use product_action_status with this request_id; do not resubmit the action.",
+        })
+    elif isinstance(error, ProductRemoteError) and error.acceptance_unknown:
+        response.update({
+            "acceptance_unknown": True,
+            "next_step": "Submission was not confirmed. Verify its effects before submitting another action.",
+        })
+    return response
+
+
+@mcp.tool()
+def product_action_status(request_id: str) -> dict[str, Any]:
+    """Read the same accepted task under the current Product identity; never enqueue or replay it."""
+    token = _access_token()
+    try:
+        with ProductRemoteClient(_base_url()) as client:
+            return _action_receipt(client.action(token, request_id))
+    except ProductRemoteError as error:
+        return _action_failure(error)
 
 
 @mcp.tool()

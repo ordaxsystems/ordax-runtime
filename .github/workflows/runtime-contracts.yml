@@ -9,6 +9,18 @@ permissions:
   contents: read
 
 jobs:
+  product-mcp-minimum-sdk:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Runtime with the supported MCP SDK floor
+        run: python -m pip install --disable-pip-version-check . "mcp==1.30.0"
+      - name: Verify registered tools and recovery on the minimum SDK
+        run: python -m unittest tests.test_product_action_recovery tests.test_product_remote_client tests.test_product_mcp_server
+
   runtime-contracts:
     runs-on: windows-latest
     steps:
@@ -43,6 +55,8 @@ jobs:
           tests.test_application_intelligence_actions
           tests.test_product_mcp
           tests.test_product_remote_client
+          tests.test_product_action_recovery
+          tests.test_versioning
           tests.test_studio_managed_browser_contract
           tests.test_product_audit_outbox
           tests.test_product_action_scope_parity
