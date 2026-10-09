@@ -1,0 +1,76 @@
+name: Studio Canonical Presentation Handoff
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/studio-presentation-handoff.yml'
+      - 'scripts/windows/verify-studio-presentation-handoff.ps1'
+      - 'tests/test_studio_presentation_handoff_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/studio-presentation-handoff.yml'
+      - 'scripts/windows/verify-studio-presentation-handoff.ps1'
+      - 'tests/test_studio_presentation_handoff_contract.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canonical-electron-source-to-stage:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Runtime handoff verifier without retained credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Checkout current Apps source (never a shadow Studio implementation)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ordaxsystems/ordax-apps
+          ref: main
+          path: .ordax/apps
+          persist-credentials: false
+
+      - name: Provision pinned Node.js for canonical Electron build
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: .ordax/apps/tools/assistant-host/package-lock.json
+
+      - name: Prove Runtime handoff contract and PowerShell syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m unittest tests.test_studio_presentation_handoff_contract -v
+          if ($LASTEXITCODE -ne 0) { throw 'Studio handoff policy contract failed.' }
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/windows/verify-studio-presentation-handoff.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'Canonical Studio presentation handoff contains a PowerShell syntax error.'
+          }
+
+      - name: Build official Apps Electron candidate and verify isolated Runtime staging bytes
+        shell: pwsh
+        env:
+          ORDAX_STUDIO_PRESENTATION_CANDIDATE_ONLY: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\windows\verify-studio-presentation-handoff.ps1 `
+            -AppSourceRoot "$env:GITHUB_WORKSPACE\.ordax\apps" `
+            -OutputDirectory "$env:RUNNER_TEMP\ordax-presentation-proof"
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical Studio presentation handoff failed.' }
+          if (-not (Test-Path "$env:RUNNER_TEMP\ordax-presentation-proof\ORDAX Studio.exe" -PathType Leaf)) {
+            throw 'Presentation executable was not staged'
+          }
+          Write-Output 'ORDAX_STUDIO_PRESENTATION_INTEGRATION=SOURCE_TO_STAGE_ONLY'
