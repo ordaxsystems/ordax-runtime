@@ -143,6 +143,27 @@ if (-not $autoStart -or $autoStart -notlike "*$runtimeExe*") {
 & $privatePython -c "import ordax_studio, ordax_dev_agent, ordax_device_agent; print('ORDAX_INSTALLED_RUNTIME_OK')"
 if ($LASTEXITCODE -ne 0) { throw "Installed private runtime import smoke failed" }
 
+# Verify the actual installed Python supports the canonical Electron login pipe
+# in isolated (-I) mode, and rejects a synthetic request before network/login.
+$accountProbeIn = Join-Path $env:RUNNER_TEMP "ordax-account-probe-in.json"
+$accountProbeOut = Join-Path $env:RUNNER_TEMP "ordax-account-probe-out.json"
+$accountProbeErr = Join-Path $env:RUNNER_TEMP "ordax-account-probe-err.txt"
+try {
+  [IO.File]::WriteAllText($accountProbeIn, '{"schema":"ordax.studio-product-account-session/1","operation":"unsupported","email":"invalid","password":"synthetic"}')
+  $accountProbe = Start-Process -FilePath $privatePython -WorkingDirectory $installRoot -ArgumentList @('-I', '-u', '-m', 'ordax_studio.electron_account_session') -RedirectStandardInput $accountProbeIn -RedirectStandardOutput $accountProbeOut -RedirectStandardError $accountProbeErr -NoNewWindow -Wait -PassThru
+  if ($accountProbe.ExitCode -ne 1) { throw "Installed account IPC did not reject invalid operation" }
+  $accountReply = Get-Content -Raw -Encoding UTF8 -LiteralPath $accountProbeOut | ConvertFrom-Json
+  if ($accountReply.schema -ne "ordax.studio-product-account-session/1" -or
+      $accountReply.ok -ne $false -or $accountReply.error -ne "account_auth_failed" -or
+      $accountReply.PSObject.Properties.Name -contains "access_token" -or
+      -not [string]::IsNullOrWhiteSpace((Get-Content -Raw -Encoding UTF8 -LiteralPath $accountProbeErr))) {
+    throw "Installed Product account IPC violated the fail-closed response contract"
+  }
+  Write-Host "ORDAX_INSTALLED_ACCOUNT_PIPE_FAIL_CLOSED=PASS"
+} finally {
+  Remove-Item -LiteralPath $accountProbeIn,$accountProbeOut,$accountProbeErr -Force -ErrorAction SilentlyContinue
+}
+
 $runtime = $null
 $studio = Start-Process -FilePath $studioExe -WorkingDirectory $installRoot -PassThru
 try {
