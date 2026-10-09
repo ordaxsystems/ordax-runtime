@@ -69,6 +69,7 @@ jobs:
           tests.test_computer_runtime_integrity
           tests.test_computer_filesystem_actions
           tests.test_studio_product_account
+          tests.test_studio_electron_account_session
           tests.test_computer_process_actions
           tests.test_product_mcp_server
           tests.test_ordax_os_runtime_compatibility_contract
