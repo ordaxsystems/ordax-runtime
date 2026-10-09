@@ -46,7 +46,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m unittest tests.test_studio_presentation_handoff_contract -v
+          python -m unittest tests.test_studio_presentation_handoff_contract tests.test_status_server_loopback_security -v
           if ($LASTEXITCODE -ne 0) { throw 'Studio handoff policy contract failed.' }
           $tokens = $null
           $errors = $null
