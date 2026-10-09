@@ -12,8 +12,9 @@ from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.device_setup import SetupError, configure as configure_device
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 
-_DEFAULT_SUPABASE_ORIGIN = "https://eobcxuyvhkvdmkbaihwh.supabase.co"
-_DEFAULT_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_GQUBlAVTzgNtscw9iE5vLQ_GGtdmsL5"
+# Public metadata lives in one consumer snapshot validated against the
+# canonical ordax-platform wrangler.toml owner on every Windows contract run.
+from .public_auth_metadata import SUPABASE_ORIGIN, SUPABASE_PUBLISHABLE_KEY
 
 
 @dataclass(frozen=True)
@@ -33,11 +34,11 @@ class ProductAccountError(RuntimeError):
 
 def _auth_config() -> tuple[str, str]:
     origin = str(
-        os.environ.get("ORDAX_PRODUCT_AUTH_URL") or _DEFAULT_SUPABASE_ORIGIN
+        os.environ.get("ORDAX_PRODUCT_AUTH_URL") or SUPABASE_ORIGIN
     ).rstrip("/")
     publishable_key = str(
         os.environ.get("ORDAX_PRODUCT_AUTH_PUBLISHABLE_KEY")
-        or _DEFAULT_SUPABASE_PUBLISHABLE_KEY
+        or SUPABASE_PUBLISHABLE_KEY
     ).strip()
     parsed = urlparse(origin)
     if parsed.scheme != "https" or not parsed.netloc:
