@@ -1,7 +1,9 @@
 import tempfile
 import tomllib
 import unittest
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
+from unittest.mock import patch
 
 from mcp_blender_unity import __version__ as bridge_package_version
 from ordax_dev_agent import __version__ as dev_agent_version
@@ -12,7 +14,7 @@ from ordax_dev_agent.blender_live_bridge import (
 )
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.references import MANIFEST_VERSION
-from ordax_dev_agent.versioning import component_versions
+from ordax_dev_agent.versioning import component_versions, runtime_package_version
 from ordax_dev_agent.capability_contracts import capability_contracts
 
 
@@ -27,15 +29,16 @@ class ComponentVersioningTests(unittest.TestCase):
             bridge_path=root / "bridge",
         )
 
-    def test_distribution_metadata_matches_bridge_package_version(self) -> None:
+    def test_distribution_metadata_matches_runtime_package_version(self) -> None:
         root = Path(__file__).resolve().parents[1]
         metadata = tomllib.loads(
             (root / "pyproject.toml").read_text(encoding="utf-8")
         )
         self.assertEqual(
-            bridge_package_version,
+            component_versions()["runtime_package"],
             metadata["project"]["version"],
         )
+        self.assertEqual(metadata["project"]["name"], "ordax-runtime")
 
     def test_component_versions_are_independent_and_explicit(self) -> None:
         versions = component_versions()
@@ -57,6 +60,19 @@ class ComponentVersioningTests(unittest.TestCase):
             versions["bridge_package"],
             versions["dev_agent"],
         )
+
+    def test_installed_runtime_uses_its_own_distribution_metadata(self) -> None:
+        with patch("ordax_dev_agent.versioning.Path.is_file", return_value=False), patch(
+            "ordax_dev_agent.versioning.version", return_value="1.2.3",
+        ) as installed:
+            self.assertEqual(runtime_package_version(), "1.2.3")
+        installed.assert_called_once_with("ordax-runtime")
+
+    def test_missing_distribution_does_not_invent_a_runtime_version(self) -> None:
+        with patch("ordax_dev_agent.versioning.Path.is_file", return_value=False), patch(
+            "ordax_dev_agent.versioning.version", side_effect=PackageNotFoundError("ordax-runtime"),
+        ):
+            self.assertIsNone(runtime_package_version())
 
     def test_agent_status_exposes_component_versions(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
