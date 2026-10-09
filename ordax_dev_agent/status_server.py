@@ -234,7 +234,37 @@ def start_status_server(
     host: str = "127.0.0.1",
     port: int = 8765,
 ) -> ThreadingHTTPServer:
+    # This service returns device/project paths and Runtime metadata. Never
+    # expose it on an external interface, even when explicitly misconfigured.
+    # In particular, loopback binding alone does not stop DNS rebinding:
+    # a hostile webpage may resolve its own Host name to 127.0.0.1.
+    if host != "127.0.0.1":
+        raise ValueError("ORDAX status server must bind to 127.0.0.1")
+    if type(port) is not int or not 0 <= port <= 65535:
+        raise ValueError("ORDAX status server port is invalid")
+
     class Handler(BaseHTTPRequestHandler):
+        def _deny(self) -> None:
+            self.send_response(403)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+
+        def _trusted_loopback_request(self) -> bool:
+            # Require one literal loopback Host + the *actual listening port*.
+            # No aliases from DNS, origin URLs, arbitrary ports or userinfo.
+            # A literal IPv4/localhost Host is not a credential: this gate
+            # prevents browser DNS-rebinding reads, not privileged actions.
+            hosts = self.headers.get_all("Host", [])
+            if len(hosts) != 1 or self.client_address[0] != "127.0.0.1":
+                return False
+            authority = hosts[0].lower()
+            port = self.server.server_port
+            return authority in {f"127.0.0.1:{port}", f"localhost:{port}"}
+
         def _headers(self, content_type: str, length: int) -> None:
             self.send_response(200)
             self.send_header("Content-Type", content_type)
@@ -250,6 +280,9 @@ def start_status_server(
             self.end_headers()
 
         def do_GET(self) -> None:  # noqa: N802
+            if not self._trusted_loopback_request():
+                self._deny()
+                return
             path = self.path.split("?", 1)[0]
 
             if path == "/":
@@ -276,11 +309,8 @@ def start_status_server(
                 return
 
             if path == "/capabilities":
-                if self.client_address[0] not in {"127.0.0.1", "::1"}:
-                    self.send_response(403)
-                    self.send_header("Cache-Control", "no-store")
-                    self.end_headers()
-                    return
+                # The shared request gate covers *every* path, including
+                # public health and private status/capability metadata.
                 status = status_provider()
                 actions = status.get("actions") if isinstance(status, dict) else []
                 snapshot = device_capability_snapshot(
