@@ -92,7 +92,7 @@ $inventory = Get-Content -LiteralPath $inventoryPath -Raw -Encoding UTF8 | Conve
 $hostPackage = Get-Content -LiteralPath $hostPath -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($product.schema -ne "ordax.windows-product/1" -or
     $product.presentation_host -ne "electron" -or
-    $product.entrypoints.studio_ui -ne "presentation\\ORDAX Studio.exe" -or
+    $product.entrypoints.studio_ui -ne "presentation\ORDAX Studio.exe" -or
     $product.entrypoints.runtime -ne "ORDAX Runtime.exe" -or
     $inventory.sourceRepository -ne "ordaxsystems/ordax-apps" -or
     $inventory.entrypoint -ne "apps/studio/conversation/src/index.html" -or
