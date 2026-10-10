@@ -42,7 +42,27 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
-        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance tests.test_release_signer_identity tests.test_release_main_ancestry tests.test_studio_host_transport_boundary
+        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance tests.test_release_signer_identity tests.test_release_main_ancestry tests.test_studio_host_transport_boundary tests.test_studio_presentation_handoff_contract
+      - name: Reject PowerShell syntax errors before expensive Windows packaging
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($path in @(
+            'scripts/windows/build-ordax-studio-product.ps1',
+            'scripts/windows/test-ordax-studio-install-smoke.ps1',
+            'scripts/windows/assert-installed-studio-ux.ps1',
+            'scripts/windows/verify-studio-presentation-handoff.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if (@($errors).Count -gt 0) {
+              foreach ($error in $errors) { Write-Error "$path : $($error.Message)" }
+              throw "PowerShell packaging syntax failure: $path"
+            }
+          }
 
   build-installer:
     needs: packaging-contracts
