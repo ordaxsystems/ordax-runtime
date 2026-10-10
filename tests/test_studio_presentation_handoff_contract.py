@@ -61,7 +61,7 @@ class StudioPresentationHandoffContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/windows-product-build.yml").read_text("utf-8")
         self.assertIn("verify-studio-presentation-handoff.ps1", build)
         self.assertIn('Join-Path $stageRoot "presentation"', build)
-        self.assertIn('studio_ui = "presentation\\\\ORDAX Studio.exe"', build)
+        self.assertIn('studio_ui = "presentation\\ORDAX Studio.exe"', build)
         self.assertIn('presentation_host = "electron"', build)
         self.assertIn('L"%ls\\\\presentation\\\\ORDAX Studio.exe"', launcher)
         self.assertNotIn('L"%ls\\\\workbench\\\\ORDAX Workbench.exe"', launcher)
