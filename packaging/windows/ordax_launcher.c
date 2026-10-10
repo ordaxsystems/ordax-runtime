@@ -349,7 +349,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
                 ORDAX_MAX_PATH,
                 _TRUNCATE,
                 L"%ls\\presentation\\ORDAX Studio.exe",
-                root) < 0 || !file_exists(workbench)) {
+                root) < 0 || !file_exists(studio_ui)) {
             fatal_message(L"A interface Electron canônica do ORDAX Studio está ausente ou corrompida.");
             CloseHandle(shutdown_event);
             ReleaseMutex(mutex);
