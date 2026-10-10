@@ -182,8 +182,9 @@ if (-not $stdlibZip -or -not $pth) {
 
 $sitePackages = Join-Path $runtimeRoot "Lib\site-packages"
 New-Item -ItemType Directory -Force -Path $sitePackages | Out-Null
-$desktopPackage = ('{0}[desktop]' -f $repoRoot)
-& python -m pip install --disable-pip-version-check --no-compile --upgrade --target $sitePackages $desktopPackage
+# Electron/Chromium is bundled by Apps. The legacy pywebview desktop extra
+# is no longer part of the shipped product: install only the Runtime owner.
+& python -m pip install --disable-pip-version-check --no-compile --upgrade --target $sitePackages $repoRoot
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to install ORDAX desktop runtime into the private Python distribution"
 }
@@ -224,7 +225,7 @@ Write-Output "ORDAX_STUDIO_PACKAGE_SOURCE_VERIFIED=$($sourceLock.commit)"
 Copy-Item (Join-Path $repoRoot "scripts") (Join-Path $stageRoot "scripts") -Recurse -Force
 
 $privatePython = Join-Path $runtimeRoot "python.exe"
-& $privatePython -c "import ordax_studio, ordax_dev_agent, ordax_device_agent, webview; print('ORDAX_PRIVATE_RUNTIME_OK')"
+& $privatePython -c "import ordax_studio, ordax_dev_agent, ordax_device_agent; print('ORDAX_PRIVATE_RUNTIME_OK')"
 if ($LASTEXITCODE -ne 0) {
     throw "Private ORDAX Python runtime import smoke failed"
 }
