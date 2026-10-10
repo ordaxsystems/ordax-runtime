@@ -195,7 +195,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('sourceLock.commit', build)
         self.assertIn("Studio source checkout must match the exact pinned Git commit", build)
         self.assertIn("Studio source checkout contains local changes or untracked files", build)
-        self.assertIn("Remove-Item -LiteralPath $targetAssets -Recurse -Force", build)
+        self.assertIn("Remove-Item -LiteralPath $legacyUiPath -Recurse -Force", build)
         self.assertIn('Copy-Item (Join-Path $studioAppSource "assets\\*") $targetAssets', build)
         self.assertNotIn("historical-pyproject", build)
         self.assertIn("repository: ordaxsystems/ordax-apps", workflow)
