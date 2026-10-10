@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 import unittest
+from unittest.mock import patch
 
 import httpx
 
@@ -18,6 +19,18 @@ SNAPSHOT = ProductPresenceSnapshot(
     online=True, runtime_kind="desktop-agent", agent_version="1.30.1",
     capability_digest="a" * 64,
 )
+
+
+class RecordingStream(httpx.SyncByteStream):
+    def __init__(self, parts):
+        self.parts = parts
+        self.closed = False
+
+    def __iter__(self):
+        yield from self.parts
+
+    def close(self):
+        self.closed = True
 
 
 class ProductDevicePresenceClientTests(unittest.TestCase):
@@ -169,6 +182,86 @@ class ProductDevicePresenceClientTests(unittest.TestCase):
             else:
                 self.assertNotIn("import " + forbidden, source)
         self.assertIn(PRESENCE_PATH, source)
+
+    def test_inherited_account_authorization_is_rejected_before_network(self):
+        for options in ({"headers": {"Authorization": "Bearer account-fixture"}},
+                        {"auth": httpx.BasicAuth("account-fixture", "private-fixture")}):
+            with self.subTest(options=options):
+                calls = []
+                with httpx.Client(transport=httpx.MockTransport(lambda req: calls.append(req)),
+                                  **options) as http:
+                    client = ProductDevicePresenceClient("https://presence.example.test", http=http)
+                    with self.assertRaises(ValueError) as error:
+                        client.report(device_id=DEVICE, device_credential=TOKEN, snapshot=SNAPSHOT)
+                    self.assertNotIn(TOKEN, str(error.exception))
+                    self.assertEqual(calls, [])
+
+    def test_version_length_matches_platform_utf16_bound(self):
+        for version in ("😀" * 40, "v" * 80):
+            with self.subTest(version=version):
+                self.assertEqual(ProductPresenceSnapshot(True, None, version, None).as_wire()["agent_version"], version)
+        calls = []
+        client = self.client(lambda req: calls.append(req))
+        with self.assertRaises(ValueError):
+            client.report(device_id=DEVICE, device_credential=TOKEN,
+                          snapshot=ProductPresenceSnapshot(True, None, "😀" * 41, None))
+        self.assertEqual(calls, [])
+
+    def test_total_deadline_rejects_slow_chunks_and_late_empty_body(self):
+        payload = json.dumps({"ok": True, "device_id": DEVICE, "changed": True}).encode()
+        for parts, ticks in (([payload[:10], payload[10:]], [100.0, 100.5, 101.1]),
+                             ([], [100.0, 101.1])):
+            with self.subTest(parts=parts):
+                calls = []
+                stream = RecordingStream(parts)
+                with httpx.Client(transport=httpx.MockTransport(lambda req: (
+                    calls.append(req) or httpx.Response(200, headers={"content-type": "application/json"}, stream=stream)
+                ))) as http:
+                    client = ProductDevicePresenceClient("https://presence.example.test", http=http, timeout_seconds=1)
+                    with patch("ordax_dev_agent.product_device_presence.time.monotonic", side_effect=ticks):
+                        with self.assertRaises(ProductPresenceError) as error:
+                            client.report(device_id=DEVICE, device_credential=TOKEN, snapshot=SNAPSHOT)
+                    self.assertEqual(error.exception.code, "product_presence_uncertain")
+                    self.assertEqual(len(calls), 1)
+                    self.assertTrue(stream.closed)
+
+    def test_oversized_stream_is_closed_at_the_existing_response_bound(self):
+        stream = RecordingStream([b"x" * 8000, b"x" * 193])
+        calls = []
+        client = self.client(lambda req: (
+            calls.append(req) or httpx.Response(200, headers={"content-type": "application/json"}, stream=stream)
+        ))
+        with self.assertRaises(ProductPresenceError) as error:
+            client.report(device_id=DEVICE, device_credential=TOKEN, snapshot=SNAPSHOT)
+        self.assertEqual(error.exception.code, "product_presence_invalid_response")
+        self.assertTrue(stream.closed)
+        self.assertEqual(len(calls), 1)
+
+    def test_credential_rotation_is_per_call_and_transport_remains_caller_owned(self):
+        tokens = []
+        def handler(req):
+            tokens.append(req.headers["X-Ordax-Device-Token"])
+            return httpx.Response(200, json={"ok": True, "device_id": DEVICE, "changed": False})
+        client = self.client(handler)
+        for token in (TOKEN, TOKEN + "-rotated"):
+            self.assertEqual(client.report(device_id=DEVICE, device_credential=token, snapshot=SNAPSHOT),
+                             ProductPresenceReceipt(DEVICE, False))
+        client.close()
+        self.assertEqual(tokens, [TOKEN, TOKEN + "-rotated"])
+        self.assertFalse(client.http.is_closed)
+        self.assertNotIn(TOKEN, repr(vars(client)))
+
+    def test_redirect_is_not_followed_with_caller_transport_enabled(self):
+        calls = []
+        stream = RecordingStream([b"private-fixture"])
+        with httpx.Client(follow_redirects=True, transport=httpx.MockTransport(lambda req: (
+            calls.append(req) or httpx.Response(307, headers={"location": "https://other.example.test"}, stream=stream)
+        ))) as http:
+            client = ProductDevicePresenceClient("https://presence.example.test", http=http)
+            with self.assertRaises(ProductPresenceError):
+                client.report(device_id=DEVICE, device_credential=TOKEN, snapshot=SNAPSHOT)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(stream.closed)
 
 
 if __name__ == "__main__":

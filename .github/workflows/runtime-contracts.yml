@@ -69,6 +69,7 @@ jobs:
           tests.test_product_remote_client
           tests.test_product_action_recovery
           tests.test_product_device_presence_client
+          tests.test_cloudflare_control_plane
           tests.test_versioning
           tests.test_studio_managed_browser_contract
           tests.test_product_audit_outbox
