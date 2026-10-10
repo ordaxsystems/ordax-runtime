@@ -12,7 +12,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('#define AppExeName "ORDAX Studio.exe"', installer)
         self.assertIn('#define LegacyAppExeName "ORDAX Dev.exe"', installer)
         self.assertIn("ORDAX Runtime.exe", installer)
-        self.assertIn('L"%ls\\\\workbench\\\\ORDAX Workbench.exe"', launcher)
+        self.assertIn('L"%ls\\\\presentation\\\\ORDAX Studio.exe"', launcher)
         self.assertIn("run_executable_child", launcher)
         self.assertNotIn('L"ordax_studio.product_web_desktop"', launcher)
         self.assertNotIn("ordax_chat_app", launcher)
@@ -151,9 +151,10 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("Lib\\site-packages", build)
         self.assertIn("pip install", build)
         self.assertIn("ORDAX_STUDIO_SETUP_SHA256", build)
-        self.assertIn("dotnet publish", build)
-        self.assertIn("ORDAX Workbench.exe", build)
-        self.assertIn("--self-contained true", build)
+        self.assertIn("verify-studio-presentation-handoff.ps1", build)
+        self.assertIn('Join-Path $stageRoot "presentation"', build)
+        self.assertNotIn("dotnet publish", build)
+        self.assertNotIn("ORDAX Workbench.exe", build)
         self.assertIn('$studioExe = Join-Path $stageRoot "ORDAX Studio.exe"', build)
         self.assertIn('$legacyStudioExe = Join-Path $stageRoot "ORDAX Dev.exe"', build)
         self.assertIn("Copy-Item -LiteralPath $studioExe -Destination $legacyStudioExe -Force", build)
@@ -203,12 +204,13 @@ class WindowsProductPackagingTests(unittest.TestCase):
     def test_windows_package_materializes_studio_outside_the_runtime_checkout(self) -> None:
         build = (ROOT / "scripts" / "windows" / "build-ordax-studio-product.ps1").read_text(encoding="utf-8")
         self.assertIn('$packagedStudio = Join-Path $sitePackages "ordax_studio"', build)
-        self.assertIn('$targetAssets = Join-Path $packagedStudio "assets"', build)
-        self.assertIn('Join-Path $packagedStudio "studio_product.html"', build)
         self.assertIn('Join-Path $packagedStudio "app_intelligence_registry.json"', build)
+        self.assertIn('Join-Path $packagedStudio "studio_product.html"', build)
         self.assertIn('Join-Path $packagedStudio "host_contract.js"', build)
-        self.assertIn("Get-FileHash -Algorithm SHA256 -LiteralPath $sourceAsset.FullName", build)
-        self.assertIn("Packaged Studio asset inventory differs from canonical source", build)
+        self.assertIn('Join-Path $packagedStudio "host_bridge.js"', build)
+        self.assertIn("Remove-Item -LiteralPath $legacyUiPath -Recurse -Force", build)
+        self.assertIn("verify-studio-presentation-handoff.ps1", build)
+        self.assertIn("ORDAX_STUDIO_SINGLE_PRESENTATION=ELECTRON", build)
         self.assertIn("ORDAX_STUDIO_PACKAGE_SOURCE_VERIFIED=", build)
         self.assertNotIn('$targetStudio = Join-Path $repoRoot "ordax_studio"', build)
         self.assertNotIn('Copy-Item (Join-Path $studioAppSource "assets\\*") (Join-Path $repoRoot', build)
@@ -226,8 +228,9 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertFalse((package / "studio_product.html").exists())
         self.assertFalse((package / "studio.html").exists())
         self.assertFalse((package / "assets").exists())
-        self.assertIn('Copy-Item (Join-Path $studioAppSource "assets\\*") $targetAssets', build)
+        self.assertNotIn('Copy-Item (Join-Path $studioAppSource "assets\\*")', build)
         self.assertIn('Join-Path $packagedStudio "studio_product.html"', build)
+        self.assertIn('-OutputDirectory (Join-Path $stageRoot "presentation")', build)
         self.assertIn("ORDAX_STUDIO_PACKAGE_SOURCE_VERIFIED", build)
 
     def test_windows_start_script_uses_only_installed_product_not_runtime_source(self) -> None:
@@ -288,12 +291,13 @@ class WindowsProductPackagingTests(unittest.TestCase):
         for marker in (
             "LEGACY_ORDAX_DEV_PROCESS_RETIRED",
             "ORDAX_LEGACY_ALIAS_IDENTICAL", "LEGACY_ORDAX_TASK_REMOVED",
-            "LEGACY_ORDAX_STARTUP_REMOVED", "ORDAX_WORKBENCH_READY",
+            "LEGACY_ORDAX_STARTUP_REMOVED", "ORDAX_ELECTRON_CONVERSATION_READY",
             "STUDIO_STARTED_RUNTIME", "ORDAX_RUNTIME_OUTLIVED_STUDIO",
         ):
             self.assertIn(marker, smoke)
         self.assertIn('Wait-OrdaxReady -Label "ORDAX_STUDIO_RUNTIME"', smoke)
-        self.assertIn("workbench\\ORDAX Workbench.exe", smoke)
+        self.assertIn("presentation\\ORDAX Studio.exe", smoke)
+        self.assertIn("-PresentationProcessId $presentationProcess.ProcessId", smoke)
         self.assertIn("[string]$ArtifactDirectory", smoke)
         self.assertIn("Exactly one ORDAX Studio installer", smoke)
         for source in ("ordax_core", "ordax_dev_agent", "ordax_device_agent", "ordax_studio"):
@@ -401,6 +405,8 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('"ordax-apps-lock"', build)
         self.assertIn("host_bridge.js", build)
         self.assertIn("host_contract.js", build)
+        self.assertIn("verify-studio-presentation-handoff.ps1", build)
+        self.assertIn("presentation_host = \"electron\"", build)
         self.assertIn("ai\\\\manifest.json", build)
         self.assertIn("ordax.app-intelligence-registry/1", build)
         self.assertIn("ordax.application-action-manifest/1", build)
