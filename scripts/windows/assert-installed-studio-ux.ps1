@@ -89,7 +89,7 @@ foreach ($file in @($inventoryPath, $hostPath, $conversation)) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Installed Studio Conversation file missing: $file" }
 }
 $inventory = Get-Content -LiteralPath $inventoryPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$host = Get-Content -LiteralPath $hostPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$hostPackage = Get-Content -LiteralPath $hostPath -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($product.schema -ne "ordax.windows-product/1" -or
     $product.presentation_host -ne "electron" -or
     $product.entrypoints.studio_ui -ne "presentation\\ORDAX Studio.exe" -or
@@ -98,8 +98,8 @@ if ($product.schema -ne "ordax.windows-product/1" -or
     $inventory.entrypoint -ne "apps/studio/conversation/src/index.html" -or
     $inventory.candidate -ne $true -or
     $inventory.version -ne $product.version -or
-    $host.version -ne $product.version -or
-    $host.main -ne "tools/assistant-host/native/main.cjs") {
+    $hostPackage.version -ne $product.version -or
+    $hostPackage.main -ne "tools/assistant-host/native/main.cjs") {
     throw "Installed Studio UI provenance, owner, version or entrypoint diverged"
 }
 $expected = @{}
