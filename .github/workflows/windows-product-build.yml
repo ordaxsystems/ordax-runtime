@@ -43,12 +43,6 @@ jobs:
           python-version: "3.12"
       - name: Run packaging contract tests
         run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance tests.test_release_signer_identity tests.test_release_main_ancestry tests.test_studio_host_transport_boundary
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-      - name: Build native ORDAX Workbench
-        run: dotnet build native/ordax-workbench/Ordax.Workbench.csproj --configuration Release
-        shell: powershell
 
   build-installer:
     needs: packaging-contracts
@@ -71,9 +65,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          dotnet-version: "8.0.x"
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: .ordax/apps/tools/assistant-host/package-lock.json
       - name: Enable MSVC command line
         uses: ilammy/msvc-dev-cmd@v1
         with:
