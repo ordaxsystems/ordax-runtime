@@ -92,6 +92,7 @@
     assistantSelectChat:(...args)=>invoke('assistant_select_chat',args),
     assistantUpdateChat:(...args)=>invoke('assistant_update_chat',args),
     assistantCloseChat:(...args)=>invoke('assistant_close_chat',args),
+    assistantSendMessage:(...args)=>invoke('assistant_send_message',args),
     connectProductAccount:(...args)=>invoke('connect_product_account',args),
     remoteComputerGrants:(...args)=>invoke('remote_computer_grants',args),
     authorizeRemoteComputerGrant:(...args)=>invoke('authorize_remote_computer_grant',args),
