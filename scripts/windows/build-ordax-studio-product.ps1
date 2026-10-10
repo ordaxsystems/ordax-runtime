@@ -283,7 +283,7 @@ $manifest = [ordered]@{
     entrypoints = @{
         studio = "ORDAX Studio.exe"
         studio_legacy_alias = "ORDAX Dev.exe"
-        studio_ui = "presentation\\ORDAX Studio.exe"
+        studio_ui = "presentation\ORDAX Studio.exe"
         runtime = "ORDAX Runtime.exe"
     }
     compatibility = @{
