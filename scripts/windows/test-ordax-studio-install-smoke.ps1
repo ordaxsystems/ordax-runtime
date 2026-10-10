@@ -124,9 +124,9 @@ Write-Host "LEGACY_INSTALL_ROOTS_REMOVED"
 $studioExe = Join-Path $installRoot "ORDAX Studio.exe"
 $legacyStudioExe = Join-Path $installRoot "ORDAX Dev.exe"
 $runtimeExe = Join-Path $installRoot "ORDAX Runtime.exe"
-$workbenchExe = Join-Path $installRoot "workbench\ORDAX Workbench.exe"
+$presentationExe = Join-Path $installRoot "presentation\ORDAX Studio.exe"
 $privatePython = Join-Path $installRoot "runtime\python.exe"
-foreach ($required in @($studioExe, $legacyStudioExe, $runtimeExe, $workbenchExe, $privatePython)) {
+foreach ($required in @($studioExe, $legacyStudioExe, $runtimeExe, $presentationExe, $privatePython)) {
   if (-not (Test-Path $required)) {
     if (Test-Path $installLog) { Get-Content $installLog -Tail 200 }
     throw "Installed product file is missing: $required"
@@ -142,6 +142,8 @@ if (-not $autoStart -or $autoStart -notlike "*$runtimeExe*") {
 
 & $privatePython -c "import ordax_studio, ordax_dev_agent, ordax_device_agent; print('ORDAX_INSTALLED_RUNTIME_OK')"
 if ($LASTEXITCODE -ne 0) { throw "Installed private runtime import smoke failed" }
+& $privatePython -c "import importlib.util; assert importlib.util.find_spec('webview') is None; print('ORDAX_NO_LEGACY_WEBVIEW_IMPORT=PASS')"
+if ($LASTEXITCODE -ne 0) { throw "Retired WebView2/pywebview Python host survived Electron cutover" }
 
 # Verify the actual installed Python supports the canonical Electron login pipe
 # in isolated (-I) mode, and rejects a synthetic request before network/login.
@@ -170,21 +172,22 @@ try {
   Start-Sleep -Seconds 2
   $studio.Refresh()
   if ($studio.HasExited) {
-    throw "ORDAX Studio native Workbench exited during startup smoke with code $($studio.ExitCode)"
+    throw "ORDAX Studio launcher exited before Electron initialization with code $($studio.ExitCode)"
   }
-  $workbench = Get-Process | Where-Object {
-    $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq [IO.Path]::GetFullPath($workbenchExe)
+  $presentationProcess = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($studio.Id)" | Where-Object {
+    $_.ExecutablePath -and
+      [IO.Path]::GetFullPath($_.ExecutablePath) -eq [IO.Path]::GetFullPath($presentationExe)
   } | Select-Object -First 1
-  if (-not $workbench) {
-    throw "ORDAX Studio supervisor did not launch native Workbench"
+  if (-not $presentationProcess) {
+    throw "ORDAX Studio supervisor did not launch canonical Electron presentation"
   }
-  # A running Workbench PID alone does not prove a usable Studio window.
-  # Validate the installed bytes and real WPF HWND, not only source assets.
+  # A PID alone never proves a functional UI. Verify the real visible HWND,
+  # actual entrypoint and independent SHA-256 inventory of installed bytes.
   & (Join-Path $PSScriptRoot "assert-installed-studio-ux.ps1") `
     -InstallRoot $installRoot `
-    -WorkbenchProcessId $workbench.Id `
+    -PresentationProcessId $presentationProcess.ProcessId `
     -WindowTimeoutSeconds 60
-  Write-Host "ORDAX_WORKBENCH_READY"
+  Write-Host "ORDAX_ELECTRON_CONVERSATION_READY"
 
   $null = Wait-OrdaxReady -Label "ORDAX_STUDIO_RUNTIME"
   $runtime = Get-Process | Where-Object {
@@ -197,7 +200,7 @@ try {
 } finally {
   Stop-Process -Id $studio.Id -Force -ErrorAction SilentlyContinue
   Get-Process | Where-Object {
-    $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq [IO.Path]::GetFullPath($workbenchExe)
+    $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq [IO.Path]::GetFullPath($presentationExe)
   } | Stop-Process -Force -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 1
 }
@@ -317,7 +320,7 @@ try {
   }
   Write-Host "PARTIAL_LEGACY_INSTALL_ROOT_REMOVED"
 
-  foreach ($required in @($studioExe, $legacyStudioExe, $runtimeExe, $workbenchExe, $privatePython)) {
+  foreach ($required in @($studioExe, $legacyStudioExe, $runtimeExe, $presentationExe, $privatePython)) {
     if (-not (Test-Path $required)) {
       if (Test-Path $upgradeLog) { Get-Content $upgradeLog -Tail 200 }
       throw "Upgraded product file is missing: $required"

@@ -319,7 +319,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
 
     wchar_t root[ORDAX_MAX_PATH];
     wchar_t python[ORDAX_MAX_PATH];
-    wchar_t workbench[ORDAX_MAX_PATH];
+    wchar_t studio_ui[ORDAX_MAX_PATH];
     if (!get_install_root(root, ORDAX_MAX_PATH)) {
         fatal_message(L"Não foi possível localizar a instalação do ORDAX Studio.");
         CloseHandle(shutdown_event);
@@ -345,12 +345,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
 
     if (!ORDAX_RUNTIME_LAUNCHER) {
         if (_snwprintf_s(
-                workbench,
+                studio_ui,
                 ORDAX_MAX_PATH,
                 _TRUNCATE,
-                L"%ls\\workbench\\ORDAX Workbench.exe",
-                root) < 0 || !file_exists(workbench)) {
-            fatal_message(L"A Workbench nativa do ORDAX Studio está ausente ou corrompida.");
+                L"%ls\\presentation\\ORDAX Studio.exe",
+                root) < 0 || !file_exists(studio_ui)) {
+            fatal_message(L"A interface Electron canônica do ORDAX Studio está ausente ou corrompida.");
             CloseHandle(shutdown_event);
             ReleaseMutex(mutex);
             CloseHandle(mutex);
@@ -376,7 +376,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
 
     if (!ORDAX_RUNTIME_LAUNCHER) {
         result = run_executable_child(
-            workbench,
+            studio_ui,
             root,
             job,
             shutdown_event,

@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$InstallRoot,
-    [Parameter(Mandatory = $true)][int]$WorkbenchProcessId,
+    [Parameter(Mandatory = $true)][int]$PresentationProcessId,
     [ValidateRange(1, 180)][int]$WindowTimeoutSeconds = 60
 )
 
@@ -56,11 +56,11 @@ public static class OrdaxStudioVisibleWindow
 $deadline = [DateTime]::UtcNow.AddSeconds($WindowTimeoutSeconds)
 $found = $false
 do {
-    $process = Get-Process -Id $WorkbenchProcessId -ErrorAction SilentlyContinue
+    $process = Get-Process -Id $PresentationProcessId -ErrorAction SilentlyContinue
     if ($null -eq $process -or $process.HasExited) {
-        throw "ORDAX Workbench exited before showing its main window"
+        throw "ORDAX Studio Electron exited before showing the Conversation window"
     }
-    if ([OrdaxStudioVisibleWindow]::HasReadyWindow($WorkbenchProcessId)) {
+    if ([OrdaxStudioVisibleWindow]::HasReadyWindow($PresentationProcessId)) {
         $found = $true
         break
     }
@@ -68,44 +68,72 @@ do {
 } while ([DateTime]::UtcNow -lt $deadline)
 
 if (-not $found) {
-    throw "ORDAX Workbench process is running but no responsive, visible Studio main window appeared"
+    throw "ORDAX Studio Electron process is running but no responsive, visible Conversation window appeared"
 }
 Write-Host "ORDAX_STUDIO_VISIBLE_WINDOW_OK"
 
-$package = Join-Path $InstallRoot "runtime\Lib\site-packages\ordax_studio"
-$document = Join-Path $package "studio_product.html"
-if (-not (Test-Path -LiteralPath $document -PathType Leaf)) {
-    throw "Installed Studio HTML document is missing"
+# Installed executable/bytes must match the single verified Apps presenter.
+# Never accept only a process PID or file name as proof of the UI version.
+$manifestFile = Join-Path $InstallRoot "product-manifest.json"
+if (-not (Test-Path -LiteralPath $manifestFile -PathType Leaf)) { throw "Installed Product manifest missing" }
+$product = Get-Content -LiteralPath $manifestFile -Raw -Encoding UTF8 | ConvertFrom-Json
+$presentation = Join-Path $InstallRoot "presentation"
+$inventoryPath = Join-Path $presentation "build-manifest.json"
+$hostPath = Join-Path $presentation "resources\app\package.json"
+$conversation = Join-Path $presentation "resources\app\apps\studio\conversation\src\index.html"
+$legacyWorkbench = Join-Path $InstallRoot "workbench\ORDAX Workbench.exe"
+$legacyHtml = Join-Path $InstallRoot "runtime\Lib\site-packages\ordax_studio\studio_product.html"
+if (Test-Path -LiteralPath $legacyWorkbench -PathType Leaf) { throw "Retired WPF presentation survived upgrade" }
+if (Test-Path -LiteralPath $legacyHtml -PathType Leaf) { throw "Retired WebView2 Studio page survived upgrade" }
+foreach ($file in @($inventoryPath, $hostPath, $conversation)) {
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Installed Studio Conversation file missing: $file" }
 }
+$inventory = Get-Content -LiteralPath $inventoryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$hostPackage = Get-Content -LiteralPath $hostPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($product.schema -ne "ordax.windows-product/1" -or
+    $product.presentation_host -ne "electron" -or
+    $product.entrypoints.studio_ui -ne "presentation\ORDAX Studio.exe" -or
+    $product.entrypoints.runtime -ne "ORDAX Runtime.exe" -or
+    $inventory.sourceRepository -ne "ordaxsystems/ordax-apps" -or
+    $inventory.entrypoint -ne "apps/studio/conversation/src/index.html" -or
+    $inventory.candidate -ne $true -or
+    $inventory.version -ne $product.version -or
+    $hostPackage.version -ne $product.version -or
+    $hostPackage.main -ne "tools/assistant-host/native/main.cjs") {
+    throw "Installed Studio UI provenance, owner, version or entrypoint diverged"
+}
+$expected = @{}
+foreach ($source in @($inventory.files)) {
+    $relative = [string]$source.path
+    if ($relative -notmatch '^[^/\\][^\\]*$' -or
+        $relative.Split('/') -contains '..' -or
+        $relative.Split('/') -contains '.' -or
+        $expected.ContainsKey($relative) -or
+        [string]$source.sha256 -cnotmatch '^[a-f0-9]{64}$') {
+        throw "Untrusted Studio file inventory"
+    }
+    $expected[$relative] = [string]$source.sha256
+}
+if ($expected.Count -lt 100) { throw "Installed Electron UI has unexpectedly few files" }
+$checked = 0
+foreach ($file in @(Get-ChildItem -LiteralPath $presentation -File -Recurse -Force)) {
+    if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Installed UI contains a reparse point" }
+    $relative = $file.FullName.Substring($presentation.Length).TrimStart('\', '/').Replace('\', '/')
+    if ($relative -eq "build-manifest.json") { continue }
+    if (-not $expected.ContainsKey($relative)) { throw "Unexpected installed UI file: $relative" }
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant() -cne $expected[$relative]) {
+        throw "Installed Electron UI hash mismatch: $relative"
+    }
+    $checked++
+}
+if ($checked -ne $expected.Count) { throw "Installed Electron UI file set differs from canonical inventory" }
+# Prove that the actual Conversation HTML remains correctly encoded.
 $utf8 = New-Object System.Text.UTF8Encoding($false, $true)
-$assets = @(Get-ChildItem -LiteralPath $package -Recurse -File | Where-Object {
-    $_.Extension -in @(".html", ".js", ".css")
-})
-if ($assets.Count -eq 0) {
-    throw "Installed Studio contains no HTML/JS/CSS assets"
+$conversationText = $utf8.GetString([IO.File]::ReadAllBytes($conversation))
+if (-not $conversationText.Contains("ORDAX Studio") -or
+    -not $conversationText.Contains("studio-product") -and
+    -not $conversationText.Contains("conversation")) {
+    throw "Installed Studio Conversation HTML is incompatible"
 }
-
-# Byte patterns decoded twice (UTF-8 read as Latin-1/Windows-1252) are
-# unacceptable in UI; do not include non-ASCII source literals in this PS1.
-$badContinuations = @(0x00A0, 0x00A1, 0x00A2, 0x00A3, 0x00A7, 0x00A9,
-    0x00AA, 0x00AD, 0x00B3, 0x00B5, 0x00BA)
-$badSequences = @($badContinuations | ForEach-Object {
-    ([string][char]0x00C3) + ([string][char]$_)
-})
-$badSequences += ([string][char]0x00E2) + ([string][char]0x20AC)
-$badSequences += ([string][char]0x00C2) + ([string][char]0x00B7)
-$badSequences += ([string][char]0x00C2) + ([string][char]0x00B0)
-
-foreach ($asset in $assets) {
-    try {
-        $text = $utf8.GetString([IO.File]::ReadAllBytes($asset.FullName))
-    } catch [System.Text.DecoderFallbackException] {
-        throw "Invalid UTF-8 in installed Studio asset: $($asset.Name)"
-    }
-    foreach ($bad in $badSequences) {
-        if ($text.Contains($bad)) {
-            throw "Double-decoded text found in installed Studio asset: $($asset.Name)"
-        }
-    }
-}
-Write-Host ("ORDAX_STUDIO_UTF8_ASSETS_OK=" + $assets.Count)
+Write-Host "ORDAX_STUDIO_INSTALLED_ELECTRON_FILES_VERIFIED=$checked"
+Write-Host "ORDAX_STUDIO_INSTALLED_CONVERSATION=PASS"
