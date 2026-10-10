@@ -142,6 +142,8 @@ if (-not $autoStart -or $autoStart -notlike "*$runtimeExe*") {
 
 & $privatePython -c "import ordax_studio, ordax_dev_agent, ordax_device_agent; print('ORDAX_INSTALLED_RUNTIME_OK')"
 if ($LASTEXITCODE -ne 0) { throw "Installed private runtime import smoke failed" }
+& $privatePython -c "import importlib.util; assert importlib.util.find_spec('webview') is None; print('ORDAX_NO_LEGACY_WEBVIEW_IMPORT=PASS')"
+if ($LASTEXITCODE -ne 0) { throw "Retired WebView2/pywebview Python host survived Electron cutover" }
 
 # Verify the actual installed Python supports the canonical Electron login pipe
 # in isolated (-I) mode, and rejects a synthetic request before network/login.
