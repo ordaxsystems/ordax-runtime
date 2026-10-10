@@ -162,6 +162,28 @@ jobs:
       - name: Verify tagged Runtime commit belongs to canonical main
         shell: powershell
         run: .\scripts\windows\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
+      - name: Checkout canonical Apps main for immutable Studio source ancestry
+        uses: actions/checkout@v4
+        with:
+          repository: ordaxsystems/ordax-apps
+          ref: main
+          fetch-depth: 0
+          path: .ordax/apps
+          persist-credentials: false
+      - name: Refuse release when Studio source is not integrated in Apps main
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sourceLock = Get-Content .\studio-source.lock.json -Encoding UTF8 -Raw | ConvertFrom-Json
+          if ($sourceLock.repository -ne 'ordaxsystems/ordax-apps' -or
+              [string]$sourceLock.commit -notmatch '^[0-9a-f]{40}$') {
+            throw 'Studio release source is not a canonical immutable Apps commit'
+          }
+          & git -C .ordax/apps merge-base --is-ancestor ([string]$sourceLock.commit) HEAD
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Blocked release: locked Studio source was not integrated into canonical Apps main'
+          }
+          Write-Host "ORDAX_STUDIO_RELEASE_SOURCE_MAIN_ANCESTRY=PASS"
       - name: Download validated Windows installer
         uses: actions/download-artifact@v4
         with:
