@@ -65,7 +65,7 @@ class StudioPresentationHandoffContractTests(unittest.TestCase):
         self.assertIn('presentation_host = "electron"', build)
         self.assertIn('L"%ls\\\\presentation\\\\ORDAX Studio.exe"', launcher)
         self.assertNotIn('L"%ls\\\\workbench\\\\ORDAX Workbench.exe"', launcher)
-        self.assertIn("Type: filesandordirs; Name: \"{app}\\\\workbench\"", setup)
+        self.assertIn('Type: filesandordirs; Name: "{app}\\workbench"', setup)
         self.assertNotIn('Filename: "{app}\\\\redist\\\\MicrosoftEdgeWebview2Setup.exe"', setup)
         self.assertIn("ORDAX_ELECTRON_CONVERSATION_READY", smoke)
         self.assertIn("ORDAX_STUDIO_INSTALLED_ELECTRON_FILES_VERIFIED=", installed)
