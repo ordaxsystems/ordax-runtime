@@ -110,7 +110,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertNotIn("browser_extension", build)
         self.assertNotIn("ordax_chat_app", build)
         self.assertNotIn('filename: "{app}\\redist\\microsoftedgewebview2setup.exe"', installer)
-        self.assertIn("presentation\\ordax studio.exe", launcher.lower() if False else (ROOT / "packaging" / "windows" / "ordax_launcher.c").read_text("utf-8").lower())
+        self.assertIn("presentation", (ROOT / "packaging" / "windows" / "ordax_launcher.c").read_text("utf-8").lower())
         self.assertIn("closeapplications=no", installer)
         self.assertIn("software\\microsoft\\windows\\currentversion\\run", installer)
 
