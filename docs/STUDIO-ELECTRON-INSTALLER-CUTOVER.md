@@ -20,6 +20,7 @@ Proprietário do **instalador, Runtime, identidade de dispositivo e execução**
 - O manifesto `product-manifest.json` prova
   `entrypoints.studio_ui=presentation\\ORDAX Studio.exe`,
   `presentation_host=electron`, versão e commit de origem, sem bearer.
+- O pacote privado Python instala somente o Runtime. O extra legado `pywebview` deixou de fazer parte do produto Windows; Electron já fornece Chromium sem exigir .NET/WebView2 externo.
 - O Inno Setup conserva seu AppId de upgrade e atalhos existentes, remove
   especificamente `workbench/` e os arquivos HTML/bridge da antiga
   apresentação em `ordax_studio/`, mas preserva perfis,
