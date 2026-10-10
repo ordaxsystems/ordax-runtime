@@ -52,6 +52,14 @@ Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 ; the new private runtime so importlib.metadata cannot resolve a stale version.
 Type: filesandordirs; Name: "{app}\runtime\Lib\site-packages\ordax_runtime-*.dist-info"
 Type: filesandordirs; Name: "{app}\browser_extension"
+; Retire the old native WPF/WebView2 shell at upgrade. The only installed
+; visual owner is presentation/ORDAX Studio.exe from ordax-apps.
+Type: filesandordirs; Name: "{app}\workbench"
+Type: filesandordirs; Name: "{app}\runtime\Lib\site-packages\ordax_studio\assets"
+Type: files; Name: "{app}\runtime\Lib\site-packages\ordax_studio\studio_product.html"
+Type: files; Name: "{app}\runtime\Lib\site-packages\ordax_studio\host_bridge.js"
+Type: files; Name: "{app}\runtime\Lib\site-packages\ordax_studio\host_contract.js"
+Type: files; Name: "{app}\redist\MicrosoftEdgeWebview2Setup.exe"
 Type: filesandordirs; Name: "{app}\runtime\Lib\site-packages\mcp_blender_unity-*.dist-info"
 Type: files; Name: "{app}\runtime\Scripts\mcp-blender.exe"
 Type: files; Name: "{app}\runtime\Scripts\mcp-blender-unity.exe"
@@ -72,7 +80,6 @@ Name: "desktopicon"; Description: "Criar atalho do ORDAX Studio na área de trab
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ORDAX Runtime"; ValueData: """{app}\{#RuntimeExeName}"""; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{app}\redist\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Instalando Microsoft Edge WebView2..."; Flags: waituntilterminated skipifdoesntexist; Check: NeedsWebView2
 Filename: "{app}\{#AppExeName}"; Description: "Abrir ORDAX Studio"; Flags: nowait postinstall skipifsilent
 
 [Code]
@@ -86,14 +93,6 @@ function SetEvent(hEvent: THandle): Boolean;
   external 'SetEvent@kernel32.dll stdcall';
 function CloseHandle(hObject: THandle): Boolean;
   external 'CloseHandle@kernel32.dll stdcall';
-
-function NeedsWebView2(): Boolean;
-var
-  WebViewPath: String;
-begin
-  WebViewPath := ExpandConstant('{pf32}\Microsoft\EdgeWebView\Application');
-  Result := not DirExists(WebViewPath);
-end;
 
 function SignalShutdownEvent(const EventName: String): Boolean;
 var
