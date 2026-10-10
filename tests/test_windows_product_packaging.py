@@ -307,6 +307,19 @@ class WindowsProductPackagingTests(unittest.TestCase):
         for source in ("ordax_core", "ordax_dev_agent", "ordax_device_agent", "ordax_studio"):
             self.assertIn(f'- "{source}/**"', workflow)
 
+    def test_release_requires_immutable_apps_main_ancestry_before_publish(self) -> None:
+        workflow = (ROOT / ".github/workflows/windows-product-build.yml").read_text("utf-8")
+        release = workflow.split("  publish-release:", 1)[1]
+        self.assertIn("repository: ordaxsystems/ordax-apps", release)
+        self.assertIn("fetch-depth: 0", release)
+        self.assertIn("persist-credentials: false", release)
+        self.assertIn("merge-base --is-ancestor ([string]$sourceLock.commit) HEAD", release)
+        self.assertIn("ORDAX_STUDIO_RELEASE_SOURCE_MAIN_ANCESTRY=PASS", release)
+        self.assertLess(release.index("Refuse release when Studio source is not integrated in Apps main"),
+                        release.index("Verify release provenance and artifact digest"))
+        self.assertLess(release.index("Blocked release: locked Studio source"),
+                        release.index("Publish GitHub Release assets"))
+
     def test_signed_release_reuses_exact_same_smoke_and_checks_digest_after(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
         release = workflow.split("  publish-release:", 1)[1]
