@@ -108,35 +108,10 @@ This does not convert Computer Control into an unaudited shell. If terminal/shel
 
 Remote Computer Control actions continue through Product MCP, Cloudflare authorization, ORDAX Runtime validation and the existing receipt/audit path. Full Access changes the local resource allowlist decision; it does not remove authentication, grants, typed validation or audit.
 
-## Protection for sensitive local credentials
+## Princípio de acesso do proprietário
 
-The local Runtime retains a **non-negotiable credential boundary** for typed
-`computer.*` filesystem operations, including when the owner explicitly enables
-`full_access=true` or `full_filesystem=true`. This is implemented in
-`ordax_dev_agent/computer_filesystem_actions.py` and applies to file reads,
-stats, edits, moves, deletions, directory traversal and content search.
+O acesso remoto é autorizado pela **Conta OrdaX, cliente OAuth exato e dispositivo vinculado**, combinado com a escolha **local** do proprietário. O modo `full_access=true` libera as listas locais de pastas e aplicativos para as ações tipadas já disponibilizadas pelo Runtime, respeitando as permissões da sessão Windows. Não cria acesso a computadores de outros usuários e não concede novas capacidades por texto de prompt.
 
-The initial supported safeguards cover SSH/GPG/cloud/Kubernetes credential
-directories, Windows DPAPI/Credential Manager stores, Chromium/Firefox profile
-credential stores and explicitly named authentication material such as
-`.env`, `.npmrc`, `.pypirc`, private key files and service credential JSON.
-Symlink targets are resolved before authorization. Recursive changes to
-ancestors of a protected credential store are rejected. Template
-`.env.example`/`.env.sample` files remain accessible.
+O Runtime preserva a integridade de seus próprios arquivos de estado e de execução, que devem ser modificados somente pelas superfícies oficiais de configuração e atualização. Não há classificação automática confiável de arquivos pessoais por nome ou extensão: o proprietário deve considerar que Full Access pode alcançar também conteúdos privados armazenados no computador. Autorizar acesso integral tem efeito amplo, inclusive sobre o material sensível legível pelo processo, e **avisos do GPT/Grok não substituem a autorização da Conta OrdaX nem o controle de destino**. Nenhum provedor externo recebe dados automaticamente apenas por estar conectado; as ferramentas acionadas continuam seguindo seu fluxo de autorização, resultado e auditoria.
 
-These filesystem safeguards are **not a complete data loss prevention (DLP)
-system**: arbitrary files may contain secrets, already-visible screen content
-and clipboard text can still expose sensitive data, and a permitted interactive
-application may possess capabilities beyond filesystem tools. Future
-screen/clipboard egress protection must be implemented at the corresponding
-typed-action boundary; it must not be claimed as present here. Windows UAC and
-the operating system's privileges remain authoritative.
-
-The remote authorization remains **account + exact OAuth client + device
-Product grant**, combined with **local owner Full Access approval**. Account
-login does not silently elevate local policy. Consent may be captured once and
-persisted for the selected device, instead of requiring a fresh confirmation
-for every ordinary task; the owner can revoke the grant or disable local
-access. Neither a plugin nor an LLM may change the local Full Access setting.
-
-Regression test: `python -m unittest tests.test_computer_credential_boundary`.
+O proprietário pode revogar os grants Product ou desativar o Computer Control local a qualquer momento. As proteções de identidade, cliente, dispositivo e sessão operam independentemente de quais pastas e aplicativos o proprietário decidiu liberar. O catálogo de capacidades não deve ser artificialmente limitado a um único projeto no modo de controle do computador.
