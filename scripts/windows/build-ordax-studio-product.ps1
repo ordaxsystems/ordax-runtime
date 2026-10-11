@@ -245,11 +245,11 @@ $runtimeExe = Join-Path $stageRoot "ORDAX Runtime.exe"
 
 Push-Location $buildRoot
 try {
-    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=0 "/Fe:$studioExe" $launcherSource /link /SUBSYSTEM:WINDOWS user32.lib
+    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=0 "/Fe:$studioExe" $launcherSource /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib
     if ($LASTEXITCODE -ne 0) { throw "ORDAX Studio launcher compilation failed" }
     Remove-Item "ordax_launcher.obj" -Force -ErrorAction SilentlyContinue
 
-    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=1 "/Fe:$runtimeExe" $launcherSource /link /SUBSYSTEM:WINDOWS user32.lib
+    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=1 "/Fe:$runtimeExe" $launcherSource /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib
     if ($LASTEXITCODE -ne 0) { throw "ORDAX Runtime launcher compilation failed" }
     Remove-Item "ordax_launcher.obj" -Force -ErrorAction SilentlyContinue
 } finally {
