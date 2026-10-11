@@ -107,3 +107,36 @@ This does not convert Computer Control into an unaudited shell. If terminal/shel
 `computer.access_status` exposes the effective non-secret local policy so Studio and authorized MCP clients can explain the active mode.
 
 Remote Computer Control actions continue through Product MCP, Cloudflare authorization, ORDAX Runtime validation and the existing receipt/audit path. Full Access changes the local resource allowlist decision; it does not remove authentication, grants, typed validation or audit.
+
+## Protection for sensitive local credentials
+
+The local Runtime retains a **non-negotiable credential boundary** for typed
+`computer.*` filesystem operations, including when the owner explicitly enables
+`full_access=true` or `full_filesystem=true`. This is implemented in
+`ordax_dev_agent/computer_filesystem_actions.py` and applies to file reads,
+stats, edits, moves, deletions, directory traversal and content search.
+
+The initial supported safeguards cover SSH/GPG/cloud/Kubernetes credential
+directories, Windows DPAPI/Credential Manager stores, Chromium/Firefox profile
+credential stores and explicitly named authentication material such as
+`.env`, `.npmrc`, `.pypirc`, private key files and service credential JSON.
+Symlink targets are resolved before authorization. Recursive changes to
+ancestors of a protected credential store are rejected. Template
+`.env.example`/`.env.sample` files remain accessible.
+
+These filesystem safeguards are **not a complete data loss prevention (DLP)
+system**: arbitrary files may contain secrets, already-visible screen content
+and clipboard text can still expose sensitive data, and a permitted interactive
+application may possess capabilities beyond filesystem tools. Future
+screen/clipboard egress protection must be implemented at the corresponding
+typed-action boundary; it must not be claimed as present here. Windows UAC and
+the operating system's privileges remain authoritative.
+
+The remote authorization remains **account + exact OAuth client + device
+Product grant**, combined with **local owner Full Access approval**. Account
+login does not silently elevate local policy. Consent may be captured once and
+persisted for the selected device, instead of requiring a fresh confirmation
+for every ordinary task; the owner can revoke the grant or disable local
+access. Neither a plugin nor an LLM may change the local Full Access setting.
+
+Regression test: `python -m unittest tests.test_computer_credential_boundary`.
