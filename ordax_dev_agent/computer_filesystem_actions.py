@@ -107,6 +107,10 @@ class ComputerAccessPolicy:
             "allowed_roots": [str(root) for root in self.allowed_roots],
             "allowed_applications": list(self.allowed_applications),
             "relative_paths_base": str(Path.home().resolve()),
+            # Non-secret effective boundary flags, safe for authenticated status.
+            "credential_filesystem_protection": True,
+            "screen_content_redaction": False,
+            "clipboard_content_redaction": False,
         }
 
 
