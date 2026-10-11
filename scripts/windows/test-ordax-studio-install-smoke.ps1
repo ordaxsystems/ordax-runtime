@@ -235,14 +235,35 @@ Write-Host "ORDAX_RUNTIME_OUTLIVED_STUDIO"
 # Electron owner; the already running Runtime remains independent.
 $centralStudio = Start-Process -FilePath $studioExe -WorkingDirectory $installRoot -ArgumentList "--ordax-central" -PassThru
 try {
-  Start-Sleep -Seconds 2
-  $centralStudio.Refresh()
-  if ($centralStudio.HasExited) { throw "Central-only Studio launcher exited too early" }
-  $centralPresentation = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($centralStudio.Id)" | Where-Object {
-    $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq [IO.Path]::GetFullPath($presentationExe)
-  } | Select-Object -First 1
-  if (-not $centralPresentation -or $centralPresentation.CommandLine -notmatch '(?<!\S)--ordax-central(?!\S)') {
-    throw "Central startup did not reach the canonical Electron presentation"
+  # A cold Electron startup can take longer than two seconds on a new Windows
+  # profile. Observe the actual child and argument until the bounded deadline;
+  # neither a bare launcher PID nor a foreign Electron instance is sufficient.
+  $centralPresentation = $null
+  $sawExpectedChild = $false
+  $sawCentralArgument = $false
+  $centralDeadline = [DateTime]::UtcNow.AddSeconds(45)
+  do {
+    $centralStudio.Refresh()
+    if ($centralStudio.HasExited) {
+      throw "Central-only Studio launcher exited with code $($centralStudio.ExitCode)"
+    }
+    $candidate = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($centralStudio.Id)" | Where-Object {
+      $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq [IO.Path]::GetFullPath($presentationExe)
+    } | Select-Object -First 1
+    if ($candidate) {
+      $sawExpectedChild = $true
+      $sawCentralArgument = [bool]($candidate.CommandLine -match '(?<!\S)--ordax-central(?!\S)')
+      if ($sawCentralArgument) {
+        $centralPresentation = $candidate
+        break
+      }
+    }
+    Start-Sleep -Milliseconds 300
+  } while ([DateTime]::UtcNow -lt $centralDeadline)
+  if (-not $centralPresentation) {
+    Write-Host "ORDAX_CENTRAL_EXPECTED_CHILD_SEEN=$sawExpectedChild"
+    Write-Host "ORDAX_CENTRAL_ARGUMENT_SEEN=$sawCentralArgument"
+    throw "Central startup did not reach the canonical Electron presentation with the required argument"
   }
   & (Join-Path $PSScriptRoot "assert-installed-studio-ux.ps1") -InstallRoot $installRoot -PresentationProcessId $centralPresentation.ProcessId -WindowTimeoutSeconds 60
   Write-Host "ORDAX_CENTRAL_COLD_START=PASS"
