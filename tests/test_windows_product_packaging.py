@@ -262,6 +262,10 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('dispatch_central_request(executable, root, job)', launcher)
         self.assertIn('AssignProcessToJobObject(job, process.hProcess)', launcher)
         self.assertIn('central_start ? L" --ordax-central" : L""', launcher)
+        smoke = (ROOT / "scripts" / "windows" / "test-ordax-studio-install-smoke.ps1").read_text("utf-8")
+        self.assertIn("ORDAX_INSTALLED_CENTRAL_SHORTCUT=PASS", smoke)
+        self.assertIn("ORDAX_CENTRAL_EXISTING_SUPERVISOR=PASS", smoke)
+        self.assertIn("ORDAX_CENTRAL_COLD_START=PASS", smoke)
         self.assertIn('return delivered ? 0 : 16;', launcher)
         self.assertNotIn('ORDAX_CENTRAL_LAUNCHER', launcher)
 
