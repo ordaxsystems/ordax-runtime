@@ -24,6 +24,44 @@ _MAX_INLINE_BYTES = 512 * 1024
 _MAX_WRITE_BYTES = 8 * 1024 * 1024
 _MAX_LIST_ENTRIES = 5000
 _MAX_SEARCH_RESULTS = 500
+
+# Host-credential boundaries are invariant under local Full Access and remote
+# Product grants. This is not a general-purpose DLP system: plaintext secrets
+# may exist elsewhere and screen/clipboard access has separate risks.
+_CREDENTIAL_RELATIVE_ROOTS = (
+    ".ssh", ".gnupg", ".aws", ".azure", ".kube",
+    ".config/gcloud", ".config/google-chrome", ".mozilla/firefox",
+    "AppData/Roaming/Microsoft/Credentials",
+    "AppData/Local/Microsoft/Credentials",
+    "AppData/Roaming/Microsoft/Protect",
+    "AppData/Local/Google/Chrome/User Data",
+    "AppData/Local/Microsoft/Edge/User Data",
+    "AppData/Roaming/Mozilla/Firefox/Profiles",
+)
+_CREDENTIAL_FILES = frozenset({
+    ".npmrc", ".pypirc", "id_rsa", "id_ed25519",
+    "credentials.json", "service-account.json", "service_account.json",
+    "application_default_credentials.json",
+})
+
+
+def _credential_roots() -> tuple[Path, ...]:
+    home = Path.home().resolve()
+    return tuple((home / relative).resolve(strict=False) for relative in _CREDENTIAL_RELATIVE_ROOTS)
+
+
+def _credential_path(path: Path, roots: tuple[Path, ...]) -> bool:
+    if any(path.is_relative_to(root) for root in roots):
+        return True
+    name = path.name.casefold()
+    return (
+        name in _CREDENTIAL_FILES
+        or name == ".env"
+        or name.startswith(".env.") and name not in {".env.example", ".env.sample", ".env.template"}
+        or name.endswith((".pem", ".p12", ".pfx"))
+    )
+
+
 _SKIP_SEARCH_DIRS = frozenset(
     {
         ".git",
@@ -53,6 +91,7 @@ class ComputerAccessPolicy:
     allowed_applications: tuple[str, ...]
     # Runtime-owned authority is independent of user folder/app allowlists.
     protected_roots: tuple[Path, ...] = ()
+    credential_roots: tuple[Path, ...] = ()
 
     def application_allowed(self, executable: Path) -> bool:
         if self.full_access:
@@ -271,6 +310,7 @@ def load_computer_access_policy(config) -> ComputerAccessPolicy:
             config.agent_repo_path.resolve(),
             Path(__file__).resolve().parents[1],
         ),
+        credential_roots=_credential_roots(),
     )
 
 
@@ -406,6 +446,8 @@ def _bounded_int(
 
 
 def _path_allowed(path: Path, policy: ComputerAccessPolicy) -> bool:
+    if _credential_path(path, policy.credential_roots):
+        return False
     if any(path.is_relative_to(root) for root in policy.protected_roots):
         return False
     if policy.full_access or policy.full_filesystem:
@@ -449,6 +491,10 @@ class ComputerFilesystemActions:
             for root in policy.protected_roots
         ):
             raise PermissionError("Runtime state and executable sources are protected; use owner settings or the Runtime updater")
+        if _credential_path(resolved, policy.credential_roots) or (
+            mutating and any(root.is_relative_to(resolved) for root in policy.credential_roots)
+        ):
+            raise PermissionError("credential stores and authentication material are protected from remote computer tools")
         if not _path_allowed(resolved, policy):
             raise PermissionError("path is outside local ORDAX computer access roots")
         if must_exist and not resolved.exists() and (follow_final_symlink or not candidate.is_symlink()):
