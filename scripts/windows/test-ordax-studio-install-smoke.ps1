@@ -188,6 +188,25 @@ try {
     -PresentationProcessId $presentationProcess.ProcessId `
     -WindowTimeoutSeconds 60
   Write-Host "ORDAX_ELECTRON_CONVERSATION_READY"
+  # One official launcher for both presentations; no separate Central runtime.
+  $centralShortcut = Join-Path ([Environment]::GetFolderPath("Programs")) "ORDAX\ORDAX Central.lnk"
+  if (-not (Test-Path -LiteralPath $centralShortcut -PathType Leaf)) {
+    throw "Installed Central Start Menu shortcut is missing"
+  }
+  $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($centralShortcut)
+  if ([IO.Path]::GetFullPath($shortcut.TargetPath) -ne [IO.Path]::GetFullPath($studioExe) -or
+      $shortcut.Arguments -ne "--ordax-central") {
+    throw "Central shortcut bypasses official Studio supervisor or lacks mode parameter"
+  }
+  Write-Host "ORDAX_INSTALLED_CENTRAL_SHORTCUT=PASS"
+  $centralNavigation = Start-Process -FilePath $studioExe -WorkingDirectory $installRoot -ArgumentList "--ordax-central" -Wait -PassThru
+  if ($centralNavigation.ExitCode -ne 0) {
+    throw "Running Studio did not accept Central navigation request"
+  }
+  $studio.Refresh()
+  if ($studio.HasExited) { throw "Central navigation terminated the existing Studio supervisor" }
+  Write-Host "ORDAX_CENTRAL_EXISTING_SUPERVISOR=PASS"
+
 
   $null = Wait-OrdaxReady -Label "ORDAX_STUDIO_RUNTIME"
   $runtime = Get-Process | Where-Object {
@@ -211,6 +230,29 @@ if ($runtime.HasExited) {
 }
 $null = Wait-OrdaxReady -Label "ORDAX_RUNTIME_AFTER_STUDIO_CLOSE"
 Write-Host "ORDAX_RUNTIME_OUTLIVED_STUDIO"
+
+# Opening Central from a cold Studio startup must pass the flag to the same
+# Electron owner; the already running Runtime remains independent.
+$centralStudio = Start-Process -FilePath $studioExe -WorkingDirectory $installRoot -ArgumentList "--ordax-central" -PassThru
+try {
+  Start-Sleep -Seconds 2
+  $centralStudio.Refresh()
+  if ($centralStudio.HasExited) { throw "Central-only Studio launcher exited too early" }
+  $centralPresentation = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($centralStudio.Id)" | Where-Object {
+    $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq [IO.Path]::GetFullPath($presentationExe)
+  } | Select-Object -First 1
+  if (-not $centralPresentation -or $centralPresentation.CommandLine -notmatch '(?<!\S)--ordax-central(?!\S)') {
+    throw "Central startup did not reach the canonical Electron presentation"
+  }
+  & (Join-Path $PSScriptRoot "assert-installed-studio-ux.ps1") -InstallRoot $installRoot -PresentationProcessId $centralPresentation.ProcessId -WindowTimeoutSeconds 60
+  Write-Host "ORDAX_CENTRAL_COLD_START=PASS"
+} finally {
+  Stop-Process -Id $centralStudio.Id -Force -ErrorAction SilentlyContinue
+  Get-Process | Where-Object { $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq [IO.Path]::GetFullPath($presentationExe) } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 1
+}
+
 
 $upgradedRuntime = $null
 $legacyProcess = $null
