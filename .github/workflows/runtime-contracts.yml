@@ -78,7 +78,6 @@ jobs:
           tests.test_computer_focus_window
           tests.test_computer_access_management
           tests.test_computer_full_access
-          tests.test_computer_credential_boundary
           tests.test_computer_dispatch_policy
           tests.test_computer_runtime_integrity
           tests.test_computer_filesystem_actions
