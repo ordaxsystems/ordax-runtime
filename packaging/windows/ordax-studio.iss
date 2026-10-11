@@ -71,6 +71,8 @@ Type: files; Name: "{userdesktop}\ORDAX Dev.lnk"
 
 [Icons]
 Name: "{group}\ORDAX Studio"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
+; Same supervised Studio and installed Runtime; this flag selects only the operator workspace.
+Name: "{group}\ORDAX Central"; Filename: "{app}\{#AppExeName}"; Parameters: "--ordax-central"; WorkingDir: "{app}"
 Name: "{userdesktop}\ORDAX Studio"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Tasks]
