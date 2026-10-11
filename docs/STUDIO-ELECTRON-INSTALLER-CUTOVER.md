@@ -87,3 +87,11 @@ janela visível e inventário intacto). Não confundir essas provas de
 navegação com login Product/Relay real, múltiplas conversas de IA ou
 instalação assinada no computador do usuário; tais critérios continuam
 pendentes e sob os owners existentes.
+
+A CI de instalação identificou que a primeira implementação recebia um
+Electron filho correto, mas não propagava `--ordax-central` no cold start.
+A correção não dilui a prova: o supervisor agora usa o parser Win32
+`CommandLineToArgvW(GetCommandLineW())`, compara argumentos inteiros e
+libera o buffer pelo `LocalFree`. O builder vincula `shell32.lib`.
+A smoke exige argumento no processo filho instalado e janela real;
+sem esses dois sinais a promoção permanece bloqueada.
