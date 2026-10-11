@@ -3,12 +3,31 @@
 #include <wchar.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <shellapi.h>
 
 #ifndef ORDAX_RUNTIME_LAUNCHER
 #define ORDAX_RUNTIME_LAUNCHER 0
 #endif
 
 #define ORDAX_MAX_PATH 32768
+#define ORDAX_CENTRAL_EVENT L"Local\\ORDAXStudioOpenCentral"
+
+// WinMain's lpCmdLine is not a reliably tokenized argv array. Use the
+// Windows command-line parser and compare complete arguments, not substrings.
+static bool is_central_requested(void) {
+    int argc = 0;
+    LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv == NULL) return false;
+    bool requested = false;
+    for (int i = 1; i < argc; ++i) {
+        if (wcscmp(argv[i], L"--ordax-central") == 0) {
+            requested = true;
+            break;
+        }
+    }
+    LocalFree(argv);
+    return requested;
+}
 
 static void fatal_message(const wchar_t *message) {
     MessageBoxW(NULL, message, L"ORDAX Studio", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
@@ -122,11 +141,40 @@ static HANDLE create_kill_job(void) {
     return job;
 }
 
+// A secondary invocation of the official launcher signals the running
+// supervisor. Electron's existing single-instance lock handles navigation;
+// the temporary notifying process remains in the supervisor job.
+static bool dispatch_central_request(const wchar_t *executable, const wchar_t *root, HANDLE job) {
+    if (job == NULL) return false;
+    wchar_t command[ORDAX_MAX_PATH];
+    if (_snwprintf_s(command, ORDAX_MAX_PATH, _TRUNCATE,
+            L"\"%ls\" --ordax-central", executable) < 0) return false;
+    STARTUPINFOW startup;
+    PROCESS_INFORMATION process;
+    ZeroMemory(&startup, sizeof(startup));
+    ZeroMemory(&process, sizeof(process));
+    startup.cb = sizeof(startup);
+    if (!CreateProcessW(NULL, command, NULL, NULL, FALSE,
+            CREATE_UNICODE_ENVIRONMENT, NULL, root, &startup, &process)) return false;
+    if (!AssignProcessToJobObject(job, process.hProcess)) {
+        TerminateProcess(process.hProcess, ERROR_ACCESS_DENIED);
+        WaitForSingleObject(process.hProcess, 5000);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        return false;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+}
+
 static DWORD run_executable_child(
     const wchar_t *executable,
     const wchar_t *root,
     HANDLE job,
     HANDLE shutdown_event,
+    HANDLE central_event,
+    bool central_start,
     bool hidden
 ) {
     wchar_t command[ORDAX_MAX_PATH];
@@ -134,8 +182,9 @@ static DWORD run_executable_child(
             command,
             ORDAX_MAX_PATH,
             _TRUNCATE,
-            L"\"%ls\"",
-            executable) < 0) {
+            L"\"%ls\"%ls",
+            executable,
+            central_start ? L" --ordax-central" : L"") < 0) {
         return ERROR_INSUFFICIENT_BUFFER;
     }
 
@@ -173,8 +222,17 @@ static DWORD run_executable_child(
         return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error;
     }
 
-    HANDLE wait_handles[2] = { process.hProcess, shutdown_event };
-    DWORD wait_result = WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
+    HANDLE wait_handles[3] = { process.hProcess, shutdown_event, central_event };
+    DWORD wait_result;
+    for (;;) {
+        wait_result = WaitForMultipleObjects(3, wait_handles, FALSE, INFINITE);
+        if (wait_result != WAIT_OBJECT_0 + 2) break;
+        // This is UI navigation only; it must never create a second Runtime.
+        // If the active UI is closing, a late request cannot revive it.
+        if (WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0) continue;
+        if (WaitForSingleObject(shutdown_event, 0) == WAIT_OBJECT_0) continue;
+        dispatch_central_request(executable, root, job);
+    }
     DWORD exit_code = 1;
 
     if (wait_result == WAIT_OBJECT_0 + 1) {
@@ -289,8 +347,17 @@ static DWORD run_python_child(
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_line, int show) {
     (void)instance;
     (void)previous;
-    (void)command_line;
     (void)show;
+    (void)command_line;
+    const bool central_start = !ORDAX_RUNTIME_LAUNCHER && is_central_requested();
+    HANDLE central_event = NULL;
+    if (!ORDAX_RUNTIME_LAUNCHER) {
+        central_event = CreateEventW(NULL, FALSE, FALSE, ORDAX_CENTRAL_EVENT);
+        if (central_event == NULL) {
+            fatal_message(L"Não foi possível inicializar a navegação Central.");
+            return 16;
+        }
+    }
 
     const wchar_t *mutex_name = ORDAX_RUNTIME_LAUNCHER
         ? L"Local\\ORDAXRuntime"
@@ -302,11 +369,14 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
     HANDLE mutex = CreateMutexW(NULL, TRUE, mutex_name);
     if (mutex == NULL) {
         fatal_message(L"Não foi possível inicializar a instância do ORDAX.");
+        if (central_event != NULL) CloseHandle(central_event);
         return 10;
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        const bool delivered = !central_start || SetEvent(central_event) != 0;
         CloseHandle(mutex);
-        return 0;
+        if (central_event != NULL) CloseHandle(central_event);
+        return delivered ? 0 : 16;
     }
 
     HANDLE shutdown_event = CreateEventW(NULL, TRUE, FALSE, shutdown_event_name);
@@ -314,6 +384,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
         fatal_message(L"Não foi possível inicializar o canal de encerramento do ORDAX.");
         ReleaseMutex(mutex);
         CloseHandle(mutex);
+        if (central_event != NULL) CloseHandle(central_event);
         return 13;
     }
 
@@ -325,6 +396,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
         CloseHandle(shutdown_event);
         ReleaseMutex(mutex);
         CloseHandle(mutex);
+        if (central_event != NULL) CloseHandle(central_event);
         return 11;
     }
 
@@ -340,6 +412,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
         CloseHandle(shutdown_event);
         ReleaseMutex(mutex);
         CloseHandle(mutex);
+        if (central_event != NULL) CloseHandle(central_event);
         return 12;
     }
 
@@ -354,6 +427,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
             CloseHandle(shutdown_event);
             ReleaseMutex(mutex);
             CloseHandle(mutex);
+            if (central_event != NULL) CloseHandle(central_event);
             return 14;
         }
     }
@@ -368,6 +442,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
         CloseHandle(shutdown_event);
         ReleaseMutex(mutex);
         CloseHandle(mutex);
+        if (central_event != NULL) CloseHandle(central_event);
         return 15;
     }
 
@@ -380,6 +455,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
             root,
             job,
             shutdown_event,
+            central_event,
+            central_start,
             false);
         if (result == ERROR_CANCELLED) {
             result = 0;
@@ -430,6 +507,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
         CloseHandle(job);
     }
     CloseHandle(shutdown_event);
+    if (central_event != NULL) CloseHandle(central_event);
     ReleaseMutex(mutex);
     CloseHandle(mutex);
     return (int)result;
