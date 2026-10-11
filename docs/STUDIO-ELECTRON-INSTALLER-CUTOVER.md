@@ -67,3 +67,23 @@ O teste de apresentação Windows prova um pacote com usuário/dispositivo
 **simulados** e não faz login real na conta do usuário. Uma instalação
 física deve ocorrer somente após a autenticação, o emparelhamento do
 dispositivo e as provas de release.
+
+## Entrada oficial Studio Central — 2026-10-11
+
+O instalador oferece **ORDAX Studio** e **ORDAX Central** no menu Iniciar.
+Ambos apontam para o mesmo supervisor assinado `{app}\\ORDAX Studio.exe`;
+o atalho Central apenas solicita `--ordax-central` e não inicia outro
+Runtime, cria credenciais ou concede grants. O supervisor transmite esse
+sinal exclusivamente ao Electron canônico em `presentation`, mantendo o
+processo notificante no mesmo Windows Job Object. Quando o Studio já está
+aberto, o segundo launcher sinaliza o supervisor existente por um evento
+Windows local de sessão; o Electron encaminha a navegação por seu lock de
+instância única. Se o renderer ainda não está pronto, o pedido fica
+pendente na memória do próprio Electron e é entregue após o carregamento.
+
+A smoke do instalador testa atalho instalado, pedido Central com Studio
+aberto e entrada Central a frio (argumento no processo Electron real,
+janela visível e inventário intacto). Não confundir essas provas de
+navegação com login Product/Relay real, múltiplas conversas de IA ou
+instalação assinada no computador do usuário; tais critérios continuam
+pendentes e sob os owners existentes.
