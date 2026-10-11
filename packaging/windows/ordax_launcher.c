@@ -3,6 +3,7 @@
 #include <wchar.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <shellapi.h>
 
 #ifndef ORDAX_RUNTIME_LAUNCHER
 #define ORDAX_RUNTIME_LAUNCHER 0
@@ -11,8 +12,21 @@
 #define ORDAX_MAX_PATH 32768
 #define ORDAX_CENTRAL_EVENT L"Local\\ORDAXStudioOpenCentral"
 
-static bool is_central_requested(const wchar_t *arguments) {
-    return arguments != NULL && wcscmp(arguments, L"--ordax-central") == 0;
+// WinMain's lpCmdLine is not a reliably tokenized argv array. Use the
+// Windows command-line parser and compare complete arguments, not substrings.
+static bool is_central_requested(void) {
+    int argc = 0;
+    LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv == NULL) return false;
+    bool requested = false;
+    for (int i = 1; i < argc; ++i) {
+        if (wcscmp(argv[i], L"--ordax-central") == 0) {
+            requested = true;
+            break;
+        }
+    }
+    LocalFree(argv);
+    return requested;
 }
 
 static void fatal_message(const wchar_t *message) {
@@ -334,7 +348,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
     (void)instance;
     (void)previous;
     (void)show;
-    const bool central_start = !ORDAX_RUNTIME_LAUNCHER && is_central_requested(command_line);
+    (void)command_line;
+    const bool central_start = !ORDAX_RUNTIME_LAUNCHER && is_central_requested();
     HANDLE central_event = NULL;
     if (!ORDAX_RUNTIME_LAUNCHER) {
         central_event = CreateEventW(NULL, FALSE, FALSE, ORDAX_CENTRAL_EVENT);
