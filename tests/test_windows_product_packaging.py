@@ -250,6 +250,21 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertNotIn("$env:PYTHONPATH", script)
         self.assertNotIn('ordax-studio-web =', project)
 
+    def test_central_shortcut_uses_one_supervised_runtime_and_preserves_pending_navigation(self) -> None:
+        installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text("utf-8")
+        launcher = (ROOT / "packaging" / "windows" / "ordax_launcher.c").read_text("utf-8")
+        self.assertIn('Name: "{group}\\ORDAX Central"', installer)
+        self.assertIn('Parameters: "--ordax-central"', installer)
+        self.assertNotIn('#define CentralExeName', installer)
+        self.assertIn('ORDAX_CENTRAL_EVENT', launcher)
+        self.assertIn('SetEvent(central_event)', launcher)
+        self.assertIn('WaitForMultipleObjects(3, wait_handles, FALSE, INFINITE)', launcher)
+        self.assertIn('dispatch_central_request(executable, root, job)', launcher)
+        self.assertIn('AssignProcessToJobObject(job, process.hProcess)', launcher)
+        self.assertIn('central_start ? L" --ordax-central" : L""', launcher)
+        self.assertIn('return delivered ? 0 : 16;', launcher)
+        self.assertNotIn('ORDAX_CENTRAL_LAUNCHER', launcher)
+
     def test_native_workbench_is_provider_neutral_and_uses_webview2(self) -> None:
         project = (ROOT / "native" / "ordax-workbench" / "Ordax.Workbench.csproj").read_text(encoding="utf-8")
         xaml = (ROOT / "native" / "ordax-workbench" / "MainWindow.xaml").read_text(encoding="utf-8")
