@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import uuid
 from typing import Any, Callable
 
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
@@ -48,13 +49,22 @@ def authorize_account(
     base = control_plane or os.environ.get("ORDAX_PRODUCT_CONTROL_PLANE_URL") or _DEFAULT_CONTROL_PLANE
     with remote_factory(base) as remote:
         subject = remote.session(token)
-    if not isinstance(subject, dict) or not isinstance(subject.get("subject_id"), str) or not subject["subject_id"]:
+    if not isinstance(subject, dict) or not isinstance(subject.get("subject_id"), str):
         raise ValueError("invalid_product_subject")
+    try:
+        owner_id = str(uuid.UUID(subject["subject_id"]))
+        if subject["subject_id"].lower() != owner_id:
+            raise ValueError("noncanonical_subject")
+    except (ValueError, AttributeError):
+        raise ValueError("invalid_product_subject") from None
     # The token crosses only the private child stdout -> Electron main-process
     # pipe; never store it in a profile, HTTP response, renderer or log.
     return {
         "schema": _SCHEMA, "ok": True, "access_token": token,
         "email": session.email or email.strip(),
+        # Verified by Product session endpoint. This is an account identity
+        # assertion over private stdio, not an MCP grant or device selection.
+        "subject_id": owner_id,
     }
 
 

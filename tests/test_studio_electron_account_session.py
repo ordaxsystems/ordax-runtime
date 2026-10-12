@@ -17,7 +17,7 @@ def request(**changes):
 class CanonicalElectronAccountSessionTests(unittest.TestCase):
     def test_uses_existing_auth_owner_and_checks_product_subject(self):
         backend = Mock()
-        backend.session.return_value = {"subject_id": "user-123"}
+        backend.session.return_value = {"subject_id": "11111111-1111-4111-8111-111111111111"}
         backend.__enter__ = Mock(return_value=backend)
         backend.__exit__ = Mock(return_value=None)
         factory = Mock(return_value=backend)
@@ -32,6 +32,7 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
         self.assertEqual(result["schema"], request()["schema"])
         self.assertEqual(result["ok"], True)
         self.assertEqual(result["access_token"], "private.jwt.signature")
+        self.assertEqual(result["subject_id"], "11111111-1111-4111-8111-111111111111")
         self.assertNotIn("password", result)
 
     def test_rejects_noncanonical_shape_before_request_or_login(self):
@@ -62,6 +63,17 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
                 remote_factory=lambda _: backend,
             )
 
+    def test_non_uuid_verified_account_subject_never_crosses_private_ipc(self):
+        backend = Mock()
+        backend.session.return_value = {"subject_id": "user-123"}
+        backend.__enter__ = Mock(return_value=backend)
+        backend.__exit__ = Mock(return_value=None)
+        with self.assertRaisesRegex(ValueError, "invalid_product_subject"):
+            account.authorize_account(
+                request(), authenticate=lambda *_: ProductAuthSession("jwt", None),
+                remote_factory=lambda _: backend, control_plane="https://control.example.com"
+            )
+
     def test_stdin_protocol_redacts_secrets_and_disallows_duplicate_keys(self):
         secret = "private-password"
         token = "secret.jwt.value"
@@ -90,6 +102,7 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
         with patch.object(account, "authorize_account", return_value={
             "schema": "ordax.studio-product-account-session/1", "ok": True,
             "access_token": "jwt", "email": "x@example.com",
+            "subject_id": "11111111-1111-4111-8111-111111111111",
         }):
             self.assertEqual(account.run(io.BytesIO(json.dumps(request()).encode()), out), 0)
         self.assertEqual(out.getvalue().count("\n"), 1)
