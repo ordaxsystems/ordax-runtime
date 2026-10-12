@@ -59,7 +59,7 @@ jobs:
               (Resolve-Path $path), [ref]$tokens, [ref]$errors
             ) | Out-Null
             if (@($errors).Count -gt 0) {
-              foreach ($error in $errors) { Write-Error "$path : $($error.Message)" }
+              foreach ($parseProblem in $errors) { Write-Error "$path : $($parseProblem.Message)" }
               throw "PowerShell packaging syntax failure: $path"
             }
           }
