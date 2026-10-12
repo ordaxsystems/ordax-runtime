@@ -102,8 +102,8 @@ jobs:
         run: |
           node --test .ordax/apps/tools/assistant-host/test/canonical-account.test.mjs .ordax/apps/tools/assistant-host/test/subject-journal.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Studio account IPC contract test failed' }
-          python -m unittest tests.test_studio_electron_account_session
-          if ($LASTEXITCODE -ne 0) { throw 'Runtime account issuer contract test failed' }
+          # Python issuer/owner verification belongs to ORDAX Runtime Contracts.
+          # This Windows gate verifies the exact pinned Apps consumer.
       - name: Build ORDAX Studio product from canonical app source
         shell: powershell
         env:
