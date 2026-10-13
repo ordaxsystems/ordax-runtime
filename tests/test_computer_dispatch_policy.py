@@ -58,13 +58,19 @@ class ComputerDispatchPolicyTests(unittest.TestCase):
         with patch.dict("os.environ", {"ORDAX_COMPUTER_ACCESS_ENABLED": "false"}):
             self.assertFalse(self.registry.execute("computer.screen_info", {}).ok)
 
-    def test_invalid_settings_fail_closed_and_disabled_status_stays_readable(self):
+    def test_invalid_settings_fail_closed_and_owner_status_stays_readable(self):
         self.settings.write_text("{invalid", encoding="utf-8")
         self.assertFalse(self.registry.execute("computer.screen_info", {}).ok)
+        activity = self.registry.execute("computer.activity_status", {})
+        self.assertTrue(activity.ok)
+        self.assertFalse(activity.data["active"])
         self.policy(False)
-        result = self.registry.execute("computer.access_status", {})
-        self.assertTrue(result.ok)
-        self.assertFalse(result.data["enabled"])
+        access = self.registry.execute("computer.access_status", {})
+        activity = self.registry.execute("computer.activity_status", {})
+        self.assertTrue(access.ok)
+        self.assertFalse(access.data["enabled"])
+        self.assertTrue(activity.ok)
+        self.assertFalse(activity.data["active"])
 
 
 if __name__ == "__main__":

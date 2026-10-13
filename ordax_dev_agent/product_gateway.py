@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 from .models import ActionResult
+from .computer_activity import bind_product_execution_provenance
 
 
 class ActionExecutor(Protocol):
@@ -1001,9 +1002,17 @@ class ProductActionGateway:
                 {"error_code": "audit_unavailable"},
             )
 
+        with bind_product_execution_provenance(
+            request_id=context.request_id,
+            subject_id=context.subject_id,
+            device_id=context.device_id,
+            space_id=context.space_id,
+            grant_id=grant.grant_id,
+        ):
+            local_result = self.executor.execute(spec.local_action, body)
         result = _sanitize_product_result(
             action,
-            self.executor.execute(spec.local_action, body),
+            local_result,
             allowed_projects=grant.projects,
         )
 

@@ -14,6 +14,7 @@ class StudioComputerAccessHostTests(unittest.TestCase):
 
     def test_policy_editor_requires_local_owner_bridge_and_revision_guard(self) -> None:
         self.assertIn('"computer_access_settings"', self.bridge)
+        self.assertIn('"computer_activity_status"', self.bridge)
         self.assertIn('"save_computer_access_settings"', self.bridge)
         policy = (ROOT / "ordax_dev_agent" / "computer_filesystem_actions.py").read_text(encoding="utf-8")
         self.assertIn('"expected_revision is required"', policy)
@@ -22,6 +23,7 @@ class StudioComputerAccessHostTests(unittest.TestCase):
         self.assertNotIn("computer.access_update", self.product_mcp)
         self.assertNotIn("full_access", self.product_mcp)
         self.assertNotIn("save_computer_access_settings", self.product_mcp)
+        self.assertNotIn("computer.activity_status", self.product_mcp)
 
 
 if __name__ == "__main__":

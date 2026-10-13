@@ -32,7 +32,7 @@ class StudioHostTransportBoundaryTests(unittest.TestCase):
         bridge = (ROOT / "ordax_studio" / "workbench_bridge.py").read_text(encoding="utf-8")
         for method in (
             '"ai_sessions_status"', '"connect_product_account"',
-            '"blender_prepare"', '"computer_access_settings"',
+            '"blender_prepare"', '"computer_access_settings"', '"computer_activity_status"',
             '"remote_app_intelligence_grants"',
             '"authorize_remote_app_intelligence_grant"',
             '"revoke_remote_app_intelligence_grant"',
