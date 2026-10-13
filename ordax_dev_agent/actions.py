@@ -28,6 +28,7 @@ from .browser_session_actions import BrowserSessionActions
 from .computer_control_actions import ComputerControlActions
 from .computer_parity_actions import ComputerParityActions
 from .computer_filesystem_actions import ComputerFilesystemActions, load_computer_access_policy
+from .computer_activity import ComputerActivityTracker
 from .memory_actions import MemoryActions
 from .application_intelligence_actions import ApplicationIntelligenceActions
 from .component_actions import ComponentActions
@@ -67,11 +68,17 @@ from .adapter_contracts import (
 
 Action = Callable[[dict[str, Any]], ActionResult]
 
+_COMPUTER_OWNER_STATUS_ACTIONS = frozenset({
+    "computer.access_status",
+    "computer.activity_status",
+})
+
 # Pure observation calls must remain usable while an unrelated long-running
 # action owns the global execution lock. They do not mutate project/runtime
 # state or synthesize input; mutating Computer Control stays serialized below.
 _NONBLOCKING_OBSERVATION_ACTIONS = frozenset({
     "computer.access_status",
+    "computer.activity_status",
     "computer.file_stat",
     "computer.directory_list",
     "computer.text_read",
@@ -143,6 +150,7 @@ class ActionRegistry(
         self.projects = load_projects(config)
         self.on_observation = None
         self._initialize_application_intelligence()
+        self._computer_activity = ComputerActivityTracker(config.state_dir)
         self._execution_lock = threading.Lock()
         self._actions: dict[str, Action] = {
             "projects.list": self.projects_list,
@@ -192,6 +200,7 @@ class ActionRegistry(
             "computer.processes": self.computer_processes,
             "computer.terminate_process": self.computer_terminate_process,
             "computer.access_status": self.computer_access_status,
+            "computer.activity_status": self.computer_activity_status,
             "computer.file_stat": self.computer_file_stat,
             "computer.directory_list": self.computer_directory_list,
             "computer.text_read": self.computer_text_read,
@@ -475,6 +484,28 @@ class ActionRegistry(
                 return slug
         raise ValueError("no registered project directories are available")
 
+    def computer_activity_status(self, payload: dict[str, Any]) -> ActionResult:
+        if payload:
+            return ActionResult(False, "computer.activity_status accepts no fields")
+        return ActionResult(True, "computer activity status ready", self._computer_activity.snapshot())
+
+    def _execute_handler(
+        self,
+        action: str,
+        handler: Action,
+        payload: dict[str, Any],
+    ) -> ActionResult:
+        if not action.startswith("computer.") or action in _COMPUTER_OWNER_STATUS_ACTIONS:
+            return handler(payload)
+        operation_id = self._computer_activity.start(action)
+        result_ok: bool | None = None
+        try:
+            result = handler(payload)
+            result_ok = bool(result.ok)
+            return result
+        finally:
+            self._computer_activity.finish(operation_id, result_ok=result_ok)
+
     def execute(self, action: str, payload: dict[str, Any]) -> ActionResult:
         handler = self._actions.get(action)
         if handler is None:
@@ -482,8 +513,8 @@ class ActionRegistry(
         payload = payload or {}
         # Apply the owner's current policy at the single dispatch boundary,
         # including nonblocking observations and calls from remote gateways.
-        # access_status remains available so a disabled device is diagnosable.
-        if action.startswith("computer.") and action != "computer.access_status":
+        # owner status actions remain available so disabled or invalid devices are diagnosable.
+        if action.startswith("computer.") and action not in _COMPUTER_OWNER_STATUS_ACTIONS:
             try:
                 policy = load_computer_access_policy(self.config)
             except (ValueError, OSError) as error:
@@ -492,7 +523,7 @@ class ActionRegistry(
                 return ActionResult(False, "computer access is disabled by local ORDAX policy")
         if action in _NONBLOCKING_OBSERVATION_ACTIONS:
             try:
-                return handler(payload)
+                return self._execute_handler(action, handler, payload)
             except (ValueError, FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
                 return ActionResult(False, f"{type(error).__name__}: {error}")
         if action in (
@@ -504,7 +535,7 @@ class ActionRegistry(
             "project.preview_status",
             "git.quick_status",
         ):
-            return handler(payload)
+            return self._execute_handler(action, handler, payload)
         if not self._execution_lock.acquire(blocking=False):
             return ActionResult(False, "Agent is busy; retry after the current action", {"retryable": True})
         process_lock = ExecutionLock(self.config.state_dir)
@@ -520,7 +551,7 @@ class ActionRegistry(
                         f"application not enabled for project {project.slug}: "
                         f"{adapter.project_app}"
                     )
-            result = handler(payload)
+            result = self._execute_handler(action, handler, payload)
             return result
         except (ValueError, FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
             return ActionResult(False, f"{type(error).__name__}: {error}")

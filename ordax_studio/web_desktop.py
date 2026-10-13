@@ -598,6 +598,9 @@ class StudioApi:
             }
         return {"ok": True, "summary": "Política local carregada", "data": data}
 
+    def computer_activity_status(self) -> dict[str, Any]:
+        return self._result(self.agent.execute("computer.activity_status", {}))
+
     def save_computer_access_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
             return {"ok": False, "summary": "Configuração de acesso inválida", "data": {}}

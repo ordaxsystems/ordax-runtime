@@ -79,6 +79,7 @@
     checkpoint:(...args)=>invoke('checkpoint',args),
     productStatus:(...args)=>invoke('product_status',args),
     computerAccessSettings:(...args)=>invoke('computer_access_settings',args),
+    computerActivityStatus:(...args)=>invoke('computer_activity_status',args),
     saveComputerAccessSettings:(...args)=>invoke('save_computer_access_settings',args),
     health:(...args)=>invoke('health',args),
     briefing:(...args)=>invoke('briefing',args),

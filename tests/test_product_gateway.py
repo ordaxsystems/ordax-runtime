@@ -342,6 +342,7 @@ class ProductGatewayTests(unittest.TestCase):
         self.assertIn("computer.screenshot", names)
         self.assertIn("computer.click", names)
         self.assertIn("computer.access_status", names)
+        self.assertNotIn("computer.activity_status", names)
         self.assertIn("computer.text_read", names)
         self.assertIn("computer.text_write", names)
         self.assertIn("computer.path_remove", names)
