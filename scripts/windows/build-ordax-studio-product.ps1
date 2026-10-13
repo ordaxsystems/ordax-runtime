@@ -119,6 +119,27 @@ if ($studioAppSource) {
             throw "Canonical Electron Studio source is incomplete: $required"
         }
     }
+    # The private account protocol must be consumed by the EXACT pinned
+    # Apps host. A successful installer build with the previous consumer
+    # would fail sign-in when the Runtime emits its verified subject.
+    $accountConsumer = Join-Path $checkoutRoot "tools\assistant-host\native\canonical-account.cjs"
+    $accountHost = Join-Path $checkoutRoot "tools\assistant-host\native\main.cjs"
+    $accountRuntime = Join-Path $checkoutRoot "tools\assistant-host\native\product-runtime.mjs"
+    foreach ($requiredAccount in @($accountConsumer, $accountHost, $accountRuntime)) {
+        if (-not (Test-Path -LiteralPath $requiredAccount -PathType Leaf)) {
+            throw "Pinned Studio account consumer missing: $requiredAccount"
+        }
+    }
+    $accountConsumerSource = Get-Content -LiteralPath $accountConsumer -Raw -Encoding UTF8
+    $accountHostSource = Get-Content -LiteralPath $accountHost -Raw -Encoding UTF8
+    $accountRuntimeSource = Get-Content -LiteralPath $accountRuntime -Raw -Encoding UTF8
+    $consumerVerifiedSubject = $accountConsumerSource.Contains("subject_id") -and $accountConsumerSource.Contains("SUBJECT_UUID")
+    $hostAttestedSubject = $accountHostSource.Contains("acceptAccountToken(token, subjectId)")
+    $runtimeAttestedSubject = $accountRuntimeSource.Contains("acceptAccountToken(token, verifiedSubjectId)")
+    if (-not ($consumerVerifiedSubject -and $hostAttestedSubject -and $runtimeAttestedSubject)) {
+        throw "Pinned Studio account protocol cannot consume verified Runtime subject; update canonical Apps source lock"
+    }
+
     $electronPackage = Get-Content (Join-Path $checkoutRoot "tools\assistant-host\package.json") -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([string]$electronPackage.version -ne [string]$sourceLock.version -or
         [string]$electronPackage.dependencies.electron -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {

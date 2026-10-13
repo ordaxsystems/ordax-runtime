@@ -59,7 +59,7 @@ jobs:
               (Resolve-Path $path), [ref]$tokens, [ref]$errors
             ) | Out-Null
             if (@($errors).Count -gt 0) {
-              foreach ($error in $errors) { Write-Error "$path : $($error.Message)" }
+              foreach ($parseProblem in $errors) { Write-Error "$path : $($parseProblem.Message)" }
               throw "PowerShell packaging syntax failure: $path"
             }
           }
@@ -97,6 +97,13 @@ jobs:
       - name: Install Inno Setup
         shell: powershell
         run: choco install innosetup --yes --no-progress
+      - name: Prove pinned Studio account IPC and journal contracts before packaging
+        shell: pwsh
+        run: |
+          node --test .ordax/apps/tools/assistant-host/test/canonical-account.test.mjs .ordax/apps/tools/assistant-host/test/subject-journal.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Studio account IPC contract test failed' }
+          # Python issuer/owner verification belongs to ORDAX Runtime Contracts.
+          # This Windows gate verifies the exact pinned Apps consumer.
       - name: Build ORDAX Studio product from canonical app source
         shell: powershell
         env:
