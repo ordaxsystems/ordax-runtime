@@ -31,6 +31,7 @@ _ALLOWED_METHODS = frozenset(
         "checkpoint",
         "product_status",
         "computer_access_settings",
+        "computer_activity_status",
         "save_computer_access_settings",
         "health",
         "briefing",
