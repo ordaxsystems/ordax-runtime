@@ -1,0 +1,87 @@
+name: Owner Linux Recovery Agent
+
+on:
+  pull_request:
+    paths:
+      - "native/ordax-owner-recovery/**"
+      - ".github/workflows/owner-linux-recovery.yml"
+  push:
+    branches: [main]
+    paths:
+      - "native/ordax-owner-recovery/**"
+      - ".github/workflows/owner-linux-recovery.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owner-linux-recovery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.2"
+          cache-dependency-path: native/ordax-owner-recovery/go.sum
+      - name: Test narrow owner recovery agent
+        working-directory: native/ordax-owner-recovery
+        run: go test ./...
+      - name: Build static Linux amd64 binary
+        working-directory: native/ordax-owner-recovery
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p ../../out
+          go build -trimpath -buildvcs=true \
+            -ldflags "-s -w -X main.version=${GITHUB_SHA}" \
+            -o ../../out/ordax-owner-recovery-agent .
+          test -x ../../out/ordax-owner-recovery-agent
+          file ../../out/ordax-owner-recovery-agent | tee ../../out/file.txt
+          grep -q 'statically linked' ../../out/file.txt
+          sha256sum ../../out/ordax-owner-recovery-agent > ../../out/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ordax-owner-recovery-${{ github.sha }}
+          path: |
+            out/ordax-owner-recovery-agent
+            out/SHA256SUMS.txt
+            out/file.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ordax-owner-recovery-${{ github.sha }}
+          path: out
+      - name: Publish exact-source prerelease assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: owner-recovery-${{ github.sha }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release already exists for exact source SHA"
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "OrdaX Owner Recovery ${GITHUB_SHA}" \
+            --notes "Owner/Development-only Linux recovery transport. Exact source SHA: ${GITHUB_SHA}. Not a Stable/MVP component." \
+            out/ordax-owner-recovery-agent out/SHA256SUMS.txt out/file.txt
