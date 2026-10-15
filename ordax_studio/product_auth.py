@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import os
+import socket
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -8,7 +10,9 @@ from urllib.parse import urlparse
 import httpx
 
 from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.device_credentials import resolve_token_path
 from ordax_dev_agent.device_setup import SetupError, configure as configure_device
+from ordax_dev_agent.identity import machine_id
 
 # Public metadata lives in one consumer snapshot validated against the
 # canonical ordax-platform wrangler.toml owner on every Windows contract run.
@@ -232,6 +236,82 @@ def exchange_authorization_code(
             client.close()
 
 
+def _revalidate_existing_device(
+    config: AgentConfig,
+    session: ProductAuthSession,
+    *,
+    http: httpx.Client | None = None,
+) -> str:
+    token_path = resolve_token_path(config.state_dir)
+    try:
+        raw_device_token = token_path.read_text(encoding="utf-8-sig").strip()
+    except OSError as error:
+        raise ProductAccountError(
+            "device_credential_missing",
+            "A identidade local deste computador precisa ser recriada.",
+        ) from error
+    if not 32 <= len(raw_device_token) <= 512:
+        raise ProductAccountError(
+            "device_credential_invalid",
+            "A identidade local deste computador é inválida.",
+        )
+
+    body = {
+        "operation": "enroll",
+        "machine_binding_sha256": machine_id(),
+        "device_name": socket.gethostname(),
+        "device_kind": str(os.environ.get("ORDAX_PRODUCT_DEVICE_KIND", "desktop")).strip().lower(),
+        "channel": str(os.environ.get("ORDAX_PRODUCT_CHANNEL", "development")).strip().lower(),
+        "token_sha256": hashlib.sha256(raw_device_token.encode()).hexdigest(),
+    }
+    owns_http = http is None
+    client = http or httpx.Client(timeout=20, follow_redirects=False)
+    try:
+        try:
+            response = client.post(
+                config.control_plane_url.rstrip("/") + "/v3/device/setup",
+                headers={
+                    "authorization": "Bearer " + session.access_token,
+                    "accept": "application/json",
+                    "content-type": "application/json",
+                },
+                json=body,
+            )
+        except httpx.HTTPError as error:
+            raise ProductAccountError(
+                "device_enrollment_unavailable",
+                "A conta foi autenticada, mas o Control Plane está indisponível.",
+            ) from error
+        try:
+            result: Any = response.json()
+        except ValueError as error:
+            raise ProductAccountError(
+                "device_enrollment_invalid_response",
+                "O Control Plane retornou uma resposta inválida ao validar este computador.",
+            ) from error
+        if response.status_code >= 400 or not isinstance(result, dict) or result.get("ok") is not True:
+            code = result.get("error") if isinstance(result, dict) else None
+            if code == "device_owner_mismatch":
+                raise ProductAccountError(
+                    "device_owner_mismatch",
+                    "Este computador já pertence a outra Conta ORDAX.",
+                )
+            raise ProductAccountError(
+                str(code or "device_enrollment_failed"),
+                "A conta foi autenticada, mas não foi possível validar este computador.",
+            )
+        device_id = result.get("device_id")
+        if not isinstance(device_id, str) or not device_id:
+            raise ProductAccountError(
+                "device_enrollment_invalid",
+                "O Control Plane não retornou uma identidade válida para este computador.",
+            )
+        return device_id
+    finally:
+        if owns_http:
+            client.close()
+
+
 def connect_existing_device(
     config: AgentConfig,
     email: str | None = None,
@@ -240,13 +320,7 @@ def connect_existing_device(
     auth_http: httpx.Client | None = None,
     session: ProductAuthSession | None = None,
 ) -> dict[str, Any]:
-    """Bind the local Product device to the authenticated owner via canonical enrollment.
-
-    Product pairing/device-links are retired server-side. Enrollment is the current
-    authority boundary: for an existing machine binding it atomically verifies the
-    same owner and revalidates the local device credential; for a new machine it
-    creates the owner-bound Product device.
-    """
+    """Bind the local Product device to the authenticated owner via canonical enrollment."""
     if not config.control_plane_url:
         raise ProductAccountError(
             "control_plane_unconfigured",
@@ -264,25 +338,27 @@ def connect_existing_device(
         active_session = session
 
     previous_device_id = str(config.device_id or "")
-    try:
-        enrollment = configure_device(
-            config.state_dir,
-            control_plane_url=config.control_plane_url,
-            product_access_token=active_session.access_token,
-            force_product_enrollment=True,
-        )
-    except SetupError as error:
-        raise ProductAccountError(
-            "device_enrollment_failed",
-            "A conta foi autenticada, mas não foi possível registrar ou validar este computador.",
-        ) from error
+    if previous_device_id:
+        device_id = _revalidate_existing_device(config, active_session)
+    else:
+        try:
+            enrollment = configure_device(
+                config.state_dir,
+                control_plane_url=config.control_plane_url,
+                product_access_token=active_session.access_token,
+            )
+        except SetupError as error:
+            raise ProductAccountError(
+                "device_enrollment_failed",
+                "A conta foi autenticada, mas não foi possível registrar este computador.",
+            ) from error
+        device_id = str(enrollment.get("device_id") or "")
+        if not device_id:
+            raise ProductAccountError(
+                "device_enrollment_invalid",
+                "O Control Plane não retornou uma identidade válida para este computador.",
+            )
 
-    device_id = str(enrollment.get("device_id") or "")
-    if not device_id:
-        raise ProductAccountError(
-            "device_enrollment_invalid",
-            "O Control Plane não retornou uma identidade válida para este computador.",
-        )
     if previous_device_id and previous_device_id != device_id:
         raise ProductAccountError(
             "device_identity_changed",
