@@ -53,7 +53,7 @@ A versão atual não possui plano pago, licença ou gate de assinatura. O víncu
 
 O conector atual do ChatGPT se chama **ORDAX for ChatGPT** e sua fonte fica em `plugins/ordax-chatgpt/`. Ele aponta para o MCP de produção:
 
-`https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev/mcp`
+`https://mcp.ordax.com.br/mcp`
 
 O conector é uma integração de provider, não o núcleo do Studio. Um futuro **ORDAX for Grok**, Claude, Gemini ou outro conector deve reutilizar o mesmo boundary de ação e autorização em vez de duplicar capacidades locais.
 
