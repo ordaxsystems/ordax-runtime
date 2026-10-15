@@ -10,7 +10,7 @@ from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRe
 def main() -> int:
     base_url = os.environ.get(
         "ORDAX_PRODUCT_CONTROL_PLANE_URL",
-        "https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev",
+        "https://mcp.ordax.com.br",
     ).strip()
     token = os.environ.get("ORDAX_PRODUCT_ACCESS_TOKEN", "").strip()
 
