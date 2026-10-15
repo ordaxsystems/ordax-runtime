@@ -17,7 +17,7 @@ from .product_auth import ProductAccountError, ProductAuthSession, sign_in_with_
 
 _SCHEMA = "ordax.studio-product-account-session/1"
 _MAX_INPUT = 3000
-_DEFAULT_CONTROL_PLANE = "https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev"
+_DEFAULT_CONTROL_PLANE = "https://mcp.ordax.com.br"
 _CODE = re.compile(r"[a-z][a-z0-9_]{0,79}")
 
 
