@@ -29,13 +29,9 @@ def runtime_config(control_plane: str = "https://control.example.com") -> AgentC
 
 
 class CanonicalElectronAccountSessionTests(unittest.TestCase):
-    def test_browser_session_checks_product_subject_enrolls_and_confirms_target(self):
+    def test_browser_session_checks_product_subject_and_enrolls_device_without_mcp_grant(self):
         backend = Mock()
         backend.session.return_value = {"subject_id": "11111111-1111-4111-8111-111111111111"}
-        backend.targets.return_value = [{
-            "device_id": "22222222-2222-4222-8222-222222222222",
-            "presence": "online",
-        }]
         backend.__enter__ = Mock(return_value=backend)
         backend.__exit__ = Mock(return_value=None)
         factory = Mock(return_value=backend)
@@ -44,7 +40,6 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
         connect = Mock(return_value={
             "device_id": "22222222-2222-4222-8222-222222222222",
             "enrolled_now": True,
-            "link": {"status": "linked"},
         })
         config = runtime_config()
         result = account.authorize_account(
@@ -55,7 +50,7 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
         authenticate.assert_called_once_with()
         factory.assert_called_once_with("https://control.example.com")
         backend.session.assert_called_once_with("private.jwt.signature")
-        backend.targets.assert_called_once_with("private.jwt.signature")
+        backend.targets.assert_not_called()
         connect.assert_called_once()
         args, kwargs = connect.call_args
         self.assertEqual(args[0].control_plane_url, "https://control.example.com")
@@ -67,35 +62,7 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
         self.assertEqual(result["subject_id"], "11111111-1111-4111-8111-111111111111")
         self.assertEqual(result["device_id"], "22222222-2222-4222-8222-222222222222")
         self.assertIs(result["enrolled_now"], True)
-        self.assertNotIn("link", result)
         self.assertNotIn("password", json.dumps(result).lower())
-
-    def test_browser_session_fails_closed_when_pairing_does_not_reach_targets(self):
-        backend = Mock()
-        backend.session.return_value = {"subject_id": "11111111-1111-4111-8111-111111111111"}
-        backend.targets.return_value = []
-        backend.__enter__ = Mock(return_value=backend)
-        backend.__exit__ = Mock(return_value=None)
-        connect = Mock(return_value={
-            "device_id": "22222222-2222-4222-8222-222222222222",
-            "enrolled_now": True,
-            "link": {"status": "linked"},
-        })
-        with (
-            patch.object(account.time, "sleep") as sleep,
-            self.assertRaises(ProductAccountError) as raised,
-        ):
-            account.authorize_account(
-                request(),
-                authenticate=lambda: ProductAuthSession("private.jwt.signature", "user@example.com"),
-                remote_factory=lambda _: backend,
-                config_factory=runtime_config,
-                connect_device=connect,
-                control_plane="https://control.example.com",
-            )
-        self.assertEqual("product_target_not_materialized", raised.exception.code)
-        self.assertEqual(account._TARGET_CONFIRM_ATTEMPTS, backend.targets.call_count)
-        self.assertEqual(account._TARGET_CONFIRM_ATTEMPTS - 1, sleep.call_count)
 
     def test_protocol_rejects_credentials_and_extra_fields_before_browser(self):
         authenticate = Mock()
