@@ -84,4 +84,4 @@ jobs:
             --prerelease \
             --title "OrdaX Owner Recovery ${GITHUB_SHA}" \
             --notes "Owner/Development-only Linux recovery transport. Exact source SHA: ${GITHUB_SHA}. Not a Stable/MVP component." \
-            out/ordax-owner-recovery-agent out/SHA256SUMS.txt out/file.txt
+            out/ordax-owner-recovery-agent out/SHA256SUMS.txt
