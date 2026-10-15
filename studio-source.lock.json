@@ -1,8 +1,8 @@
 {
   "schema": "ordax.studio-source-lock/1",
   "repository": "ordaxsystems/ordax-apps",
-  "commit": "b18b5725c2cbefcf80912e3ddf68e77700a0d6ff",
+  "commit": "115a89b82c1f2bafdd82fdf606496fc1ac2c25cd",
   "path": "apps/studio",
-  "version": "0.15.2",
+  "version": "0.15.3",
   "authority": "none"
 }

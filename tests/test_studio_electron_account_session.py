@@ -12,8 +12,11 @@ from ordax_studio.product_auth import ProductAccountError, ProductAuthSession
 
 
 def request(**changes):
-    return {"schema": "ordax.studio-product-account-session/1", "operation": "sign-in",
-            "email": "user@example.com", "password": "private-password", **changes}
+    return {
+        "schema": "ordax.studio-product-account-session/1",
+        "operation": "browser-sign-in",
+        **changes,
+    }
 
 
 def runtime_config(control_plane: str = "https://control.example.com") -> AgentConfig:
@@ -26,7 +29,7 @@ def runtime_config(control_plane: str = "https://control.example.com") -> AgentC
 
 
 class CanonicalElectronAccountSessionTests(unittest.TestCase):
-    def test_uses_existing_auth_owner_and_checks_product_subject(self):
+    def test_browser_session_checks_product_subject_and_enrolls_device(self):
         backend = Mock()
         backend.session.return_value = {"subject_id": "11111111-1111-4111-8111-111111111111"}
         backend.__enter__ = Mock(return_value=backend)
@@ -45,33 +48,31 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
             config_factory=lambda: config, connect_device=connect,
             control_plane="https://control.example.com",
         )
-        authenticate.assert_called_once_with("user@example.com", "private-password")
+        authenticate.assert_called_once_with()
         factory.assert_called_once_with("https://control.example.com")
         backend.session.assert_called_once_with("private.jwt.signature")
         connect.assert_called_once()
         args, kwargs = connect.call_args
         self.assertEqual(args[0].control_plane_url, "https://control.example.com")
-        self.assertEqual(args[1:3], ("user@example.com", "private-password"))
+        self.assertEqual(len(args), 1)
         self.assertEqual(kwargs["session"].access_token, "private.jwt.signature")
         self.assertEqual(result["schema"], request()["schema"])
-        self.assertEqual(result["ok"], True)
+        self.assertIs(result["ok"], True)
         self.assertEqual(result["access_token"], "private.jwt.signature")
         self.assertEqual(result["subject_id"], "11111111-1111-4111-8111-111111111111")
         self.assertEqual(result["device_id"], "22222222-2222-4222-8222-222222222222")
         self.assertIs(result["enrolled_now"], True)
         self.assertNotIn("link", result)
-        self.assertNotIn("password", result)
+        self.assertNotIn("password", json.dumps(result).lower())
 
-    def test_rejects_noncanonical_shape_before_request_or_login(self):
+    def test_protocol_rejects_credentials_and_extra_fields_before_browser(self):
         authenticate = Mock()
         for bad in (
-            None, [], "a", {}, request(schema="wrong"),
-            request(operation="execute"), dict(request(), extra="value"),
-            request(email=["user@example.com"]), request(password=None),
-            request(email="x\r\nHeader: injected"), request(password="\x00"),
-            request(password="x" * 2049), request(password=""),
+            None, [], "a", {}, request(schema="wrong"), request(operation="sign-in"),
+            dict(request(), extra="value"), dict(request(), email="user@example.com"),
+            dict(request(), password="secret"),
         ):
-            with self.subTest(bad=str(bad)[:30]), self.assertRaises(ValueError):
+            with self.subTest(bad=str(bad)[:40]), self.assertRaises(ValueError):
                 account.authorize_account(bad, authenticate=authenticate)
         authenticate.assert_not_called()
 
@@ -86,54 +87,43 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
         backend.__exit__ = Mock(return_value=None)
         with self.assertRaisesRegex(ValueError, "invalid_product_subject"):
             account.authorize_account(
-                request(), authenticate=lambda *_: ProductAuthSession("jwt", None),
+                request(), authenticate=lambda: ProductAuthSession("jwt", None),
                 remote_factory=lambda _: backend,
             )
 
-    def test_non_uuid_verified_account_subject_never_crosses_private_ipc(self):
-        backend = Mock()
-        backend.session.return_value = {"subject_id": "user-123"}
-        backend.__enter__ = Mock(return_value=backend)
-        backend.__exit__ = Mock(return_value=None)
-        with self.assertRaisesRegex(ValueError, "invalid_product_subject"):
-            account.authorize_account(
-                request(), authenticate=lambda *_: ProductAuthSession("jwt", None),
-                remote_factory=lambda _: backend, control_plane="https://control.example.com"
-            )
-
-    def test_stdin_protocol_redacts_secrets_and_disallows_duplicate_keys(self):
-        secret = "private-password"
+    def test_stdin_protocol_redacts_tokens_and_disallows_duplicate_keys(self):
         token = "secret.jwt.value"
         for raw in (
             json.dumps(request()).encode(),
-            b'{"schema":"x","schema":"y","operation":"sign-in","email":"x","password":"private-password"}',
-            b"x" * 3001,
+            b'{"schema":"x","schema":"y","operation":"browser-sign-in"}',
+            b"x" * 1001,
             b"not-json",
             b"",
         ):
-            with self.subTest(raw=raw[:15]):
+            with self.subTest(raw=raw[:20]):
                 output = io.StringIO()
                 with patch.object(account, "authorize_account",
                                   side_effect=ProductAccountError("bad", "private details")) as auth:
                     code = account.run(io.BytesIO(raw), output)
                 self.assertEqual(code, 1)
-                self.assertTrue(json.loads(output.getvalue())["ok"] is False)
-                self.assertNotIn(secret, output.getvalue())
+                self.assertIs(json.loads(output.getvalue())["ok"], False)
                 self.assertNotIn(token, output.getvalue())
                 self.assertNotIn("private details", output.getvalue())
-                if raw.startswith(b"not-") or len(raw) > 3000 or not raw or b'"schema":"x","schema":"y"' in raw:
+                if raw.startswith(b"not-") or len(raw) > 1000 or not raw or b'"schema":"x","schema":"y"' in raw:
                     auth.assert_not_called()
 
-    def test_single_response_exactly_one_line_never_logs_password(self):
+    def test_single_response_exactly_one_line_contains_no_password_field(self):
         out = io.StringIO()
         with patch.object(account, "authorize_account", return_value={
             "schema": "ordax.studio-product-account-session/1", "ok": True,
             "access_token": "jwt", "email": "x@example.com",
             "subject_id": "11111111-1111-4111-8111-111111111111",
+            "device_id": "22222222-2222-4222-8222-222222222222",
+            "enrolled_now": True,
         }):
             self.assertEqual(account.run(io.BytesIO(json.dumps(request()).encode()), out), 0)
         self.assertEqual(out.getvalue().count("\n"), 1)
-        self.assertNotIn("private-password", out.getvalue())
+        self.assertNotIn("password", out.getvalue().lower())
 
 
 if __name__ == "__main__":
