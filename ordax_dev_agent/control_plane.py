@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from .cloudflare_control_plane import CloudflareControlPlane
 from .config import AgentConfig
+from .product_central_session import ProductCentralSessionClient
 from .product_presence_bridge import ProductPresenceBridge
 
 
 class ProductAwareCloudflareControlPlane(CloudflareControlPlane):
-    """Cloudflare command transport with canonical Product presence projection.
+    """Cloudflare command transport with canonical Product projections.
 
     The existing command heartbeat remains the single cadence owner. Product
-    presence is an observation for the ChatGPT/Product surface and never gains
-    authority to execute commands or mint grants.
+    presence and Central-session attestation are observations/bindings only;
+    neither can mint grants or execute a model-selected command.
     """
 
     def __init__(self, config: AgentConfig):
@@ -20,6 +21,11 @@ class ProductAwareCloudflareControlPlane(CloudflareControlPlane):
             self.device_id,
             lambda: self.device_token,
         )
+        self.product_central_session = ProductCentralSessionClient(
+            str(config.product_mcp_url),
+            self.device_id,
+            lambda: self.device_token,
+        ) if config.product_mcp_url else None
 
     def heartbeat(
         self,
@@ -60,11 +66,22 @@ class ProductAwareCloudflareControlPlane(CloudflareControlPlane):
             status=status,
             last_error=last_error,
         )
-        self.product_presence.report(
+        presence = self.product_presence.report(
             actions,
             agent_version=agent_version,
             online=True,
         )
+
+        # Session attestation is driven by the SAME heartbeat and runs only
+        # after Product identity has been verified. Its failure is intentionally
+        # isolated from command transport/presence: an unavailable MCP release
+        # can never make a healthy device look offline.
+        if (
+            presence.verified
+            and presence.online is True
+            and self.product_central_session is not None
+        ):
+            self.product_central_session.tick()
 
 
 def build_control_plane(config: AgentConfig) -> CloudflareControlPlane:
