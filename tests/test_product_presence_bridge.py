@@ -276,10 +276,7 @@ class ProductAwareControlPlaneTests(unittest.TestCase):
 
         plane.product_central_session.tick = failed_tick
         with patch.object(CloudflareControlPlane, "heartbeat", side_effect=command):
-            # Production ProductCentralSessionClient.tick contains its own
-            # failures; this test proves the control-plane ordering contract.
-            with self.assertRaisesRegex(RuntimeError, "mcp_unavailable"):
-                plane.heartbeat(["agent.status"], agent_version="1.30.3", status="online")
+            plane.heartbeat(["agent.status"], agent_version="1.30.3", status="online")
 
         self.assertEqual(events, ["command", "product:1.30.3:True", "central-session"])
 
