@@ -1,9 +1,11 @@
 """Fail-closed recovery of an already-enrolled ORDAX device identity.
 
 This module never enrolls a new device and never asks for GitHub or product
-credentials. It only uses an existing local device token to ask the configured
-Cloudflare v3 control plane which device UUID owns that credential, then repairs
-agent-settings.json when the identity metadata is missing.
+credentials. It only uses an existing local device token to ask the canonical
+Product ingress which device UUID owns that credential, then repairs
+agent-settings.json when the identity metadata is missing. Command/executor
+transport remains a separate setting until the canonical remote-action E2E is
+promoted.
 """
 from __future__ import annotations
 
@@ -14,9 +16,15 @@ from typing import Any
 
 import httpx
 
-from .config import DEFAULT_CONTROL_PLANE_URL
+from .config import DEFAULT_CONTROL_PLANE_URL, DEFAULT_PRODUCT_MCP_URL
 from .device_credentials import resolve_pending_token_path, resolve_token_path
-from .device_setup import atomic_json, load_settings, request
+from .device_setup import (
+    SetupError,
+    _resolve_product_mcp,
+    atomic_json,
+    load_settings,
+    request,
+)
 from .identity import machine_id
 
 
@@ -36,6 +44,7 @@ def recover_existing_device_identity(
     state: Path | None = None,
     *,
     control_plane_url: str | None = None,
+    product_mcp_url: str | None = None,
     client: Any | None = None,
     binding: str | None = None,
 ) -> dict[str, Any]:
@@ -67,6 +76,16 @@ def recover_existing_device_identity(
             "state": "control-plane-invalid",
             "changed": False,
         }
+    try:
+        product_mcp, setup_endpoint = _resolve_product_mcp(
+            product_mcp_url or settings.get("product_mcp_url") or DEFAULT_PRODUCT_MCP_URL
+        )
+    except SetupError:
+        return {
+            "ok": False,
+            "state": "product-mcp-invalid",
+            "changed": False,
+        }
 
     token = resolve_token_path(state)
     pending = resolve_pending_token_path(state)
@@ -87,7 +106,7 @@ def recover_existing_device_identity(
                 continue
             identity = request(
                 http,
-                control_plane + "/v3/device/setup",
+                setup_endpoint,
                 {
                     "operation": "identify",
                     "machine_binding_sha256": binding or machine_id(),
@@ -119,6 +138,7 @@ def recover_existing_device_identity(
 
             settings.update(
                 control_plane_url=control_plane,
+                product_mcp_url=product_mcp,
                 control_plane_protocol="cloudflare-v3",
                 device_id=device_id,
             )
