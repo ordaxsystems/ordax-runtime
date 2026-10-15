@@ -132,13 +132,10 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("mcp-blender.exe", installer)
         self.assertIn("mcp-blender-unity.exe", installer)
 
-        # The only accepted historical repository references are migration input:
-        # an existing managed checkout can be cut over to ordax-runtime safely.
         self.assertIn("$legacyRemotes", setup)
         self.assertIn("washingtonmsdj/mcp-blender.git", setup)
         self.assertIn("LEGACY_MIGRATION", setup)
         self.assertIn("washingtonmsdj/ordax-runtime.git", setup)
-
 
     def test_installer_retires_legacy_scheduled_runtime_without_deleting_state(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
@@ -427,7 +424,6 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("Release tag already published. Refusing to replace immutable installer assets.", workflow)
         self.assertIn("gh release create $tag", workflow)
 
-
     def test_windows_build_consumes_pinned_ordax_apps_studio_source(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
         build = (ROOT / "scripts" / "windows" / "build-ordax-studio-product.ps1").read_text(encoding="utf-8")
@@ -452,7 +448,10 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("verify-studio-presentation-handoff.ps1", build)
         self.assertIn("presentation_host = \"electron\"", build)
         self.assertIn("ai\\\\manifest.json", build)
-        self.assertIn("ordax.app-intelligence-registry/1", build)
+        self.assertIn("presentation\\\\semantic-ui.json", build)
+        self.assertIn("ordax-apps.ui-semantic-map/1", build)
+        self.assertIn("ordax.app-intelligence-registry/2", build)
+        self.assertIn("semanticUi = $studioSemanticUi", build)
         self.assertIn("ordax.application-action-manifest/1", build)
         self.assertIn("actions\\\\manifest.json", build)
         self.assertIn('execution -ne "proposal-only"', build)
@@ -462,7 +461,6 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertNotIn('Set-Content (Join-Path $targetStudio "app_intelligence_registry.json") -Encoding UTF8', build)
         self.assertIn("ORDAX_APP_INTELLIGENCE_REGISTRY_OK", build)
         self.assertIn('"*.json"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-
 
     def test_installer_retires_only_recognized_historical_install_roots(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
