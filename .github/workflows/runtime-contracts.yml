@@ -69,6 +69,8 @@ jobs:
           tests.test_product_remote_client
           tests.test_product_action_recovery
           tests.test_product_device_presence_client
+          tests.test_product_presence_bridge
+          tests.test_product_central_session
           tests.test_cloudflare_control_plane
           tests.test_versioning
           tests.test_studio_managed_browser_contract
@@ -89,4 +91,3 @@ jobs:
           tests.test_managed_runtime_legacy_migration_contract
           tests.test_managed_runtime_precompile_contract
           tests.test_device_setup_legacy_bridge_path
-
