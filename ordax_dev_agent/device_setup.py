@@ -35,21 +35,48 @@ def private_directory(path: Path) -> None:
         import csv
 
         principal = next(csv.reader([sid.strip()]))[1]
+        # Do not depend on Microsoft.PowerShell.Security cmdlets here. Some
+        # supported Windows hosts can execute PowerShell but cannot import that
+        # module, which previously made first device enrollment impossible.
+        # DirectoryInfo/DirectorySecurity use the .NET ACL APIs directly.
         script = """
 $ErrorActionPreference='Stop'
-$current=Get-Acl -LiteralPath $env:ORDAX_SETUP_PRIVATE_PATH
+$directory=New-Object System.IO.DirectoryInfo($env:ORDAX_SETUP_PRIVATE_PATH)
+$current=$directory.GetAccessControl()
 $allowed=@($env:ORDAX_SETUP_SID,'S-1-5-18')
 $rules=@($current.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]))
-if ($current.AreAccessRulesProtected -and $rules.Count -eq 2 -and
-    @($rules | Where-Object { $_.IdentityReference.Value -notin $allowed -or $_.AccessControlType -ne 'Allow' -or $_.FileSystemRights -ne 'FullControl' }).Count -eq 0) { exit 0 }
+$valid=@($rules | Where-Object {
+  $_.IdentityReference.Value -in $allowed -and
+  $_.AccessControlType -eq 'Allow' -and
+  $_.FileSystemRights.ToString().Contains('FullControl')
+})
+$foreign=@($rules | Where-Object {
+  $_.IdentityReference.Value -notin $allowed -or
+  $_.AccessControlType -ne 'Allow' -or
+  -not $_.FileSystemRights.ToString().Contains('FullControl')
+})
+if ($current.AreAccessRulesProtected -and $valid.Count -eq 2 -and $foreign.Count -eq 0) { exit 0 }
 $acl=New-Object System.Security.AccessControl.DirectorySecurity
 $acl.SetAccessRuleProtection($true,$false)
-foreach($id in @($env:ORDAX_SETUP_SID,'S-1-5-18')) {
+foreach($id in $allowed) {
   $sid=New-Object System.Security.Principal.SecurityIdentifier($id)
   $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')
   $acl.AddAccessRule($rule)
 }
-Set-Acl -LiteralPath $env:ORDAX_SETUP_PRIVATE_PATH -AclObject $acl
+$directory.SetAccessControl($acl)
+$verified=$directory.GetAccessControl()
+$verifiedRules=@($verified.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]))
+$verifiedValid=@($verifiedRules | Where-Object {
+  $_.IdentityReference.Value -in $allowed -and
+  $_.AccessControlType -eq 'Allow' -and
+  $_.FileSystemRights.ToString().Contains('FullControl')
+})
+$verifiedForeign=@($verifiedRules | Where-Object {
+  $_.IdentityReference.Value -notin $allowed -or
+  $_.AccessControlType -ne 'Allow' -or
+  -not $_.FileSystemRights.ToString().Contains('FullControl')
+})
+if (-not $verified.AreAccessRulesProtected -or $verifiedValid.Count -ne 2 -or $verifiedForeign.Count -ne 0) { exit 2 }
 """
         env = {k: v for k, v in os.environ.items() if k.lower() != "psmodulepath"}
         result = subprocess.run(

@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import json
 import tempfile
 import unittest
@@ -8,10 +9,18 @@ from unittest.mock import patch
 
 import httpx
 
-from ordax_dev_agent.device_setup import SetupError, configure, setup_lock
+from ordax_dev_agent.device_setup import SetupError, configure, private_directory, setup_lock
 
 
 class SetupTests(unittest.TestCase):
+    def test_windows_private_acl_uses_dotnet_not_security_cmdlets(self):
+        source = inspect.getsource(private_directory)
+        self.assertNotIn("Get-Acl", source)
+        self.assertNotIn("Set-Acl", source)
+        self.assertIn("DirectoryInfo", source)
+        self.assertIn("GetAccessControl", source)
+        self.assertIn("SetAccessControl", source)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

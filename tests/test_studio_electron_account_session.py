@@ -3,8 +3,10 @@ from __future__ import annotations
 import io
 import json
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
+from ordax_dev_agent.config import AgentConfig
 from ordax_studio import electron_account_session as account
 from ordax_studio.product_auth import ProductAccountError, ProductAuthSession
 
@@ -12,6 +14,15 @@ from ordax_studio.product_auth import ProductAccountError, ProductAuthSession
 def request(**changes):
     return {"schema": "ordax.studio-product-account-session/1", "operation": "sign-in",
             "email": "user@example.com", "password": "private-password", **changes}
+
+
+def runtime_config(control_plane: str = "https://control.example.com") -> AgentConfig:
+    root = Path("C:/ordax-test")
+    return AgentConfig(
+        agent_name="test-pc", poll_seconds=1.0, state_dir=root / "state",
+        agent_repo_path=root, hordax_path=root / "hordax", bridge_path=root,
+        control_plane_url=control_plane,
+    )
 
 
 class CanonicalElectronAccountSessionTests(unittest.TestCase):
@@ -23,16 +34,32 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
         factory = Mock(return_value=backend)
         authenticate = Mock(return_value=ProductAuthSession(
             access_token="private.jwt.signature", email="user@example.com"))
-        result = account.authorize_account(request(), authenticate=authenticate,
-                                           remote_factory=factory,
-                                           control_plane="https://control.example.com")
+        connect = Mock(return_value={
+            "device_id": "22222222-2222-4222-8222-222222222222",
+            "enrolled_now": True,
+            "link": {"status": "linked"},
+        })
+        config = runtime_config()
+        result = account.authorize_account(
+            request(), authenticate=authenticate, remote_factory=factory,
+            config_factory=lambda: config, connect_device=connect,
+            control_plane="https://control.example.com",
+        )
         authenticate.assert_called_once_with("user@example.com", "private-password")
         factory.assert_called_once_with("https://control.example.com")
         backend.session.assert_called_once_with("private.jwt.signature")
+        connect.assert_called_once()
+        args, kwargs = connect.call_args
+        self.assertEqual(args[0].control_plane_url, "https://control.example.com")
+        self.assertEqual(args[1:3], ("user@example.com", "private-password"))
+        self.assertEqual(kwargs["session"].access_token, "private.jwt.signature")
         self.assertEqual(result["schema"], request()["schema"])
         self.assertEqual(result["ok"], True)
         self.assertEqual(result["access_token"], "private.jwt.signature")
         self.assertEqual(result["subject_id"], "11111111-1111-4111-8111-111111111111")
+        self.assertEqual(result["device_id"], "22222222-2222-4222-8222-222222222222")
+        self.assertIs(result["enrolled_now"], True)
+        self.assertNotIn("link", result)
         self.assertNotIn("password", result)
 
     def test_rejects_noncanonical_shape_before_request_or_login(self):

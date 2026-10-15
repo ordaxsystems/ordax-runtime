@@ -1,7 +1,9 @@
-"""Single-shot account sign-in bridge for the canonical Studio Electron host.
+"""Single-shot account + device-link bridge for the canonical Studio host.
 
-This is not an executor and does not enumerate or grant local device rights.
-The only caller is the installed Studio process via a private child stdio pipe.
+The bridge authenticates the owner, enrolls/pairs this installed Runtime through
+its canonical Product owner, and returns only bounded identity metadata. It does
+not mint remote capability grants or execute device actions. The only caller is
+the installed Studio process via a private child stdio pipe.
 """
 from __future__ import annotations
 
@@ -10,10 +12,17 @@ import os
 import re
 import sys
 import uuid
+from dataclasses import replace
 from typing import Any, Callable
 
+from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
-from .product_auth import ProductAccountError, ProductAuthSession, sign_in_with_password
+from .product_auth import (
+    ProductAccountError,
+    ProductAuthSession,
+    connect_existing_device,
+    sign_in_with_password,
+)
 
 _SCHEMA = "ordax.studio-product-account-session/1"
 _MAX_INPUT = 3000
@@ -26,6 +35,8 @@ def authorize_account(
     *,
     authenticate: Callable[[str, str], ProductAuthSession] = sign_in_with_password,
     remote_factory: Callable[[str], Any] = ProductRemoteClient,
+    config_factory: Callable[[], AgentConfig] = AgentConfig.from_env,
+    connect_device: Callable[..., dict[str, Any]] = connect_existing_device,
     control_plane: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(data, dict) or set(data) != {"schema", "operation", "email", "password"}:
@@ -57,14 +68,40 @@ def authorize_account(
             raise ValueError("noncanonical_subject")
     except (ValueError, AttributeError):
         raise ValueError("invalid_product_subject") from None
+
+    config = config_factory()
+    if not isinstance(config, AgentConfig):
+        raise ValueError("invalid_runtime_config")
+    if control_plane:
+        config = replace(config, control_plane_url=base)
+    device = connect_device(
+        config,
+        email,
+        password,
+        session=session,
+    )
+    if not isinstance(device, dict) or not isinstance(device.get("device_id"), str):
+        raise ValueError("invalid_device_enrollment")
+    try:
+        device_id = str(uuid.UUID(device["device_id"]))
+        if device["device_id"].lower() != device_id:
+            raise ValueError("noncanonical_device")
+    except (ValueError, AttributeError):
+        raise ValueError("invalid_device_enrollment") from None
+    enrolled_now = device.get("enrolled_now")
+    if not isinstance(enrolled_now, bool):
+        raise ValueError("invalid_device_enrollment")
+
     # The token crosses only the private child stdout -> Electron main-process
     # pipe; never store it in a profile, HTTP response, renderer or log.
+    # Device metadata is non-secret and proves that the canonical Runtime owner
+    # completed enrollment/pairing; no capability grant is minted here.
     return {
         "schema": _SCHEMA, "ok": True, "access_token": token,
         "email": session.email or email.strip(),
-        # Verified by Product session endpoint. This is an account identity
-        # assertion over private stdio, not an MCP grant or device selection.
         "subject_id": owner_id,
+        "device_id": device_id,
+        "enrolled_now": enrolled_now,
     }
 
 
