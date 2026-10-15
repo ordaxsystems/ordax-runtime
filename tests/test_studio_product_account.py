@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 import httpx
 
 from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.device_setup import SetupError
 from ordax_studio.product_auth import (
     ProductAccountError,
     ProductAuthSession,
@@ -134,6 +135,26 @@ class StudioProductAccountTests(unittest.TestCase):
             self.assertTrue(result["enrolled_now"])
             self.assertEqual(DEVICE_ID, result["device_id"])
             self.assertNotIn("sensitive-jwt", repr(result))
+
+    def test_specific_setup_failure_is_preserved_for_studio_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            state.mkdir()
+            config = config_for(state, device_id=None)
+            with (
+                patch(
+                    "ordax_studio.product_auth.configure_device",
+                    side_effect=SetupError("SETTINGS_INVALID_PRESERVED"),
+                ),
+                self.assertRaises(ProductAccountError) as raised,
+            ):
+                connect_existing_device(
+                    config,
+                    session=ProductAuthSession("jwt", "owner@example.com"),
+                )
+            self.assertEqual("SETTINGS_INVALID_PRESERVED", raised.exception.code)
+            self.assertIn("configuração local", raised.exception.message)
+            self.assertNotIn("jwt", repr(raised.exception))
 
     def test_owner_revalidation_mismatch_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
