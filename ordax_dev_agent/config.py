@@ -10,6 +10,7 @@ from pathlib import Path
 DEFAULT_CONTROL_PLANE_URL = (
     "https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev"
 )
+DEFAULT_PRODUCT_MCP_URL = "https://mcp.ordax.com.br"
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,7 @@ class AgentConfig:
     control_plane_protocol: str = "cloudflare-v3"
     device_id: str | None = None
     control_plane_url: str | None = DEFAULT_CONTROL_PLANE_URL
+    product_mcp_url: str | None = DEFAULT_PRODUCT_MCP_URL
     workspace_root: Path | None = None
 
     @classmethod
@@ -83,6 +85,10 @@ class AgentConfig:
             control_plane_url=os.environ.get(
                 "ORDAX_CONTROL_PLANE_URL",
                 settings.get("control_plane_url") or DEFAULT_CONTROL_PLANE_URL,
+            ),
+            product_mcp_url=os.environ.get(
+                "ORDAX_PRODUCT_MCP_URL",
+                settings.get("product_mcp_url") or DEFAULT_PRODUCT_MCP_URL,
             ),
             agent_name=os.environ.get(
                 "ORDAX_AGENT_NAME",
@@ -157,6 +163,8 @@ class AgentConfig:
             "workspace_root": str((self.workspace_root or self.hordax_path.parent).resolve()),
             "control_plane_url_configured": bool(self.control_plane_url),
             "control_plane_url": self.control_plane_url,
+            "product_mcp_url_configured": bool(self.product_mcp_url),
+            "product_mcp_url": self.product_mcp_url,
             "control_plane_protocol": self.control_plane_protocol,
             "device_id_configured": bool(self.device_id),
             "device_id": self.device_id,
