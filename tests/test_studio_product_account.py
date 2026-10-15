@@ -114,6 +114,39 @@ class StudioProductAccountTests(unittest.TestCase):
         self.assertNotIn("access_token", result)
         self.assertNotIn("sensitive-jwt", repr(result))
 
+    def test_connect_existing_device_accepts_browser_session_without_password(self) -> None:
+        config = SimpleNamespace(
+            control_plane_url="https://control.example.test",
+            device_id="22222222-2222-4222-8222-222222222222",
+        )
+        control = Mock()
+        control.http = Mock()
+        control.create_product_pairing.return_value = {
+            "pairing_id": "33333333-3333-4333-8333-333333333333",
+            "pairing_secret": "a" * 64,
+        }
+        remote = Mock()
+        remote.__enter__ = Mock(return_value=remote)
+        remote.__exit__ = Mock(return_value=None)
+        remote.claim_device_pairing.return_value = {
+            "device_id": config.device_id, "link_id": "44444444-4444-4444-8444-444444444444"
+        }
+        session = ProductAuthSession("browser.jwt", "owner@example.com")
+        with (
+            patch("ordax_studio.product_auth.sign_in_with_password") as password_login,
+            patch("ordax_studio.product_auth.CloudflareControlPlane", return_value=control),
+            patch("ordax_studio.product_auth.ProductRemoteClient", return_value=remote),
+        ):
+            result = connect_existing_device(config, session=session)
+        password_login.assert_not_called()
+        remote.claim_device_pairing.assert_called_once_with(
+            "browser.jwt",
+            pairing_id="33333333-3333-4333-8333-333333333333",
+            pairing_secret="a" * 64,
+        )
+        self.assertEqual(result["email"], "owner@example.com")
+        self.assertNotIn("browser.jwt", repr(result))
+
     def test_connect_new_device_enrolls_with_product_session_before_pairing(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state = Path(raw) / "state"

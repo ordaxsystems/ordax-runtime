@@ -14,7 +14,12 @@ from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRe
 
 # Public metadata lives in one consumer snapshot validated against the
 # canonical ordax-platform wrangler.toml owner on every Windows contract run.
-from .public_auth_metadata import SUPABASE_ORIGIN, SUPABASE_PUBLISHABLE_KEY
+from .public_auth_metadata import (
+    STUDIO_OAUTH_CLIENT_ID,
+    STUDIO_OAUTH_REDIRECT_URI,
+    SUPABASE_ORIGIN,
+    SUPABASE_PUBLISHABLE_KEY,
+)
 
 
 @dataclass(frozen=True)
@@ -146,10 +151,96 @@ def sign_in_with_password(
             client.close()
 
 
+def exchange_authorization_code(
+    code: str,
+    code_verifier: str,
+    *,
+    http: httpx.Client | None = None,
+) -> ProductAuthSession:
+    """Exchange a first-party desktop PKCE code without any client secret."""
+    code = str(code or "")
+    code_verifier = str(code_verifier or "")
+    if not code or len(code) > 4096 or "\r" in code or "\n" in code:
+        raise ProductAccountError("product_oauth_code_invalid", "A autorização do navegador é inválida.")
+    if not 43 <= len(code_verifier) <= 128 or not all(
+        ch.isalnum() or ch in "-._~" for ch in code_verifier
+    ):
+        raise ProductAccountError("product_oauth_verifier_invalid", "A verificação PKCE é inválida.")
+
+    origin, _publishable_key = _auth_config()
+    owns_http = http is None
+    client = http or httpx.Client(timeout=httpx.Timeout(20.0), follow_redirects=False)
+    try:
+        try:
+            response = client.post(
+                f"{origin}/auth/v1/oauth/token",
+                headers={
+                    "accept": "application/json",
+                    "content-type": "application/x-www-form-urlencoded",
+                    "user-agent": "ORDAX-Studio/0.15",
+                },
+                data={
+                    "grant_type": "authorization_code",
+                    "client_id": STUDIO_OAUTH_CLIENT_ID,
+                    "redirect_uri": STUDIO_OAUTH_REDIRECT_URI,
+                    "code": code,
+                    "code_verifier": code_verifier,
+                },
+            )
+        except httpx.HTTPError as error:
+            raise ProductAccountError(
+                "product_oauth_unavailable",
+                "Não foi possível concluir a autorização ORDAX.",
+            ) from error
+        try:
+            body: Any = response.json()
+        except ValueError as error:
+            raise ProductAccountError(
+                "product_oauth_invalid_response",
+                "A autorização ORDAX retornou uma resposta inválida.",
+            ) from error
+        if response.status_code >= 400 or not isinstance(body, dict):
+            raise ProductAccountError(
+                "product_oauth_rejected",
+                "A autorização ORDAX foi recusada ou expirou.",
+            )
+        access_token = body.get("access_token")
+        if (
+            not isinstance(access_token, str)
+            or not access_token
+            or len(access_token) > 16_000
+            or "\r" in access_token
+            or "\n" in access_token
+        ):
+            raise ProductAccountError(
+                "product_oauth_token_missing",
+                "A autorização não retornou uma sessão válida.",
+            )
+
+        email: str | None = None
+        try:
+            userinfo = client.get(
+                f"{origin}/auth/v1/oauth/userinfo",
+                headers={"authorization": f"Bearer {access_token}", "accept": "application/json"},
+            )
+            info: Any = userinfo.json()
+            if userinfo.status_code < 400 and isinstance(info, dict):
+                candidate = info.get("email")
+                if isinstance(candidate, str) and 0 < len(candidate) <= 320:
+                    email = candidate
+        except (httpx.HTTPError, ValueError):
+            # Product subject validation remains authoritative below; email is display-only.
+            email = None
+        return ProductAuthSession(access_token=access_token, email=email)
+    finally:
+        if owns_http:
+            client.close()
+
+
 def connect_existing_device(
     config: AgentConfig,
-    email: str,
-    password: str,
+    email: str | None = None,
+    password: str | None = None,
     *,
     auth_http: httpx.Client | None = None,
     session: ProductAuthSession | None = None,
@@ -160,7 +251,15 @@ def connect_existing_device(
             "O ORDAX Runtime não possui Control Plane configurado.",
         )
 
-    active_session = session or sign_in_with_password(email, password, http=auth_http)
+    if session is None:
+        if not isinstance(email, str) or not isinstance(password, str):
+            raise ProductAccountError(
+                "product_auth_session_required",
+                "Abra a Conta ORDAX no navegador para continuar.",
+            )
+        active_session = sign_in_with_password(email, password, http=auth_http)
+    else:
+        active_session = session
     active_config = config
     enrolled_now = False
     if not config.device_id:
@@ -234,7 +333,7 @@ def connect_existing_device(
         )
 
     return {
-        "email": active_session.email or email,
+        "email": active_session.email or (email.strip() if isinstance(email, str) else None),
         "link": dict(link),
         "device_id": active_config.device_id,
         "enrolled_now": enrolled_now,
