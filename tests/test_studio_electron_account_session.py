@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.product_remote_client import ProductRemoteError
 from ordax_studio import electron_account_session as account
 from ordax_studio.product_auth import ProductAccountError, ProductAuthSession
 
@@ -105,11 +106,53 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
                                   side_effect=ProductAccountError("bad", "private details")) as auth:
                     code = account.run(io.BytesIO(raw), output)
                 self.assertEqual(code, 1)
-                self.assertIs(json.loads(output.getvalue())["ok"], False)
+                value = json.loads(output.getvalue())
+                self.assertIs(value["ok"], False)
                 self.assertNotIn(token, output.getvalue())
                 self.assertNotIn("private details", output.getvalue())
+                if raw == json.dumps(request()).encode():
+                    self.assertEqual("bad", value["error"])
                 if raw.startswith(b"not-") or len(raw) > 1000 or not raw or b'"schema":"x","schema":"y"' in raw:
                     auth.assert_not_called()
+                    self.assertEqual("account_auth_failed", value["error"])
+
+    def test_product_remote_error_exposes_only_bounded_error_code(self):
+        output = io.StringIO()
+        with patch.object(
+            account,
+            "authorize_account",
+            side_effect=ProductRemoteError(
+                "product_token_claims_invalid", 401,
+                "private provider detail that must never cross stdio",
+                request_id="private-request-id",
+            ),
+        ):
+            code = account.run(io.BytesIO(json.dumps(request()).encode()), output)
+        self.assertEqual(1, code)
+        value = json.loads(output.getvalue())
+        self.assertEqual({
+            "schema": request()["schema"],
+            "ok": False,
+            "error": "product_token_claims_invalid",
+        }, value)
+        self.assertNotIn("private provider detail", output.getvalue())
+        self.assertNotIn("private-request-id", output.getvalue())
+
+    def test_unsafe_product_error_codes_fall_back_without_leaking_details(self):
+        failures = (
+            ProductAccountError("../../unsafe", "private account detail"),
+            ProductAccountError("x" * 129, "private account detail"),
+            ProductRemoteError("product-error-with-dash", 401, "private remote detail"),
+        )
+        for failure in failures:
+            with self.subTest(error=type(failure).__name__):
+                output = io.StringIO()
+                with patch.object(account, "authorize_account", side_effect=failure):
+                    code = account.run(io.BytesIO(json.dumps(request()).encode()), output)
+                self.assertEqual(1, code)
+                value = json.loads(output.getvalue())
+                self.assertEqual("account_auth_failed", value["error"])
+                self.assertNotIn("private", output.getvalue())
 
     def test_single_response_exactly_one_line_contains_no_password_field(self):
         out = io.StringIO()
