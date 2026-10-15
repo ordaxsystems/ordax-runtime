@@ -45,6 +45,8 @@ class SetupTests(unittest.TestCase):
         if body["operation"] == "enroll":
             self.assertEqual("Bearer ordax-product-session", req.headers["Authorization"])
             self.assertNotIn("token", body)
+            self.assertEqual("desktop", body["device_kind"])
+            self.assertEqual("development", body["channel"])
             self.credential_hash = body["token_sha256"]
             self.enrollments += 1
             if self.lost_ack:
@@ -95,6 +97,47 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(self.device, settings["device_id"])
         self.assertIn("cerco-no-interior-mvp", settings["projects"])
         self.assertEqual("/v3/device/setup", self.last_request_path)
+
+    def test_explicit_device_kind_and_channel_reach_enrollment(self):
+        original_server = self.server
+
+        def custom_server(req):
+            body = json.loads(req.content)
+            if body["operation"] == "enroll":
+                self.assertEqual("laptop", body["device_kind"])
+                self.assertEqual("stable", body["channel"])
+                self.credential_hash = body["token_sha256"]
+                self.enrollments += 1
+                return httpx.Response(
+                    200,
+                    json={
+                        "ok": True,
+                        "protocol": "cloudflare-v3",
+                        "device_id": self.device,
+                    },
+                )
+            return original_server(req)
+
+        custom_client = httpx.Client(transport=httpx.MockTransport(custom_server))
+        self.addCleanup(custom_client.close)
+        result = configure(
+            self.state,
+            client=custom_client,
+            binding=self.binding,
+            home=self.home,
+            control_plane_url="https://control.example",
+            product_access_token="ordax-product-session",
+            device_kind="laptop",
+            channel="stable",
+        )
+        self.assertEqual(self.device, result["device_id"])
+
+    def test_invalid_enrollment_metadata_fails_before_network(self):
+        with self.assertRaisesRegex(SetupError, "DEVICE_KIND_INVALID"):
+            self.run_setup(device_kind="toaster")
+        with self.assertRaisesRegex(SetupError, "PRODUCT_CHANNEL_INVALID"):
+            self.run_setup(channel="nightly")
+        self.assertEqual([], self.calls)
 
     def test_new_machine_requires_explicit_ordax_account_session(self):
         with self.assertRaisesRegex(SetupError, "PRODUCT_ACCOUNT_LOGIN_REQUIRED"):
