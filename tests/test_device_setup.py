@@ -168,6 +168,33 @@ class SetupTests(unittest.TestCase):
         )
         self.assertEqual(1, self.enrollments)
 
+    def test_malformed_pending_token_is_quarantined_and_replaced_during_authenticated_enrollment(self):
+        pending = self.state / "device-token.cloudflare-v3.txt.pending-setup"
+        pending.write_text("legacy-interrupted-value", encoding="utf-8")
+
+        result = self.run_setup()
+
+        self.assertEqual(self.device, result["device_id"])
+        self.assertEqual(1, self.enrollments)
+        active = self.state / "device-token.cloudflare-v3.txt"
+        self.assertTrue(active.is_file())
+        self.assertEqual(64, len(active.read_text()))
+        quarantined = list(self.state.glob("device-token.cloudflare-v3.txt.pending-setup.invalid-*"))
+        self.assertEqual(1, len(quarantined))
+        self.assertEqual("legacy-interrupted-value", quarantined[0].read_text())
+        self.assertFalse(pending.exists())
+
+    def test_malformed_pending_token_is_not_rotated_without_product_session(self):
+        pending = self.state / "device-token.cloudflare-v3.txt.pending-setup"
+        pending.write_text("legacy-interrupted-value", encoding="utf-8")
+
+        with self.assertRaisesRegex(SetupError, "PRODUCT_ACCOUNT_LOGIN_REQUIRED"):
+            self.run_setup(product_access_token=None)
+
+        self.assertEqual("legacy-interrupted-value", pending.read_text())
+        self.assertEqual([], list(self.state.glob("*.invalid-*")))
+        self.assertEqual([], self.calls)
+
     def test_revoked_token_reenrolls_and_preserves_device(self):
         self.run_setup()
         token_path = self.state / "device-token.cloudflare-v3.txt"
