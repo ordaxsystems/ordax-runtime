@@ -14,8 +14,6 @@ from ordax_dev_agent.device_credentials import resolve_token_path
 from ordax_dev_agent.device_setup import SetupError, configure as configure_device
 from ordax_dev_agent.identity import machine_id
 
-# Public metadata lives in one consumer snapshot validated against the
-# canonical ordax-platform wrangler.toml owner on every Windows contract run.
 from .public_auth_metadata import (
     STUDIO_OAUTH_CLIENT_ID,
     STUDIO_OAUTH_REDIRECT_URI,
@@ -131,7 +129,6 @@ def exchange_authorization_code(
     *,
     http: httpx.Client | None = None,
 ) -> ProductAuthSession:
-    """Exchange a first-party desktop PKCE code without any client secret."""
     code = str(code or "")
     code_verifier = str(code_verifier or "")
     if not code or len(code) > 4096 or "\r" in code or "\n" in code:
@@ -215,7 +212,6 @@ def _revalidate_existing_device(
     *,
     http: httpx.Client | None = None,
 ) -> str:
-    """Replay canonical enrollment to prove that this OAuth owner owns the device."""
     token_path = resolve_token_path(config.state_dir)
     try:
         raw_device_token = token_path.read_text(encoding="utf-8-sig").strip()
@@ -286,6 +282,28 @@ def _revalidate_existing_device(
             client.close()
 
 
+def _setup_error_to_product(error: SetupError) -> ProductAccountError:
+    code = str(error or "device_enrollment_failed").strip() or "device_enrollment_failed"
+    messages = {
+        "PRIVATE_ACL_FAILED": "O ORDAX não conseguiu proteger a identidade local deste computador.",
+        "SETUP_ALREADY_RUNNING": "O registro deste computador já está em andamento. Tente novamente em instantes.",
+        "SETTINGS_INVALID_PRESERVED": "A configuração local do ORDAX está inválida e foi preservada para recuperação.",
+        "CONTROL_PLANE_URL_INVALID": "O endereço do Control Plane configurado neste computador é inválido.",
+        "CONTROL_PLANE_UNAVAILABLE": "A conta foi autenticada, mas o Control Plane está indisponível.",
+        "CONTROL_PLANE_RESPONSE_INVALID": "O Control Plane retornou uma resposta inválida ao registrar este computador.",
+        "MACHINE_BINDING_MISMATCH": "A identidade local pertence a outro computador e foi preservada.",
+        "PRODUCT_ACCOUNT_LOGIN_REQUIRED": "A sessão da Conta OrdaX não está disponível para registrar este computador.",
+        "USER_AUTHORIZATION_REQUIRED": "A Conta OrdaX não autorizou o registro deste computador.",
+        "PROTOCOL_MISMATCH": "O Control Plane respondeu com um protocolo incompatível.",
+        "DEVICE_KIND_INVALID": "O tipo deste dispositivo está configurado de forma inválida.",
+        "PRODUCT_CHANNEL_INVALID": "O canal Product deste dispositivo está configurado de forma inválida.",
+    }
+    return ProductAccountError(
+        code,
+        messages.get(code, "A conta foi autenticada, mas não foi possível registrar este computador."),
+    )
+
+
 def connect_existing_device(
     config: AgentConfig,
     email: str | None = None,
@@ -294,7 +312,6 @@ def connect_existing_device(
     auth_http: httpx.Client | None = None,
     session: ProductAuthSession | None = None,
 ) -> dict[str, Any]:
-    """Migrate/resolve Product identity, then prove owner binding via canonical enrollment."""
     if not config.control_plane_url:
         raise ProductAccountError(
             "control_plane_unconfigured",
@@ -318,10 +335,7 @@ def connect_existing_device(
             product_access_token=active_session.access_token,
         )
     except SetupError as error:
-        raise ProductAccountError(
-            "device_enrollment_failed",
-            "A conta foi autenticada, mas não foi possível registrar este computador.",
-        ) from error
+        raise _setup_error_to_product(error) from error
 
     device_id = str(enrollment.get("device_id") or "")
     if not device_id:
