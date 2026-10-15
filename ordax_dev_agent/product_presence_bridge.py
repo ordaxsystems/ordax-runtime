@@ -114,7 +114,7 @@ class ProductPresenceBridge:
         binding = self._binding_provider()
         if not isinstance(binding, str) or _DIGEST.fullmatch(binding) is None:
             raise RuntimeError("product_machine_binding_invalid")
-        if "authorization" in self._verify_http.headers or self._verify_http.auth is not None:
+        if "authorization" in self._verify_http.headers:
             raise RuntimeError("product_identity_transport_has_account_auth")
 
         identity = request(
