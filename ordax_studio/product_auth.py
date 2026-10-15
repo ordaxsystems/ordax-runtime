@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlparse
 
@@ -40,12 +40,9 @@ class ProductAccountError(RuntimeError):
 
 
 def _auth_config() -> tuple[str, str]:
-    origin = str(
-        os.environ.get("ORDAX_PRODUCT_AUTH_URL") or SUPABASE_ORIGIN
-    ).rstrip("/")
+    origin = str(os.environ.get("ORDAX_PRODUCT_AUTH_URL") or SUPABASE_ORIGIN).rstrip("/")
     publishable_key = str(
-        os.environ.get("ORDAX_PRODUCT_AUTH_PUBLISHABLE_KEY")
-        or SUPABASE_PUBLISHABLE_KEY
+        os.environ.get("ORDAX_PRODUCT_AUTH_PUBLISHABLE_KEY") or SUPABASE_PUBLISHABLE_KEY
     ).strip()
     parsed = urlparse(origin)
     if parsed.scheme != "https" or not parsed.netloc:
@@ -70,22 +67,13 @@ def sign_in_with_password(
     email = str(email or "").strip()
     password = str(password or "")
     if not email or len(email) > 320 or "@" not in email:
-        raise ProductAccountError(
-            "product_auth_email_invalid",
-            "Informe um e-mail válido.",
-        )
+        raise ProductAccountError("product_auth_email_invalid", "Informe um e-mail válido.")
     if not password or len(password) > 2048:
-        raise ProductAccountError(
-            "product_auth_password_invalid",
-            "Informe a senha da sua conta ORDAX.",
-        )
+        raise ProductAccountError("product_auth_password_invalid", "Informe a senha da sua conta ORDAX.")
 
     origin, publishable_key = _auth_config()
     owns_http = http is None
-    client = http or httpx.Client(
-        timeout=httpx.Timeout(20.0),
-        follow_redirects=False,
-    )
+    client = http or httpx.Client(timeout=httpx.Timeout(20.0), follow_redirects=False)
     try:
         try:
             response = client.post(
@@ -105,7 +93,6 @@ def sign_in_with_password(
                 "product_auth_unavailable",
                 "Não foi possível alcançar o serviço de autenticação ORDAX.",
             ) from error
-
         try:
             body: Any = response.json()
         except ValueError as error:
@@ -113,39 +100,26 @@ def sign_in_with_password(
                 "product_auth_invalid_response",
                 "O serviço de autenticação retornou uma resposta inválida.",
             ) from error
-
         if response.status_code >= 400:
-            raise ProductAccountError(
-                "product_auth_rejected",
-                "E-mail ou senha não conferem.",
-            )
+            raise ProductAccountError("product_auth_rejected", "E-mail ou senha não conferem.")
         if not isinstance(body, dict):
             raise ProductAccountError(
                 "product_auth_invalid_response",
                 "O serviço de autenticação retornou uma resposta inválida.",
             )
-
         access_token = body.get("access_token")
-        if (
-            not isinstance(access_token, str)
-            or not access_token
-            or len(access_token) > 16_000
-        ):
+        if not isinstance(access_token, str) or not access_token or len(access_token) > 16_000:
             raise ProductAccountError(
                 "product_auth_token_missing",
                 "A autenticação não retornou uma sessão válida.",
             )
-
         user = body.get("user")
         authenticated_email = (
             user.get("email")
             if isinstance(user, dict) and isinstance(user.get("email"), str)
             else None
         )
-        return ProductAuthSession(
-            access_token=access_token,
-            email=authenticated_email,
-        )
+        return ProductAuthSession(access_token=access_token, email=authenticated_email)
     finally:
         if owns_http:
             client.close()
@@ -216,7 +190,6 @@ def exchange_authorization_code(
                 "product_oauth_token_missing",
                 "A autorização não retornou uma sessão válida.",
             )
-
         email: str | None = None
         try:
             userinfo = client.get(
@@ -242,6 +215,7 @@ def _revalidate_existing_device(
     *,
     http: httpx.Client | None = None,
 ) -> str:
+    """Replay canonical enrollment to prove that this OAuth owner owns the device."""
     token_path = resolve_token_path(config.state_dir)
     try:
         raw_device_token = token_path.read_text(encoding="utf-8-sig").strip()
@@ -320,13 +294,12 @@ def connect_existing_device(
     auth_http: httpx.Client | None = None,
     session: ProductAuthSession | None = None,
 ) -> dict[str, Any]:
-    """Bind the local Product device to the authenticated owner via canonical enrollment."""
+    """Migrate/resolve Product identity, then prove owner binding via canonical enrollment."""
     if not config.control_plane_url:
         raise ProductAccountError(
             "control_plane_unconfigured",
             "O ORDAX Runtime não possui Control Plane configurado.",
         )
-
     if session is None:
         if not isinstance(email, str) or not isinstance(password, str):
             raise ProductAccountError(
@@ -338,28 +311,28 @@ def connect_existing_device(
         active_session = session
 
     previous_device_id = str(config.device_id or "")
-    if previous_device_id:
-        device_id = _revalidate_existing_device(config, active_session)
-    else:
-        try:
-            enrollment = configure_device(
-                config.state_dir,
-                control_plane_url=config.control_plane_url,
-                product_access_token=active_session.access_token,
-            )
-        except SetupError as error:
-            raise ProductAccountError(
-                "device_enrollment_failed",
-                "A conta foi autenticada, mas não foi possível registrar este computador.",
-            ) from error
-        device_id = str(enrollment.get("device_id") or "")
-        if not device_id:
-            raise ProductAccountError(
-                "device_enrollment_invalid",
-                "O Control Plane não retornou uma identidade válida para este computador.",
-            )
+    try:
+        enrollment = configure_device(
+            config.state_dir,
+            control_plane_url=config.control_plane_url,
+            product_access_token=active_session.access_token,
+        )
+    except SetupError as error:
+        raise ProductAccountError(
+            "device_enrollment_failed",
+            "A conta foi autenticada, mas não foi possível registrar este computador.",
+        ) from error
 
-    if previous_device_id and previous_device_id != device_id:
+    device_id = str(enrollment.get("device_id") or "")
+    if not device_id:
+        raise ProductAccountError(
+            "device_enrollment_invalid",
+            "O Control Plane não retornou uma identidade válida para este computador.",
+        )
+
+    validated_config = replace(config, device_id=device_id)
+    validated_device_id = _revalidate_existing_device(validated_config, active_session)
+    if validated_device_id != device_id:
         raise ProductAccountError(
             "device_identity_changed",
             "A Conta ORDAX retornou uma identidade diferente para este computador.",
@@ -368,5 +341,5 @@ def connect_existing_device(
     return {
         "email": active_session.email or (email.strip() if isinstance(email, str) else None),
         "device_id": device_id,
-        "enrolled_now": not bool(previous_device_id),
+        "enrolled_now": previous_device_id != device_id,
     }
