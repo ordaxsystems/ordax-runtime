@@ -1,9 +1,10 @@
-"""Browser OAuth + device-link bridge for the canonical installed Studio.
+"""Browser OAuth + owner-bound device enrollment for the canonical installed Studio.
 
 No ORDAX password crosses the Studio renderer or Electron IPC. The private Runtime
-child owns PKCE, loopback callback, token exchange, Product subject validation,
-enrollment and pairing. The access token leaves this child only through its private
-stdio pipe to the Electron main process and is never persisted by this bridge.
+child owns PKCE, loopback callback, token exchange, Product subject validation and
+owner-bound device enrollment. MCP grants remain a separate explicit authorization
+boundary. The access token leaves this child only through its private stdio pipe to
+the Electron main process and is never persisted by this bridge.
 """
 from __future__ import annotations
 
@@ -43,8 +44,6 @@ _CALLBACK_HOST = "127.0.0.1"
 _CALLBACK_PORT = 8766
 _CALLBACK_PATH = "/oauth/callback"
 _OAUTH_TIMEOUT_SECONDS = 300
-_TARGET_CONFIRM_ATTEMPTS = 3
-_TARGET_CONFIRM_DELAY_SECONDS = 0.25
 
 
 def _pkce() -> tuple[str, str]:
@@ -115,7 +114,7 @@ def browser_oauth_session(
                 "border:1px solid #24364d;border-radius:18px;background:#0d1a2a}</style><main><h1>"
                 + ("Autorização recebida" if ok else "Autorização não concluída")
                 + "</h1><p>" + (
-                    "Volte ao ORDAX Studio. O computador ainda será registrado e confirmado antes de aparecer como conectado."
+                    "Volte ao ORDAX Studio para concluir a validação deste computador."
                     if ok else "Volte ao ORDAX Studio e tente novamente."
                 ) + "</p></main>"
             ).encode("utf-8")
@@ -169,39 +168,6 @@ def browser_oauth_session(
         server.server_close()
 
 
-def _target_matches_device(target: Any, device_id: str) -> bool:
-    if not isinstance(target, dict):
-        return False
-    direct = target.get("device_id")
-    if isinstance(direct, str) and direct == device_id:
-        return True
-    device = target.get("device")
-    return isinstance(device, dict) and device.get("device_id") == device_id
-
-
-def _confirm_product_target(remote: Any, token: str, device_id: str) -> None:
-    last_error: ProductRemoteError | None = None
-    for attempt in range(_TARGET_CONFIRM_ATTEMPTS):
-        try:
-            targets = remote.targets(token)
-        except ProductRemoteError as error:
-            last_error = error
-        else:
-            if isinstance(targets, list) and any(_target_matches_device(item, device_id) for item in targets):
-                return
-        if attempt + 1 < _TARGET_CONFIRM_ATTEMPTS:
-            time.sleep(_TARGET_CONFIRM_DELAY_SECONDS)
-    if last_error is not None:
-        raise ProductAccountError(
-            "product_target_confirmation_unavailable",
-            "O computador foi vinculado, mas o catálogo de dispositivos não pôde ser confirmado.",
-        ) from last_error
-    raise ProductAccountError(
-        "product_target_not_materialized",
-        "A autorização foi recebida, mas este computador ainda não apareceu nos dispositivos da Conta ORDAX.",
-    )
-
-
 def authorize_account(
     data: Any,
     *,
@@ -232,29 +198,27 @@ def authorize_account(
 
     with remote_factory(base) as remote:
         subject = remote.session(token)
-        if not isinstance(subject, dict) or not isinstance(subject.get("subject_id"), str):
-            raise ValueError("invalid_product_subject")
-        try:
-            owner_id = str(uuid.UUID(subject["subject_id"]))
-            if subject["subject_id"].lower() != owner_id:
-                raise ValueError("noncanonical_subject")
-        except (ValueError, AttributeError):
-            raise ValueError("invalid_product_subject") from None
+    if not isinstance(subject, dict) or not isinstance(subject.get("subject_id"), str):
+        raise ValueError("invalid_product_subject")
+    try:
+        owner_id = str(uuid.UUID(subject["subject_id"]))
+        if subject["subject_id"].lower() != owner_id:
+            raise ValueError("noncanonical_subject")
+    except (ValueError, AttributeError):
+        raise ValueError("invalid_product_subject") from None
 
-        device = connect_device(config, session=session)
-        if not isinstance(device, dict) or not isinstance(device.get("device_id"), str):
-            raise ValueError("invalid_device_enrollment")
-        try:
-            device_id = str(uuid.UUID(device["device_id"]))
-            if device["device_id"].lower() != device_id:
-                raise ValueError("noncanonical_device")
-        except (ValueError, AttributeError):
-            raise ValueError("invalid_device_enrollment") from None
-        enrolled_now = device.get("enrolled_now")
-        if not isinstance(enrolled_now, bool):
-            raise ValueError("invalid_device_enrollment")
-
-        _confirm_product_target(remote, token, device_id)
+    device = connect_device(config, session=session)
+    if not isinstance(device, dict) or not isinstance(device.get("device_id"), str):
+        raise ValueError("invalid_device_enrollment")
+    try:
+        device_id = str(uuid.UUID(device["device_id"]))
+        if device["device_id"].lower() != device_id:
+            raise ValueError("noncanonical_device")
+    except (ValueError, AttributeError):
+        raise ValueError("invalid_device_enrollment") from None
+    enrolled_now = device.get("enrolled_now")
+    if not isinstance(enrolled_now, bool):
+        raise ValueError("invalid_device_enrollment")
 
     return {
         "schema": _SCHEMA,
