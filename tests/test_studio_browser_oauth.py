@@ -48,7 +48,8 @@ class StudioBrowserOAuthTests(unittest.TestCase):
                 connection.request("GET", path, headers={"Host": "127.0.0.1:8766"})
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
-                response.read()
+                body = response.read().decode("utf-8")
+                observed["callback_body"] = body
                 connection.close()
             threading.Thread(target=callback, daemon=True).start()
             return True
@@ -63,6 +64,9 @@ class StudioBrowserOAuthTests(unittest.TestCase):
         self.assertLessEqual(len(verifier), 128)
         self.assertNotIn("password", observed["url"].lower())
         self.assertEqual(observed["kwargs"], {"new": 1, "autoraise": True})
+        self.assertIn("Autorização recebida", observed["callback_body"])
+        self.assertNotIn("Conexão concluída", observed["callback_body"])
+        self.assertIn("ainda será registrado e confirmado", observed["callback_body"])
 
     def test_state_mismatch_fails_closed_without_exchanging_code(self):
         def open_browser(_url, **_kwargs):
