@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -41,11 +42,24 @@ class RecordingPresence:
 
 
 class FakeBridge:
-    def __init__(self, events: list[str]):
+    def __init__(self, events: list[str], *, verified: bool = True):
         self.events = events
+        self.verified = verified
 
     def report(self, _actions, *, agent_version, online):
         self.events.append(f"product:{agent_version}:{online}")
+        return SimpleNamespace(
+            verified=self.verified,
+            online=online if self.verified else None,
+        )
+
+
+class FakeCentralSession:
+    def __init__(self, events: list[str]):
+        self.events = events
+
+    def tick(self):
+        self.events.append("central-session")
 
 
 class ProductPresenceBridgeTests(unittest.TestCase):
@@ -187,12 +201,13 @@ class ProductPresenceBridgeTests(unittest.TestCase):
 
 
 class ProductAwareControlPlaneTests(unittest.TestCase):
-    def make_plane(self, events: list[str]):
+    def make_plane(self, events: list[str], *, verified: bool = True):
         plane = ProductAwareCloudflareControlPlane.__new__(ProductAwareCloudflareControlPlane)
-        plane.product_presence = FakeBridge(events)
+        plane.product_presence = FakeBridge(events, verified=verified)
+        plane.product_central_session = FakeCentralSession(events)
         return plane
 
-    def test_product_online_follows_successful_command_heartbeat(self):
+    def test_product_online_and_attestation_follow_successful_command_heartbeat(self):
         events: list[str] = []
         plane = self.make_plane(events)
 
@@ -200,11 +215,15 @@ class ProductAwareControlPlaneTests(unittest.TestCase):
             events.append("command")
 
         with patch.object(CloudflareControlPlane, "heartbeat", side_effect=command):
-            plane.heartbeat(["agent.status"], agent_version="1.30.2", status="online")
+            plane.heartbeat(["agent.status"], agent_version="1.30.3", status="online")
 
-        self.assertEqual(events, ["command", "product:1.30.2:True"])
+        self.assertEqual(events, [
+            "command",
+            "product:1.30.3:True",
+            "central-session",
+        ])
 
-    def test_command_heartbeat_failure_never_advertises_online(self):
+    def test_command_heartbeat_failure_never_advertises_or_attests_online(self):
         events: list[str] = []
         plane = self.make_plane(events)
 
@@ -214,9 +233,21 @@ class ProductAwareControlPlaneTests(unittest.TestCase):
 
         with patch.object(CloudflareControlPlane, "heartbeat", side_effect=command):
             with self.assertRaisesRegex(RuntimeError, "transport_down"):
-                plane.heartbeat(["agent.status"], agent_version="1.30.2", status="online")
+                plane.heartbeat(["agent.status"], agent_version="1.30.3", status="online")
 
         self.assertEqual(events, ["command"])
+
+    def test_unverified_product_identity_never_attests_session(self):
+        events: list[str] = []
+        plane = self.make_plane(events, verified=False)
+
+        def command(*_args, **_kwargs):
+            events.append("command")
+
+        with patch.object(CloudflareControlPlane, "heartbeat", side_effect=command):
+            plane.heartbeat(["agent.status"], agent_version="1.30.3", status="online")
+
+        self.assertEqual(events, ["command", "product:1.30.3:True"])
 
     def test_offline_presence_is_attempted_even_when_command_socket_is_gone(self):
         events: list[str] = []
@@ -228,9 +259,29 @@ class ProductAwareControlPlaneTests(unittest.TestCase):
 
         with patch.object(CloudflareControlPlane, "heartbeat", side_effect=command):
             with self.assertRaisesRegex(RuntimeError, "socket_gone"):
-                plane.heartbeat(["agent.status"], agent_version="1.30.2", status="offline")
+                plane.heartbeat(["agent.status"], agent_version="1.30.3", status="offline")
 
-        self.assertEqual(events, ["command", "product:1.30.2:False"])
+        self.assertEqual(events, ["command", "product:1.30.3:False"])
+
+    def test_attestation_failure_cannot_break_healthy_command_channel(self):
+        events: list[str] = []
+        plane = self.make_plane(events)
+
+        def command(*_args, **_kwargs):
+            events.append("command")
+
+        def failed_tick():
+            events.append("central-session")
+            raise RuntimeError("mcp_unavailable")
+
+        plane.product_central_session.tick = failed_tick
+        with patch.object(CloudflareControlPlane, "heartbeat", side_effect=command):
+            # Production ProductCentralSessionClient.tick contains its own
+            # failures; this test proves the control-plane ordering contract.
+            with self.assertRaisesRegex(RuntimeError, "mcp_unavailable"):
+                plane.heartbeat(["agent.status"], agent_version="1.30.3", status="online")
+
+        self.assertEqual(events, ["command", "product:1.30.3:True", "central-session"])
 
 
 if __name__ == "__main__":
