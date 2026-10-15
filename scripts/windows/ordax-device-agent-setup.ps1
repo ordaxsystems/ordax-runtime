@@ -1,7 +1,7 @@
 ﻿param(
     [switch]$NonInteractive,
     [int]$ReadyTimeoutSeconds = 120,
-    [string]$ControlPlaneUrl = 'https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev'
+    [string]$ControlPlaneUrl = 'https://mcp.ordax.com.br'
 )
 
 $ErrorActionPreference = 'Stop'
