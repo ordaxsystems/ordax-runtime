@@ -7,9 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_CONTROL_PLANE_URL = (
-    "https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev"
-)
+DEFAULT_CONTROL_PLANE_URL = "https://mcp.ordax.com.br"
 DEFAULT_PRODUCT_MCP_URL = "https://mcp.ordax.com.br"
 
 
