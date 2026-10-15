@@ -73,15 +73,18 @@ class ProductAwareCloudflareControlPlane(CloudflareControlPlane):
         )
 
         # Session attestation is driven by the SAME heartbeat and runs only
-        # after Product identity has been verified. Its failure is intentionally
-        # isolated from command transport/presence: an unavailable MCP release
-        # can never make a healthy device look offline.
+        # after Product identity has been verified. It is deliberately
+        # non-authoritative for command-channel health: even an unexpected
+        # attestation bug must not make a healthy Runtime look offline.
         if (
             presence.verified
             and presence.online is True
             and self.product_central_session is not None
         ):
-            self.product_central_session.tick()
+            try:
+                self.product_central_session.tick()
+            except Exception:
+                pass
 
 
 def build_control_plane(config: AgentConfig) -> CloudflareControlPlane:
