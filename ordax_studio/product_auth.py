@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
-from ordax_dev_agent.cloudflare_control_plane import CloudflareControlPlane
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.device_setup import SetupError, configure as configure_device
-from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 
 # Public metadata lives in one consumer snapshot validated against the
 # canonical ordax-platform wrangler.toml owner on every Windows contract run.
@@ -113,8 +111,6 @@ def sign_in_with_password(
             ) from error
 
         if response.status_code >= 400:
-            # Do not surface raw provider errors because they can contain details
-            # that are useful for account enumeration or internal diagnostics.
             raise ProductAccountError(
                 "product_auth_rejected",
                 "E-mail ou senha não conferem.",
@@ -229,7 +225,6 @@ def exchange_authorization_code(
                 if isinstance(candidate, str) and 0 < len(candidate) <= 320:
                     email = candidate
         except (httpx.HTTPError, ValueError):
-            # Product subject validation remains authoritative below; email is display-only.
             email = None
         return ProductAuthSession(access_token=access_token, email=email)
     finally:
@@ -245,6 +240,13 @@ def connect_existing_device(
     auth_http: httpx.Client | None = None,
     session: ProductAuthSession | None = None,
 ) -> dict[str, Any]:
+    """Bind the local Product device to the authenticated owner via canonical enrollment.
+
+    Product pairing/device-links are retired server-side. Enrollment is the current
+    authority boundary: for an existing machine binding it atomically verifies the
+    same owner and revalidates the local device credential; for a new machine it
+    creates the owner-bound Product device.
+    """
     if not config.control_plane_url:
         raise ProductAccountError(
             "control_plane_unconfigured",
@@ -260,81 +262,35 @@ def connect_existing_device(
         active_session = sign_in_with_password(email, password, http=auth_http)
     else:
         active_session = session
-    active_config = config
-    enrolled_now = False
-    if not config.device_id:
-        try:
-            enrollment = configure_device(
-                config.state_dir,
-                control_plane_url=config.control_plane_url,
-                product_access_token=active_session.access_token,
-            )
-        except SetupError as error:
-            raise ProductAccountError(
-                "device_enrollment_failed",
-                "A conta foi autenticada, mas não foi possível registrar este computador.",
-            ) from error
-        device_id = str(enrollment.get("device_id") or "")
-        if not device_id:
-            raise ProductAccountError(
-                "device_enrollment_invalid",
-                "O Control Plane não retornou uma identidade válida para este computador.",
-            )
-        active_config = replace(config, device_id=device_id)
-        enrolled_now = True
 
-    control: CloudflareControlPlane | None = None
+    previous_device_id = str(config.device_id or "")
     try:
-        control = CloudflareControlPlane(active_config)
-        pairing = control.create_product_pairing()
-    except ProductAccountError:
-        raise
-    except Exception as error:
-        raise ProductAccountError(
-            "device_pairing_unavailable",
-            "O Runtime local não conseguiu iniciar o pareamento da máquina.",
-        ) from error
-    finally:
-        if control is not None:
-            control.http.close()
-
-    pairing_id = pairing.get("pairing_id") if isinstance(pairing, dict) else None
-    pairing_secret = (
-        pairing.get("pairing_secret") if isinstance(pairing, dict) else None
-    )
-    if not isinstance(pairing_id, str) or not isinstance(pairing_secret, str):
-        raise ProductAccountError(
-            "device_pairing_invalid",
-            "O Control Plane retornou um pareamento inválido.",
+        enrollment = configure_device(
+            config.state_dir,
+            control_plane_url=config.control_plane_url,
+            product_access_token=active_session.access_token,
+            force_product_enrollment=True,
         )
-
-    try:
-        with ProductRemoteClient(active_config.control_plane_url) as remote:
-            link = remote.claim_device_pairing(
-                active_session.access_token,
-                pairing_id=pairing_id,
-                pairing_secret=pairing_secret,
-            )
-    except ProductRemoteError as error:
+    except SetupError as error:
         raise ProductAccountError(
-            error.error_code,
-            "A conta foi autenticada, mas o vínculo com este computador foi recusado.",
-        ) from error
-    except httpx.HTTPError as error:
-        raise ProductAccountError(
-            "product_pairing_unavailable",
-            "A conta foi autenticada, mas o Control Plane está indisponível.",
+            "device_enrollment_failed",
+            "A conta foi autenticada, mas não foi possível registrar ou validar este computador.",
         ) from error
 
-    if str(link.get("device_id") or "") != str(active_config.device_id):
+    device_id = str(enrollment.get("device_id") or "")
+    if not device_id:
         raise ProductAccountError(
-            "product_pairing_device_mismatch",
-            "O Control Plane vinculou uma identidade de dispositivo inesperada.",
+            "device_enrollment_invalid",
+            "O Control Plane não retornou uma identidade válida para este computador.",
+        )
+    if previous_device_id and previous_device_id != device_id:
+        raise ProductAccountError(
+            "device_identity_changed",
+            "A Conta ORDAX retornou uma identidade diferente para este computador.",
         )
 
     return {
         "email": active_session.email or (email.strip() if isinstance(email, str) else None),
-        "link": dict(link),
-        "device_id": active_config.device_id,
-        "enrolled_now": enrolled_now,
+        "device_id": device_id,
+        "enrolled_now": not bool(previous_device_id),
     }
