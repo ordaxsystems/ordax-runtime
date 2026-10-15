@@ -188,6 +188,8 @@ def _configure(
     home=None,
     control_plane_url: str | None = None,
     product_access_token: str | None = None,
+    device_kind: str | None = None,
+    channel: str | None = None,
 ) -> dict:
     settings_path = state / "agent-settings.json"
     settings = load_settings(settings_path)
@@ -197,6 +199,17 @@ def _configure(
     pending = resolve_pending_token_path(state)
     own_client = client is None
     client = client or httpx.Client(timeout=20, follow_redirects=False)
+
+    resolved_device_kind = str(
+        device_kind or os.environ.get("ORDAX_PRODUCT_DEVICE_KIND", "desktop")
+    ).strip().lower()
+    resolved_channel = str(
+        channel or os.environ.get("ORDAX_PRODUCT_CHANNEL", "development")
+    ).strip().lower()
+    if resolved_device_kind not in {"desktop", "laptop", "mobile", "server", "other"}:
+        raise SetupError("DEVICE_KIND_INVALID")
+    if resolved_channel not in {"stable", "development"}:
+        raise SetupError("PRODUCT_CHANNEL_INVALID")
 
     try:
         identity = None
@@ -238,6 +251,8 @@ def _configure(
                     "operation": "enroll",
                     "machine_binding_sha256": binding,
                     "device_name": socket.gethostname(),
+                    "device_kind": resolved_device_kind,
+                    "channel": resolved_channel,
                     "token_sha256": hashlib.sha256(secret.encode()).hexdigest(),
                 },
                 {"Authorization": "Bearer " + credential},
@@ -292,6 +307,16 @@ def main() -> int:
         "--control-plane-url",
         default=os.environ.get("ORDAX_CONTROL_PLANE_URL", DEFAULT_CONTROL_PLANE_URL),
     )
+    parser.add_argument(
+        "--device-kind",
+        choices=("desktop", "laptop", "mobile", "server", "other"),
+        default=os.environ.get("ORDAX_PRODUCT_DEVICE_KIND", "desktop"),
+    )
+    parser.add_argument(
+        "--channel",
+        choices=("stable", "development"),
+        default=os.environ.get("ORDAX_PRODUCT_CHANNEL", "development"),
+    )
     args = parser.parse_args()
     try:
         state = Path(os.environ["LOCALAPPDATA"]) / "OrdaX" / "DevAgent"
@@ -299,6 +324,8 @@ def main() -> int:
             state,
             interactive=args.interactive,
             control_plane_url=args.control_plane_url,
+            device_kind=args.device_kind,
+            channel=args.channel,
         )
         print(json.dumps(result))
         return 0
