@@ -29,7 +29,10 @@ class ProductUpdateTests(unittest.TestCase):
         self.assertEqual(result["state"], "update-available")
         self.assertEqual(result["availableVersion"], "0.15.1")
         self.assertFalse(result["applyAllowed"])
-        self.assertEqual(result["verificationRequired"], ["sha256", "authenticode-authorized-signer", "install-smoke"])
+        self.assertEqual(
+            result["verificationRequired"],
+            ["sha256", "authenticode-authorized-signer", "install-smoke"],
+        )
 
     def test_equal_release_is_current(self):
         self.assertEqual(evaluate_release("0.15.1", self.release("0.15.1"))["state"], "current")
