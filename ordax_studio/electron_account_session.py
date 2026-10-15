@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -44,12 +45,26 @@ _CALLBACK_HOST = "127.0.0.1"
 _CALLBACK_PORT = 8766
 _CALLBACK_PATH = "/oauth/callback"
 _OAUTH_TIMEOUT_SECONDS = 300
+_SAFE_ERROR_CODE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,127}\Z")
 
 
 def _pkce() -> tuple[str, str]:
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
     return verifier, challenge
+
+
+def _safe_error_code(value: Any, *, fallback: str = "account_auth_failed") -> str:
+    code = value if isinstance(value, str) else ""
+    return code if _SAFE_ERROR_CODE.fullmatch(code) is not None else fallback
+
+
+def _write_failure(stdout: Any, code: str) -> None:
+    stdout.write(json.dumps(
+        {"schema": _SCHEMA, "ok": False, "error": _safe_error_code(code)},
+        separators=(",", ":"), ensure_ascii=True,
+    ) + "\n")
+    stdout.flush()
 
 
 def browser_oauth_session(
@@ -250,13 +265,17 @@ def run(stdin: Any = sys.stdin.buffer, stdout: Any = sys.stdout) -> int:
         stdout.write(json.dumps(result, separators=(",", ":"), ensure_ascii=True) + "\n")
         stdout.flush()
         return 0
-    except (ValueError, UnicodeError, ProductAccountError, ProductRemoteError, OSError):
-        stdout.write('{"schema":"' + _SCHEMA + '","ok":false,"error":"account_auth_failed"}\n')
-        stdout.flush()
+    except ProductAccountError as error:
+        _write_failure(stdout, _safe_error_code(error.code))
+        return 1
+    except ProductRemoteError as error:
+        _write_failure(stdout, _safe_error_code(error.error_code))
+        return 1
+    except (ValueError, UnicodeError, OSError):
+        _write_failure(stdout, "account_auth_failed")
         return 1
     except Exception:
-        stdout.write('{"schema":"' + _SCHEMA + '","ok":false,"error":"account_auth_unavailable"}\n')
-        stdout.flush()
+        _write_failure(stdout, "account_auth_unavailable")
         return 1
 
 
