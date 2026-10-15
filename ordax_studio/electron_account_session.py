@@ -1,9 +1,10 @@
-"""Browser OAuth + device-link bridge for the canonical installed Studio.
+"""Browser OAuth + owner-bound device enrollment for the canonical installed Studio.
 
 No ORDAX password crosses the Studio renderer or Electron IPC. The private Runtime
-child owns PKCE, loopback callback, token exchange, Product subject validation,
-enrollment and pairing. The access token leaves this child only through its private
-stdio pipe to the Electron main process and is never persisted by this bridge.
+child owns PKCE, loopback callback, token exchange, Product subject validation and
+owner-bound device enrollment. MCP grants remain a separate explicit authorization
+boundary. The access token leaves this child only through its private stdio pipe to
+the Electron main process and is never persisted by this bridge.
 """
 from __future__ import annotations
 
@@ -111,8 +112,11 @@ def browser_oauth_session(
                 "<title>ORDAX Studio</title><style>body{font:16px system-ui;background:#07111d;color:#eaf2ff;"
                 "display:grid;place-items:center;min-height:90vh}main{max-width:520px;padding:32px;"
                 "border:1px solid #24364d;border-radius:18px;background:#0d1a2a}</style><main><h1>"
-                + ("Conexão concluída" if ok else "Conexão não concluída")
-                + "</h1><p>" + ("Você pode voltar ao ORDAX Studio." if ok else "Volte ao ORDAX Studio e tente novamente.") + "</p></main>"
+                + ("Autorização recebida" if ok else "Autorização não concluída")
+                + "</h1><p>" + (
+                    "Volte ao ORDAX Studio para concluir a validação deste computador."
+                    if ok else "Volte ao ORDAX Studio e tente novamente."
+                ) + "</p></main>"
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -185,6 +189,13 @@ def authorize_account(
     if not token or len(token) > 16000 or "\r" in token or "\n" in token:
         raise ValueError("invalid_session")
     base = control_plane or os.environ.get("ORDAX_PRODUCT_CONTROL_PLANE_URL") or _DEFAULT_CONTROL_PLANE
+
+    config = config_factory()
+    if not isinstance(config, AgentConfig):
+        raise ValueError("invalid_runtime_config")
+    if control_plane:
+        config = replace(config, control_plane_url=base)
+
     with remote_factory(base) as remote:
         subject = remote.session(token)
     if not isinstance(subject, dict) or not isinstance(subject.get("subject_id"), str):
@@ -196,11 +207,6 @@ def authorize_account(
     except (ValueError, AttributeError):
         raise ValueError("invalid_product_subject") from None
 
-    config = config_factory()
-    if not isinstance(config, AgentConfig):
-        raise ValueError("invalid_runtime_config")
-    if control_plane:
-        config = replace(config, control_plane_url=base)
     device = connect_device(config, session=session)
     if not isinstance(device, dict) or not isinstance(device.get("device_id"), str):
         raise ValueError("invalid_device_enrollment")
