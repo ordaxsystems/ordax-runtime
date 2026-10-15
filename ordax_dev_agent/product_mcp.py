@@ -30,7 +30,7 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(
         name="app_intelligence_detail",
         action="intelligence.app_detail",
-        description="Read declarative instructions, intents, parameters and examples for one exact app_id from the device App Intelligence registry. This does not grant permission to execute the app.",
+        description="Read declarative instructions, intents and packaged semantic UI identities for one exact app_id from the device App Intelligence registry. Use semantic element ids before screenshots or coordinate-based interaction. This does not grant permission to execute the app.",
     ),
     ProductMcpToolSpec(
         name="projects_list",

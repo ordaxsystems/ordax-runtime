@@ -89,11 +89,30 @@ if ($studioAppSource) {
         throw "Canonical Studio Application Action manifest is incompatible"
     }
 
+    $studioSemanticUiPath = Join-Path $studioAppSource "presentation\\semantic-ui.json"
+    if (-not (Test-Path $studioSemanticUiPath)) {
+        throw "Canonical Studio semantic UI manifest is missing: $studioSemanticUiPath"
+    }
+    $studioSemanticUi = Get-Content $studioSemanticUiPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (
+        $studioSemanticUi.schema -ne "ordax-apps.ui-semantic-map/1" -or
+        $studioSemanticUi.appId -ne "studio" -or
+        [string]$studioSemanticUi.appVersion -ne [string]$studioAppManifest.version -or
+        $studioSemanticUi.authority -ne "none" -or
+        $studioSemanticUi.execution -ne "descriptive-only" -or
+        $studioSemanticUi.privacy.captureInputValues -ne $false -or
+        $studioSemanticUi.privacy.captureCredentials -ne $false -or
+        -not $studioSemanticUi.elements -or
+        $studioSemanticUi.elements.Count -gt 256
+    ) {
+        throw "Canonical Studio semantic UI manifest is incompatible"
+    }
+
     # Produce only immutable app metadata here. Runtime Git sources are NEVER
     # rewritten by a Studio installer build. The Electron visual owner stays
     # in the locked Apps checkout; Runtime owns execution and installation.
     $appIntelligenceRegistry = [ordered]@{
-        schema = "ordax.app-intelligence-registry/1"
+        schema = "ordax.app-intelligence-registry/2"
         authority = "none"
         source = [ordered]@{
             repository = [string]$sourceLock.repository
@@ -105,6 +124,7 @@ if ($studioAppSource) {
                 title = [string]$studioAppManifest.title
                 version = [string]$studioAppManifest.version
                 manifest = $studioAiManifest
+                semanticUi = $studioSemanticUi
             }
         )
     }
