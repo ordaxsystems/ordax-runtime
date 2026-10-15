@@ -313,7 +313,7 @@ $manifest = [ordered]@{
     }
     studio_source_commit = [string]$sourceLock.commit
     presentation_host = "electron"
-    control_plane = "https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev"
+    control_plane = "https://mcp.ordax.com.br"
     built_at = [DateTimeOffset]::UtcNow.ToString("o")
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stageRoot "product-manifest.json") -Encoding UTF8

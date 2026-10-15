@@ -43,7 +43,7 @@ function Ensure-ConfiguredDeviceIdentity {
     }
 
     $setupSettingsPath = Join-Path $stateDir "agent-settings.json"
-    $setupControlPlaneUrl = "https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev"
+    $setupControlPlaneUrl = "https://mcp.ordax.com.br"
     if (Test-Path $setupSettingsPath -PathType Leaf) {
         try {
             $setupSettings = Get-Content $setupSettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
