@@ -206,6 +206,19 @@ def _resolve_control_plane(control_plane_url: str | None) -> tuple[str, str]:
     return raw, raw + "/v3/device/setup"
 
 
+def _quarantine_invalid_pending_token(pending: Path) -> Path:
+    """Preserve a malformed interrupted-setup token before replacing it.
+
+    Only the pending token is eligible for this recovery path. A committed
+    device credential is never renamed or deleted here.
+    """
+    quarantine = pending.with_name(
+        pending.name + ".invalid-" + secrets.token_hex(8)
+    )
+    os.replace(pending, quarantine)
+    return quarantine
+
+
 def _configure(
     state: Path,
     *,
@@ -264,9 +277,11 @@ def _configure(
             if not credential or len(credential) > 16_000:
                 raise SetupError("PRODUCT_ACCOUNT_LOGIN_REQUIRED")
             if pending.is_file():
-                secret = pending.read_text(encoding="utf-8").strip()
+                secret = pending.read_text(encoding="utf-8-sig").strip()
                 if len(secret) != 64 or any(c not in "0123456789abcdef" for c in secret):
-                    raise SetupError("PENDING_TOKEN_INVALID_PRESERVED")
+                    _quarantine_invalid_pending_token(pending)
+                    secret = secrets.token_hex(32)
+                    atomic_write(pending, secret)
             else:
                 secret = secrets.token_hex(32)
                 atomic_write(pending, secret)
