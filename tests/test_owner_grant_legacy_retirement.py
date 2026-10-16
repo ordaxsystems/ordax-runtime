@@ -4,6 +4,7 @@ import unittest
 
 PRODUCTION_PATHS = (
     Path("ordax_dev_agent/product_remote_client.py"),
+    Path("ordax_studio/product_auth.py"),
     Path("ordax_studio/product_web_desktop.py"),
 )
 
@@ -25,6 +26,7 @@ FORBIDDEN = (
     "revoke_project_capability_grant",
     "link_id",
     "sign_in_with_password",
+    '"grant_type": "password"',
 )
 
 
@@ -37,9 +39,12 @@ class OwnerGrantLegacyRetirementTests(unittest.TestCase):
 
     def test_canonical_owner_grant_authority_is_present(self):
         client = Path("ordax_dev_agent/product_remote_client.py").read_text(encoding="utf-8")
+        auth = Path("ordax_studio/product_auth.py").read_text(encoding="utf-8")
         studio = Path("ordax_studio/product_web_desktop.py").read_text(encoding="utf-8")
         self.assertIn("/v3/owner/remote-authority", client)
         self.assertIn("/v3/owner/remote-grant-groups", client)
+        self.assertIn("exchange_authorization_code", auth)
+        self.assertIn('"grant_type": "authorization_code"', auth)
         self.assertIn("owner_remote_authority", studio)
         self.assertIn("replace_owner_remote_grant_group", studio)
         self.assertIn("revoke_owner_remote_grant_group", studio)
