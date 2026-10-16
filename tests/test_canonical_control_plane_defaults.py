@@ -21,6 +21,8 @@ class CanonicalControlPlaneDefaultsTests(unittest.TestCase):
         self.assertEqual(CANONICAL, DEFAULT_PRODUCT_MCP_URL)
         config = Path("ordax_dev_agent/config.py").read_text(encoding="utf-8")
         self.assertNotIn("DEFAULT_CONTROL_PLANE_URL", config)
+        self.assertNotIn('settings.get("control_plane_url")', config)
+        self.assertNotIn('settings["control_plane_url"]', config)
 
     def test_read_and_bootstrap_paths_cannot_regress_to_legacy_workers_dev(self):
         for raw_path in CANONICAL_READ_OR_BOOTSTRAP_PATHS:

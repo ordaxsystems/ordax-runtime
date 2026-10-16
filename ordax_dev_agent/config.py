@@ -53,12 +53,6 @@ class AgentConfig:
         if not isinstance(settings.get("adapters", []), list):
             raise ValueError("adapters must be a list of locally installed adapter names")
 
-        # One-shot migration input only: old installs stored the same Product
-        # origin under control_plane_url. Do not keep two runtime authorities.
-        if not settings.get("product_mcp_url") and settings.get("control_plane_url"):
-            settings["product_mcp_url"] = settings["control_plane_url"]
-        settings.pop("control_plane_url", None)
-
         projects = settings.get("projects")
         default_project = settings.get("default_project", "hordax")
         if (
