@@ -14,12 +14,12 @@ from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.computer_filesystem_actions import computer_access_management_status
 
 from .blender_connection import prepare_blender_connection
+from .electron_account_session import browser_oauth_session
 from .instance_lock import SingleInstanceLock
 from .product_auth import (
     ProductAccountError,
     ProductAuthSession,
     connect_existing_device,
-    sign_in_with_password,
 )
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 from .web_desktop import APP_NAME, StudioApi
@@ -179,13 +179,11 @@ class StudioProductApi(StudioApi):
             )
         return matches[0]
 
-    def connect_product_account(self, email: str, password: str) -> dict[str, Any]:
+    def connect_product_account(self) -> dict[str, Any]:
         try:
-            session = sign_in_with_password(email, password)
+            session = browser_oauth_session()
             data = connect_existing_device(
                 self.agent.config,
-                email,
-                password,
                 session=session,
             )
         except ProductAccountError as error:
