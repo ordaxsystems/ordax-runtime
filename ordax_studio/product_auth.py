@@ -56,6 +56,19 @@ def _auth_config() -> tuple[str, str]:
     return origin, publishable_key
 
 
+def _product_mcp_base(config: AgentConfig, override: str | None = None) -> str:
+    raw = str(override or config.product_mcp_url or "").strip().rstrip("/")
+    parsed = urlparse(raw)
+    loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    allowed = {"http", "https"} if loopback else {"https"}
+    if not parsed.netloc or parsed.scheme not in allowed:
+        raise ProductAccountError(
+            "product_mcp_url_invalid",
+            "O endereço Product configurado neste computador é inválido.",
+        )
+    return raw
+
+
 def exchange_authorization_code(
     code: str,
     code_verifier: str,
