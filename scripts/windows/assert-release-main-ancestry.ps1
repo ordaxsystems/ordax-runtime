@@ -1,6 +1,6 @@
 # Gate public releases on the actual canonical Runtime Git history and GitHub main
 # governance, not merely a version-looking tag. A tag created on an unrelated
-# branch or a release from an unprotected main must fail closed.
+# branch or a release from a weak/unprotected main must fail closed.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
@@ -82,8 +82,71 @@ if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_REPOSITORY)) {
         throw "Canonical GitHub main moved after the trusted release checkout was resolved"
     }
 
+    # `protected` alone can represent a weak policy. Require active rulesets whose
+    # effective rules on main enforce the concrete ORDAX release governance contract.
+    # This public endpoint includes repository- and organization-level active rules.
+    $rulesUri = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/rules/branches/main?per_page=100"
+    $mainRules = @(Invoke-RestMethod -Method Get -Uri $rulesUri -Headers $headers)
+    if ($mainRules.Count -eq 0) {
+        throw "Blocked public release: canonical main has no active inspectable GitHub ruleset policy"
+    }
+
+    $ruleTypes = @($mainRules | ForEach-Object { [string]$_.type })
+    foreach ($requiredRuleType in @("deletion", "non_fast_forward", "pull_request", "required_status_checks")) {
+        if ($ruleTypes -cnotcontains $requiredRuleType) {
+            throw "Blocked public release: canonical main ruleset is missing required rule '$requiredRuleType'"
+        }
+    }
+
+    $pullRequestRules = @($mainRules | Where-Object { [string]$_.type -ceq "pull_request" })
+    $requiresResolvedThreads = $false
+    foreach ($rule in $pullRequestRules) {
+        if ([bool]$rule.parameters.required_review_thread_resolution) {
+            $requiresResolvedThreads = $true
+            break
+        }
+    }
+    if (-not $requiresResolvedThreads) {
+        throw "Blocked public release: canonical main must require pull-request conversation resolution"
+    }
+
+    $requiredStatusRules = @($mainRules | Where-Object { [string]$_.type -ceq "required_status_checks" })
+    $requiredContexts = @(
+        "packaging-contracts",
+        "build-installer",
+        "install-smoke",
+        "product-mcp-minimum-sdk",
+        "runtime-contracts"
+    )
+    $configuredContexts = @(
+        foreach ($rule in $requiredStatusRules) {
+            foreach ($check in @($rule.parameters.required_status_checks)) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$check.context)) {
+                    [string]$check.context
+                }
+            }
+        }
+    )
+    foreach ($context in $requiredContexts) {
+        if ($configuredContexts -cnotcontains $context) {
+            throw "Blocked public release: canonical main does not require status check '$context'"
+        }
+    }
+
+    $strictStatusChecks = $false
+    foreach ($rule in $requiredStatusRules) {
+        if ([bool]$rule.parameters.strict_required_status_checks_policy) {
+            $strictStatusChecks = $true
+            break
+        }
+    }
+    if (-not $strictStatusChecks) {
+        throw "Blocked public release: canonical main required status checks must be strict/up-to-date"
+    }
+
     Write-Host "ORDAX_RELEASE_REPOSITORY_GOVERNANCE=PASS"
     Write-Host "ORDAX_RELEASE_GITHUB_MAIN_COMMIT=$($githubMain.commit.sha)"
+    Write-Host "ORDAX_RELEASE_MAIN_RULESET_POLICY=PASS"
 }
 
 Write-Host "ORDAX_RELEASE_MAIN_ANCESTRY_VALID"
