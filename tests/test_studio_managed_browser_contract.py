@@ -17,10 +17,14 @@ class StudioManagedBrowserContractTests(unittest.TestCase):
         cls.host_bridge = HOST_BRIDGE.read_text(encoding="utf-8")
         cls.actions = ACTIONS.read_text(encoding="utf-8")
 
-    def test_owner_browser_grant_is_exact_and_project_scoped(self) -> None:
+    def test_owner_browser_grant_uses_canonical_project_scope(self) -> None:
         self.assertIn('_OWNER_PROJECT_BROWSER_GRANT_MODE = "project-browser-automation"', self.product_host)
-        self.assertIn("projects=[project]", self.product_host)
-        self.assertIn("create_project_capability_grant", self.product_host)
+        self.assertIn("canonical_project_scope_required", self.product_host)
+        self.assertIn("space_id=str(space_id)", self.product_host)
+        self.assertIn("project_id=str(project_id)", self.product_host)
+        self.assertIn("replace_owner_remote_grant_group", self.product_host)
+        self.assertNotIn("create_project_capability_grant", self.product_host)
+        self.assertNotIn("projects=[project]", self.product_host)
 
     def test_studio_host_exposes_typed_browser_operations(self) -> None:
         for action in (
