@@ -1,4 +1,4 @@
-﻿name: ORDAX Runtime Contracts
+name: ORDAX Runtime Contracts
 
 on:
   pull_request:
@@ -46,19 +46,24 @@ jobs:
       - name: Compile Runtime packages
         run: python -m compileall -q ordax_dev_agent ordax_device_agent ordax_studio mcp_blender_unity
 
-      - name: Validate managed runtime setup PowerShell syntax
+      - name: Validate managed runtime and production updater PowerShell syntax
         shell: pwsh
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path 'scripts/windows/ordax-device-agent-setup.ps1'),
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            exit 1
+          foreach ($path in @(
+            'scripts/windows/ordax-device-agent-setup.ps1',
+            'scripts/windows/apply-ordax-production-update.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$path : $($_.Message)" }
+              exit 1
+            }
           }
       - name: Run Runtime ownership and Computer Control contracts
         run: >-
@@ -70,6 +75,8 @@ jobs:
           tests.test_product_action_recovery
           tests.test_product_central_session
           tests.test_product_device_control_plane
+          tests.test_product_update
+          tests.test_product_update_apply
           tests.test_versioning
           tests.test_studio_managed_browser_contract
           tests.test_product_action_scope_parity
