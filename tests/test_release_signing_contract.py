@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -28,6 +29,25 @@ class ReleaseSigningContractTests(unittest.TestCase):
         self.assertIn("absolute HTTPS URL", text)
         self.assertNotIn("Set-AuthenticodeSignature", text)
         self.assertNotIn("New-SelfSignedCertificate", text)
+
+    def test_windows_release_workflow_remote_actions_are_immutable(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        uses = re.findall(r"^\s*-\s+uses:\s+([^\s#]+)", text, flags=re.MULTILINE)
+        self.assertGreater(len(uses), 0)
+        for action in uses:
+            if action.startswith("./"):
+                continue
+            self.assertRegex(
+                action,
+                r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$",
+                msg=f"remote action is not pinned to an immutable commit: {action}",
+            )
+        self.assertNotRegex(text, r"uses:\s+[^\s]+@(v[0-9]+|main|master)\b")
+        self.assertIn("actions/checkout@11d5960a326750d5838078e36cf38b85af677262", text)
+        self.assertIn("actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065", text)
+        self.assertIn("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", text)
+        self.assertIn("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", text)
+        self.assertIn("ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756", text)
 
     def test_hsm_runner_only_signs_and_hands_off_immutable_artifact(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
