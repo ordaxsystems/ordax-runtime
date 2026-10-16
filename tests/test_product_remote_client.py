@@ -5,10 +5,12 @@ import unittest
 
 import httpx
 
-from ordax_dev_agent.product_remote_client import (
-    ProductRemoteClient,
-    ProductRemoteError,
-)
+from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
+
+
+DEVICE_ID = "24630b00-e9c0-4d93-b38a-2367048cd9d1"
+CLIENT_ID = "11111111-1111-4111-8111-111111111111"
+GROUP_ID = "22222222-2222-4222-8222-222222222222"
 
 
 class ProductRemoteClientTests(unittest.TestCase):
@@ -17,135 +19,146 @@ class ProductRemoteClientTests(unittest.TestCase):
         polls = {"count": 0}
 
         def handler(request: httpx.Request) -> httpx.Response:
-            seen.append((
-                request.method,
-                request.url.path,
-                request.headers.get("authorization", ""),
-            ))
+            seen.append((request.method, request.url.path, request.headers.get("authorization", "")))
             if request.url.path == "/v3/product/session":
-                return httpx.Response(200, json={
-                    "ok": True,
-                    "session": {"subject_id": "user:1"},
-                })
+                return httpx.Response(200, json={"ok": True, "session": {"subject_id": "user:1"}})
             if request.url.path == "/v3/product/targets":
-                return httpx.Response(200, json={
-                    "ok": True,
-                    "targets": [{"device_id": "dev-1", "name": "Workstation", "grants": []}],
-                })
+                return httpx.Response(200, json={"ok": True, "targets": [{"device_id": DEVICE_ID}]})
             if request.url.path == "/v3/product/actions" and request.method == "POST":
                 body = json.loads(request.content.decode("utf-8"))
-                self.assertEqual(body["device_id"], "dev-1")
+                self.assertEqual(body["device_id"], DEVICE_ID)
                 self.assertEqual(body["action"], "git.status")
-                self.assertEqual(body["project"], "demo")
-                return httpx.Response(202, json={
-                    "ok": True,
-                    "request_id": "req-1",
-                    "status": "queued",
-                })
+                return httpx.Response(202, json={"ok": True, "request_id": "req-1", "status": "queued"})
             if request.url.path == "/v3/product/actions/req-1":
                 polls["count"] += 1
                 status = "running" if polls["count"] == 1 else "succeeded"
-                return httpx.Response(200, json={
-                    "ok": True,
-                    "action": {
-                        "request_id": "req-1",
-                        "status": status,
-                        "result": {"ok": True},
-                    },
-                })
+                return httpx.Response(200, json={"ok": True, "action": {
+                    "request_id": "req-1", "status": status, "result": {"ok": True},
+                }})
             return httpx.Response(404, json={"ok": False, "error": "not_found"})
 
-        http = httpx.Client(
-            transport=httpx.MockTransport(handler),
-            base_url="https://unused.test",
+        client = ProductRemoteClient(
+            "https://mcp.example.test",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
         )
-        client = ProductRemoteClient("https://control.example.test", http=http)
-
         self.assertEqual(client.session("jwt-one")["subject_id"], "user:1")
-        self.assertEqual(client.targets("jwt-two")[0]["device_id"], "dev-1")
+        self.assertEqual(client.targets("jwt-two")[0]["device_id"], DEVICE_ID)
         request_id = client.submit_action(
-            "jwt-three",
-            device_id="dev-1",
-            action="git.status",
-            project="demo",
-            arguments={"project": "demo"},
+            "jwt-three", device_id=DEVICE_ID, action="git.status", project="demo",
         )
         self.assertEqual(request_id, "req-1")
         result = client.wait_action(
-            "jwt-four",
-            request_id,
-            timeout_seconds=2,
-            poll_interval_seconds=0.1,
+            "jwt-four", request_id, timeout_seconds=2, poll_interval_seconds=0.1,
         )
         self.assertEqual(result["status"], "succeeded")
         self.assertFalse(hasattr(client, "access_token"))
-        self.assertEqual(
-            [authorization for _, _, authorization in seen],
-            [
-                "Bearer jwt-one",
-                "Bearer jwt-two",
-                "Bearer jwt-three",
-                "Bearer jwt-four",
-                "Bearer jwt-four",
-            ],
-        )
+        self.assertEqual([item[2] for item in seen], [
+            "Bearer jwt-one", "Bearer jwt-two", "Bearer jwt-three",
+            "Bearer jwt-four", "Bearer jwt-four",
+        ])
 
-    def test_device_pairing_methods_are_explicit_and_product_authenticated(self):
-        seen = []
+    def test_owner_remote_authority_is_device_bound(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.path, "/v3/owner/remote-authority")
+            self.assertEqual(request.url.params.get("device_id"), DEVICE_ID)
+            self.assertEqual(request.headers["authorization"], "Bearer jwt-owner")
+            return httpx.Response(200, json={
+                "ok": True,
+                "device_id": DEVICE_ID,
+                "clients": [{"client_id": CLIENT_ID, "client_name": "ChatGPT"}],
+                "grant_groups": [{
+                    "grant_group_id": GROUP_ID,
+                    "client_id": CLIENT_ID,
+                    "profile_key": "computer-observe",
+                    "device_id": DEVICE_ID,
+                    "space_id": None,
+                    "project_id": None,
+                    "capabilities": [{"capability": "computer.windows", "access_mode": "read"}],
+                }],
+            })
+
+        client = ProductRemoteClient(
+            "https://mcp.example.test",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        authority = client.owner_remote_authority("jwt-owner", device_id=DEVICE_ID)
+        self.assertEqual(authority["device_id"], DEVICE_ID)
+        self.assertEqual(authority["clients"][0]["client_id"], CLIENT_ID)
+        self.assertEqual(authority["grant_groups"][0]["profile_key"], "computer-observe")
+
+    def test_owner_remote_authority_rejects_cross_device_response(self):
+        other = "33333333-3333-4333-8333-333333333333"
+        client = ProductRemoteClient(
+            "https://mcp.example.test",
+            http=httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={
+                "ok": True, "device_id": other, "clients": [], "grant_groups": [],
+            }))),
+        )
+        with self.assertRaises(ProductRemoteError) as caught:
+            client.owner_remote_authority("jwt", device_id=DEVICE_ID)
+        self.assertEqual(caught.exception.error_code, "product_remote_invalid_response")
+
+    def test_replace_and_revoke_owner_grant_group_use_canonical_routes(self):
+        seen: list[tuple[str, str, str]] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             seen.append((request.method, request.url.path, request.headers.get("authorization", "")))
-            if request.url.path == "/v3/product/device-links" and request.method == "POST":
+            if request.method == "POST":
+                self.assertEqual(request.url.path, "/v3/owner/remote-grant-groups")
                 body = json.loads(request.content.decode("utf-8"))
-                self.assertEqual(body["pairing_id"], "pair-1")
-                self.assertEqual(body["pairing_secret"], "secret-1")
-                return httpx.Response(201, json={
-                    "ok": True,
-                    "link": {"link_id": "link-1", "device_id": "dev-1"},
+                self.assertEqual(body, {
+                    "client_id": CLIENT_ID,
+                    "device_id": DEVICE_ID,
+                    "profile_key": "computer-observe",
+                    "space_id": None,
+                    "project_id": None,
+                    "valid_until": "2026-11-05T00:00:00+00:00",
                 })
-            if request.url.path == "/v3/product/device-links" and request.method == "GET":
                 return httpx.Response(200, json={
-                    "ok": True,
-                    "links": [{"link_id": "link-1", "device_id": "dev-1"}],
+                    "ok": True, "grant_group_id": GROUP_ID, "profile_key": "computer-observe",
                 })
-            if request.url.path == "/v3/product/device-links/link-1" and request.method == "DELETE":
-                return httpx.Response(200, json={
-                    "ok": True,
-                    "link_id": "link-1",
-                    "revoked_at": "2026-09-28T12:00:00Z",
-                })
-            return httpx.Response(404, json={"ok": False, "error": "not_found"})
+            self.assertEqual(request.method, "DELETE")
+            self.assertEqual(request.url.path, f"/v3/owner/remote-grant-groups/{GROUP_ID}")
+            self.assertEqual(request.url.params.get("client_id"), CLIENT_ID)
+            return httpx.Response(200, json={"ok": True, "grant_group_id": GROUP_ID, "revoked": True})
 
         client = ProductRemoteClient(
-            "https://control.example.test",
+            "https://mcp.example.test",
             http=httpx.Client(transport=httpx.MockTransport(handler)),
         )
-        link = client.claim_device_pairing(
-            "jwt-claim",
-            pairing_id="pair-1",
-            pairing_secret="secret-1",
+        created = client.replace_owner_remote_grant_group(
+            "jwt-create",
+            client_id=CLIENT_ID,
+            device_id=DEVICE_ID,
+            profile_key="computer-observe",
+            valid_until="2026-11-05T00:00:00+00:00",
         )
-        self.assertEqual(link["link_id"], "link-1")
-        self.assertEqual(client.device_links("jwt-list")[0]["device_id"], "dev-1")
-        self.assertEqual(
-            client.revoke_device_link("jwt-revoke", "link-1")["link_id"],
-            "link-1",
+        self.assertEqual(created["grant_group_id"], GROUP_ID)
+        revoked = client.revoke_owner_remote_grant_group(
+            "jwt-revoke", client_id=CLIENT_ID, grant_group_id=GROUP_ID,
         )
-        self.assertEqual(
-            [item[2] for item in seen],
-            ["Bearer jwt-claim", "Bearer jwt-list", "Bearer jwt-revoke"],
-        )
+        self.assertTrue(revoked["revoked"])
+        self.assertEqual([item[2] for item in seen], ["Bearer jwt-create", "Bearer jwt-revoke"])
 
-    def test_control_plane_errors_are_typed(self):
-        def handler(_request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                403,
-                json={"ok": False, "error": "product_grant_not_resolved"},
-            )
+    def test_retired_owner_routes_are_not_implemented(self):
+        for name in (
+            "claim_device_pairing", "device_links", "revoke_device_link",
+            "device_computer_grants", "create_device_computer_grant",
+            "revoke_device_computer_grant", "device_intelligence_grants",
+            "create_device_intelligence_grant", "revoke_device_intelligence_grant",
+            "project_capability_grants", "create_project_capability_grant",
+            "revoke_project_capability_grant",
+        ):
+            self.assertFalse(hasattr(ProductRemoteClient, name), name)
 
+    def test_product_errors_are_typed(self):
         client = ProductRemoteClient(
-            "https://control.example.test",
-            http=httpx.Client(transport=httpx.MockTransport(handler)),
+            "https://mcp.example.test",
+            http=httpx.Client(transport=httpx.MockTransport(
+                lambda _request: httpx.Response(403, json={
+                    "ok": False, "error": "product_grant_not_resolved",
+                })
+            )),
         )
         with self.assertRaises(ProductRemoteError) as caught:
             client.targets("jwt")
@@ -154,190 +167,19 @@ class ProductRemoteClientTests(unittest.TestCase):
 
     def test_requires_https_and_bounded_wait_parameters(self):
         with self.assertRaises(ValueError):
-            ProductRemoteClient("http://control.example.test")
-
+            ProductRemoteClient("http://mcp.example.test")
         client = ProductRemoteClient(
-            "https://control.example.test",
+            "https://mcp.example.test",
             http=httpx.Client(transport=httpx.MockTransport(
-                lambda _request: httpx.Response(200, json={"ok": True, "action": {"status": "queued"}})
+                lambda _request: httpx.Response(200, json={"ok": True})
             )),
         )
         with self.assertRaises(ValueError):
             client.wait_action("jwt", "req", timeout_seconds=0)
         with self.assertRaises(ValueError):
             client.wait_action("jwt", "req", poll_interval_seconds=0.01)
-
-    def test_owner_device_computer_grant_methods_are_product_authenticated(self):
-        seen = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            seen.append((request.method, request.url.path, request.headers.get("authorization", ""), str(request.url.query)))
-            if request.url.path == "/v3/product/device-computer-grants" and request.method == "GET":
-                self.assertIn("link_id=link-1", str(request.url.query))
-                return httpx.Response(200, json={
-                    "ok": True,
-                    "grants": [{"id": "grant-1", "device_id": "dev-1", "mode": "interactive-computer-control"}],
-                })
-            if request.url.path == "/v3/product/device-computer-grants" and request.method == "POST":
-                body = json.loads(request.content.decode("utf-8"))
-                self.assertEqual("link-1", body["link_id"])
-                self.assertEqual("interactive-computer-control", body["mode"])
-                self.assertEqual("2026-11-05T00:00:00+00:00", body["expires_at"])
-                return httpx.Response(201, json={
-                    "ok": True,
-                    "mode": body["mode"],
-                    "replayed": False,
-                    "grant": {"id": "grant-1", "device_id": "dev-1", "mode": body["mode"]},
-                })
-            if request.url.path == "/v3/product/device-computer-grants/grant-1" and request.method == "DELETE":
-                return httpx.Response(200, json={"ok": True, "revoked": True, "grant": {"id": "grant-1"}})
-            return httpx.Response(404, json={"ok": False, "error": "not_found"})
-
-        client = ProductRemoteClient(
-            "https://control.example.test",
-            http=httpx.Client(transport=httpx.MockTransport(handler)),
-        )
-        grants = client.device_computer_grants("jwt-list", link_id="link-1")
-        self.assertEqual("grant-1", grants[0]["id"])
-        created = client.create_device_computer_grant(
-            "jwt-create",
-            link_id="link-1",
-            mode="interactive-computer-control",
-            expires_at="2026-11-05T00:00:00+00:00",
-        )
-        self.assertEqual("grant-1", created["grant"]["id"])
-        revoked = client.revoke_device_computer_grant("jwt-revoke", "grant-1")
-        self.assertTrue(revoked["revoked"])
-        self.assertFalse(hasattr(client, "access_token"))
-        self.assertEqual(
-            [item[2] for item in seen],
-            ["Bearer jwt-list", "Bearer jwt-create", "Bearer jwt-revoke"],
-        )
-
-
-    def test_owner_app_intelligence_grant_methods_are_product_authenticated(self):
-        seen = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            seen.append((request.method, request.url.path, request.headers.get("authorization", ""), str(request.url.query)))
-            if request.url.path == "/v3/product/device-intelligence-grants" and request.method == "GET":
-                self.assertIn("link_id=link-1", str(request.url.query))
-                return httpx.Response(200, json={
-                    "ok": True,
-                    "grants": [{
-                        "id": "grant-intelligence-1",
-                        "device_id": "dev-1",
-                        "mode": "app-intelligence-read",
-                    }],
-                })
-            if request.url.path == "/v3/product/device-intelligence-grants" and request.method == "POST":
-                body = json.loads(request.content.decode("utf-8"))
-                self.assertEqual("link-1", body["link_id"])
-                self.assertEqual("app-intelligence-read", body["mode"])
-                self.assertEqual("2026-11-05T00:00:00+00:00", body["expires_at"])
-                return httpx.Response(201, json={
-                    "ok": True,
-                    "mode": body["mode"],
-                    "replayed": False,
-                    "grant": {
-                        "id": "grant-intelligence-1",
-                        "device_id": "dev-1",
-                        "mode": body["mode"],
-                    },
-                })
-            if request.url.path == "/v3/product/device-intelligence-grants/grant-intelligence-1" and request.method == "DELETE":
-                return httpx.Response(200, json={
-                    "ok": True,
-                    "revoked": True,
-                    "grant": {"id": "grant-intelligence-1"},
-                })
-            return httpx.Response(404, json={"ok": False, "error": "not_found"})
-
-        client = ProductRemoteClient(
-            "https://control.example.test",
-            http=httpx.Client(transport=httpx.MockTransport(handler)),
-        )
-        grants = client.device_intelligence_grants("jwt-list", link_id="link-1")
-        self.assertEqual("grant-intelligence-1", grants[0]["id"])
-        created = client.create_device_intelligence_grant(
-            "jwt-create",
-            link_id="link-1",
-            expires_at="2026-11-05T00:00:00+00:00",
-        )
-        self.assertEqual("grant-intelligence-1", created["grant"]["id"])
-        revoked = client.revoke_device_intelligence_grant(
-            "jwt-revoke",
-            "grant-intelligence-1",
-        )
-        self.assertTrue(revoked["revoked"])
-        self.assertFalse(hasattr(client, "access_token"))
-        self.assertEqual(
-            [item[2] for item in seen],
-            ["Bearer jwt-list", "Bearer jwt-create", "Bearer jwt-revoke"],
-        )
-
-
-    def test_owner_project_browser_grant_methods_are_product_authenticated(self):
-        seen = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            seen.append((request.method, request.url.path, request.headers.get("authorization", ""), str(request.url.query)))
-            if request.url.path == "/v3/product/project-capability-grants" and request.method == "GET":
-                self.assertIn("link_id=link-1", str(request.url.query))
-                return httpx.Response(200, json={
-                    "ok": True,
-                    "grants": [{
-                        "id": "grant-browser-1",
-                        "device_id": "dev-1",
-                        "mode": "project-browser-automation",
-                        "projects": ["demo"],
-                    }],
-                })
-            if request.url.path == "/v3/product/project-capability-grants" and request.method == "POST":
-                body = json.loads(request.content.decode("utf-8"))
-                self.assertEqual("link-1", body["link_id"])
-                self.assertEqual("project-browser-automation", body["mode"])
-                self.assertEqual(["demo"], body["projects"])
-                return httpx.Response(201, json={
-                    "ok": True,
-                    "mode": body["mode"],
-                    "replayed": False,
-                    "grant": {
-                        "id": "grant-browser-1",
-                        "device_id": "dev-1",
-                        "mode": body["mode"],
-                        "projects": body["projects"],
-                    },
-                })
-            if request.url.path == "/v3/product/project-capability-grants/grant-browser-1" and request.method == "DELETE":
-                return httpx.Response(200, json={
-                    "ok": True,
-                    "revoked": True,
-                    "grant": {"id": "grant-browser-1"},
-                })
-            return httpx.Response(404, json={"ok": False, "error": "not_found"})
-
-        client = ProductRemoteClient(
-            "https://control.example.test",
-            http=httpx.Client(transport=httpx.MockTransport(handler)),
-        )
-        grants = client.project_capability_grants("jwt-list", link_id="link-1")
-        self.assertEqual("grant-browser-1", grants[0]["id"])
-        created = client.create_project_capability_grant(
-            "jwt-create",
-            link_id="link-1",
-            mode="project-browser-automation",
-            projects=["demo"],
-            expires_at="2026-11-05T00:00:00+00:00",
-        )
-        self.assertEqual("grant-browser-1", created["grant"]["id"])
-        revoked = client.revoke_project_capability_grant("jwt-revoke", "grant-browser-1")
-        self.assertTrue(revoked["revoked"])
-        self.assertFalse(hasattr(client, "access_token"))
-        self.assertEqual(
-            [item[2] for item in seen],
-            ["Bearer jwt-list", "Bearer jwt-create", "Bearer jwt-revoke"],
-        )
+        with self.assertRaises(ValueError):
+            client.owner_remote_authority("jwt", device_id="not-a-uuid")
 
 
 if __name__ == "__main__":
