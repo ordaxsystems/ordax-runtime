@@ -24,6 +24,7 @@ FORBIDDEN = (
     "create_project_capability_grant",
     "revoke_project_capability_grant",
     "link_id",
+    "sign_in_with_password",
 )
 
 
@@ -43,6 +44,7 @@ class OwnerGrantLegacyRetirementTests(unittest.TestCase):
         self.assertIn("replace_owner_remote_grant_group", studio)
         self.assertIn("revoke_owner_remote_grant_group", studio)
         self.assertIn('"computer-observe"', studio)
+        self.assertIn("browser_oauth_session", studio)
 
 
 if __name__ == "__main__":
