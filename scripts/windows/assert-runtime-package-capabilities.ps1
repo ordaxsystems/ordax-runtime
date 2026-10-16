@@ -1,0 +1,46 @@
+# Canonical packaging proof for capabilities that must exist in the shipped private Runtime.
+# Keep this probe side-effect free: it verifies package identity/import wiring without
+# pairing a device, reading credentials, or contacting the control plane.
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)][string]$PrivatePython,
+    [Parameter(Mandatory = $true)][string]$RuntimeRoot,
+    [Parameter(Mandatory = $true)]
+    [ValidateSet("staged", "installed", "upgraded", "repaired")]
+    [string]$Phase
+)
+
+$ErrorActionPreference = "Stop"
+
+$privatePythonPath = (Resolve-Path -LiteralPath $PrivatePython -ErrorAction Stop).Path
+$runtimeRootPath = (Resolve-Path -LiteralPath $RuntimeRoot -ErrorAction Stop).Path
+$expectedModule = Join-Path $runtimeRootPath "Lib\site-packages\ordax_dev_agent\product_device_control_plane.py"
+
+if (-not (Test-Path -LiteralPath $expectedModule -PathType Leaf)) {
+    throw "Packaged Product device control-plane module is missing: $expectedModule"
+}
+
+$probe = @'
+from pathlib import Path
+import sys
+
+import ordax_dev_agent.product_device_control_plane as transport
+from ordax_dev_agent.control_plane import build_control_plane
+from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
+
+expected = Path(sys.argv[1]).resolve()
+actual = Path(transport.__file__).resolve()
+if actual != expected:
+    raise SystemExit(f"Product device control-plane resolved outside packaged Runtime: {actual} != {expected}")
+if ProductDeviceControlPlane is not transport.ProductDeviceControlPlane:
+    raise SystemExit("Product device control-plane class identity is inconsistent")
+if not callable(build_control_plane):
+    raise SystemExit("Canonical control-plane factory is not callable")
+'@
+
+& $privatePythonPath -I -c $probe $expectedModule
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged Product device control-plane import proof failed for phase '$Phase'"
+}
+
+Write-Output ("ORDAX_PRODUCT_DEVICE_CONTROL_PLANE_{0}=PASS" -f $Phase.ToUpperInvariant())
