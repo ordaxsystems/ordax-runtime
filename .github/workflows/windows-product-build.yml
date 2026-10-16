@@ -75,7 +75,7 @@ jobs:
       - name: Resolve canonical Studio source lock
         shell: powershell
         run: |
-          $lock = Get-Content .\\studio-source.lock.json -Raw | ConvertFrom-Json
+          $lock = Get-Content .\studio-source.lock.json -Raw | ConvertFrom-Json
           if ($lock.schema -ne "ordax.studio-source-lock/1") { throw "Studio source lock schema is invalid" }
           "ORDAX_STUDIO_SOURCE_COMMIT=$($lock.commit)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Checkout canonical ORDAX Studio app source
@@ -110,8 +110,8 @@ jobs:
       - name: Build ORDAX Studio product from canonical app source
         shell: powershell
         env:
-          ORDAX_STUDIO_APP_SOURCE: ${{ github.workspace }}\\.ordax\\apps\\apps\\studio
-        run: .\\scripts\\windows\\build-ordax-studio-product.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\\dist\\windows"
+          ORDAX_STUDIO_APP_SOURCE: ${{ github.workspace }}\.ordax\apps\apps\studio
+        run: .\scripts\windows\build-ordax-studio-product.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\dist\windows"
       - name: Verify build did not rewrite Runtime Studio sources
         shell: powershell
         run: |
@@ -123,9 +123,9 @@ jobs:
       - name: Write checksums
         shell: powershell
         run: |
-          Get-ChildItem .\\dist\\windows\\*.exe | ForEach-Object {
+          Get-ChildItem .\dist\windows\*.exe | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($_.Name)" | Add-Content .\\dist\\windows\\SHA256SUMS.txt -Encoding ascii
+            "$hash  $($_.Name)" | Add-Content .\dist\windows\SHA256SUMS.txt -Encoding ascii
           }
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
@@ -152,7 +152,7 @@ jobs:
           path: artifact
       - name: Install, migrate legacy launcher, upgrade running runtime, and verify health
         shell: powershell
-        run: .\\scripts\\windows\\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\\artifact"
+        run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -171,7 +171,7 @@ jobs:
           fetch-depth: 0
       - name: Verify tagged Runtime commit belongs to canonical main
         shell: powershell
-        run: .\\scripts\\windows\\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
+        run: .\scripts\windows\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
       - name: Checkout canonical Apps main for immutable Studio source ancestry
         uses: actions/checkout@v4
         with:
@@ -184,7 +184,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $sourceLock = Get-Content .\\studio-source.lock.json -Encoding UTF8 -Raw | ConvertFrom-Json
+          $sourceLock = Get-Content .\studio-source.lock.json -Encoding UTF8 -Raw | ConvertFrom-Json
           if ($sourceLock.repository -ne 'ordaxsystems/ordax-apps' -or
               [string]$sourceLock.commit -notmatch '^[0-9a-f]{40}$') {
             throw 'Studio release source is not a canonical immutable Apps commit'
@@ -202,21 +202,21 @@ jobs:
       - name: Verify release provenance and artifact digest
         shell: powershell
         run: |
-          .\\scripts\\windows\\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\\studio-source.lock.json" -ArtifactDirectory ".\\artifact"
+          .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Verify production Authenticode signature and authorized publisher
         shell: powershell
         env:
           ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
         run: |
-          $installer = Get-ChildItem .\\artifact\\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
+          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
           if (-not $installer) { throw "Validated ORDAX Studio installer is missing" }
-          .\\scripts\\windows\\assert-release-authenticode.ps1 -Path $installer.FullName -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS
+          .\scripts\windows\assert-release-authenticode.ps1 -Path $installer.FullName -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS
       - name: Install and upgrade from final signed release bytes
         shell: powershell
-        run: .\\scripts\\windows\\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\\artifact"
+        run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
       - name: Reverify final installer SHA-256 after signed installation smoke
         shell: powershell
-        run: .\\scripts\\windows\\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\\studio-source.lock.json" -ArtifactDirectory ".\\artifact"
+        run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Publish GitHub Release assets
         shell: powershell
         env:
@@ -224,8 +224,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $tag = $env:GITHUB_REF_NAME
-          $installer = Get-ChildItem .\\artifact\\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
-          $checksums = Get-Item .\\artifact\\SHA256SUMS.txt
+          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
+          $checksums = Get-Item .\artifact\SHA256SUMS.txt
           if (-not $installer) { throw "Validated ORDAX Studio installer is missing" }
           cmd /c "gh release view $tag --repo $env:GITHUB_REPOSITORY >nul 2>nul"
           $releaseExists = $LASTEXITCODE -eq 0
