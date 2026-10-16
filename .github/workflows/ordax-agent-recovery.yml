@@ -34,9 +34,27 @@ jobs:
           script: |
             const {data} = await github.rest.repos.getBranch({...context.repo, branch: 'main'});
             core.setOutput('current', context.ref === 'refs/heads/main' && data.commit.sha === context.sha);
-  recover-if-offline:
+
+  governance:
     needs: current-head
     if: needs.current-head.outputs.current == 'true' && (github.event_name == 'workflow_dispatch' || vars.ORDAX_RECOVERY_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout recovery governance SSOT without retained credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require protected canonical main before selecting the self-hosted recovery runner
+        shell: pwsh
+        run: >-
+          & ./scripts/windows/assert-github-main-governance.ps1
+          -ExpectedMainCommit "${{ github.sha }}"
+
+  recover-if-offline:
+    needs: [current-head, governance]
+    if: needs.current-head.outputs.current == 'true' && needs.governance.result == 'success' && (github.event_name == 'workflow_dispatch' || vars.ORDAX_RECOVERY_ENABLED == 'true')
     runs-on: [self-hosted, Windows, X64, ordax-recovery]
     timeout-minutes: 10
 
