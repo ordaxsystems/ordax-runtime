@@ -388,15 +388,20 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("TrustedSignerThumbprints", gate)
         self.assertIn("not an authorized ORDAX publisher", gate)
         self.assertIn("environment: windows-production-release", signing)
+        self.assertIn("environment: windows-production-release", signed_smoke)
+        self.assertIn("environment: windows-production-release", publish)
         self.assertIn("vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS", signing)
-        self.assertIn("trusted_signer_thumbprints", signing)
-        self.assertIn("needs.sign-release.outputs.trusted_signer_thumbprints", signed_smoke)
-        self.assertIn("needs.sign-release.outputs.trusted_signer_thumbprints", publish)
+        self.assertIn("vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS", signed_smoke)
+        self.assertIn("vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS", publish)
+        self.assertNotIn("needs.sign-release.outputs", signed_smoke)
+        self.assertNotIn("needs.sign-release.outputs", publish)
         self.assertIn("tests.test_release_signer_identity", workflow)
         self.assertLess(signing.index("Verify release provenance and unsigned artifact digest"),
                         signing.index("Sign final production installer"))
         self.assertLess(signed_smoke.index("Verify production Authenticode signature on clean hosted runner"),
                         signed_smoke.index("Install and upgrade from final signed release bytes"))
+        self.assertLess(publish.index("Verify tagged Runtime commit still belongs to protected canonical main before publication"),
+                        publish.index("Reverify production Authenticode signature before publication"))
         self.assertLess(publish.index("Reverify production Authenticode signature before publication"),
                         publish.index("Publish GitHub Release assets"))
 
@@ -404,6 +409,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
         script = (ROOT / "scripts" / "windows" / "assert-release-main-ancestry.ps1").read_text(encoding="utf-8")
         signing = workflow.split("  sign-release:", 1)[1].split("  signed-release-smoke:", 1)[0]
+        publish = workflow.split("  publish-release:", 1)[1]
         self.assertIn("fetch-depth: 0", signing)
         self.assertIn("assert-release-main-ancestry.ps1", signing)
         self.assertIn('-ExpectedCommit "$env:GITHUB_SHA"', signing)
@@ -415,6 +421,9 @@ class WindowsProductPackagingTests(unittest.TestCase):
             signing.index("Verify tagged Runtime commit belongs to canonical main"),
             signing.index("Sign final production installer"),
         )
+        self.assertIn("fetch-depth: 0", publish)
+        self.assertIn("assert-release-main-ancestry.ps1", publish)
+        self.assertIn("Verify tagged Runtime commit still belongs to protected canonical main before publication", publish)
         self.assertIn("refs/remotes/origin/main^{commit}", script)
         self.assertIn("refs/tags/$Tag^{commit}", script)
         self.assertIn("merge-base --is-ancestor", script)
