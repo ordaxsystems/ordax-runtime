@@ -38,7 +38,7 @@ if not callable(build_control_plane):
     raise SystemExit("Canonical control-plane factory is not callable")
 '@
 
-& $privatePythonPath -I -c $probe $expectedModule
+$probe | & $privatePythonPath -I - $expectedModule
 if ($LASTEXITCODE -ne 0) {
     throw "Packaged Product device control-plane import proof failed for phase '$Phase'"
 }
