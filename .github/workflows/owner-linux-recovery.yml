@@ -4,11 +4,15 @@ on:
   pull_request:
     paths:
       - "native/ordax-owner-recovery/**"
+      - "scripts/windows/assert-github-main-governance.ps1"
+      - "tests/test_release_main_ancestry.py"
       - ".github/workflows/owner-linux-recovery.yml"
   push:
     branches: [main]
     paths:
       - "native/ordax-owner-recovery/**"
+      - "scripts/windows/assert-github-main-governance.ps1"
+      - "tests/test_release_main_ancestry.py"
       - ".github/workflows/owner-linux-recovery.yml"
   workflow_dispatch:
 
@@ -58,8 +62,24 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  governance:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout publication governance SSOT without retained credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require protected canonical main before Owner prerelease publication
+        shell: pwsh
+        run: >-
+          & ./scripts/windows/assert-github-main-governance.ps1
+          -ExpectedMainCommit "${{ github.sha }}"
+
   publish:
-    needs: build
+    needs: [build, governance]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
