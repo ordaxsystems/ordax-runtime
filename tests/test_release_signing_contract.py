@@ -82,7 +82,11 @@ class ReleaseSigningContractTests(unittest.TestCase):
 
         self.assertIn("- release-governance", signing)
         self.assertIn("runs-on: [self-hosted, windows, x64, ordax-release-signing]", signing)
-        self.assertNotIn("assert-release-main-ancestry.ps1", signing)
+        self.assertIn("assert-release-main-ancestry.ps1", signing)
+        self.assertLess(
+            signing.index("Verify tagged Runtime commit belongs to canonical main"),
+            signing.index("Sign final production installer"),
+        )
 
     def test_hsm_runner_only_signs_and_hands_off_immutable_artifact(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
