@@ -66,6 +66,24 @@ class ReleaseSigningContractTests(unittest.TestCase):
         self.assertIn("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", windows_text)
         self.assertIn("ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756", windows_text)
 
+    def test_hsm_runner_is_selected_only_after_hosted_release_governance(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        governance = text.split("  release-governance:", 1)[1].split("  sign-release:", 1)[0]
+        signing = text.split("  sign-release:", 1)[1].split("  signed-release-smoke:", 1)[0]
+
+        self.assertIn("runs-on: windows-latest", governance)
+        self.assertIn("permissions:\n      contents: read", governance)
+        self.assertIn("persist-credentials: false", governance)
+        self.assertIn("fetch-depth: 0", governance)
+        self.assertIn("assert-release-main-ancestry.ps1", governance)
+        self.assertIn('-ExpectedCommit "$env:GITHUB_SHA"', governance)
+        self.assertNotIn("self-hosted", governance)
+        self.assertNotIn("contents: write", governance)
+
+        self.assertIn("- release-governance", signing)
+        self.assertIn("runs-on: [self-hosted, windows, x64, ordax-release-signing]", signing)
+        self.assertNotIn("assert-release-main-ancestry.ps1", signing)
+
     def test_hsm_runner_only_signs_and_hands_off_immutable_artifact(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         signing = text.split("  sign-release:", 1)[1].split("  signed-release-smoke:", 1)[0]
