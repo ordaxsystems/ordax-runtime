@@ -34,7 +34,7 @@ class ProductDeviceControlPlane:
     """
 
     uses_long_poll = False
-    runtime_kind = "desktop"
+    runtime_kind = "desktop-agent"
 
     def __init__(self, config: AgentConfig):
         if not config.product_mcp_url:
