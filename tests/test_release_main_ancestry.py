@@ -10,6 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts" / "windows" / "assert-release-main-ancestry.ps1"
+GOVERNANCE = ROOT / "scripts" / "windows" / "assert-github-main-governance.ps1"
+OWNER_WORKFLOW = ROOT / ".github" / "workflows" / "owner-linux-recovery.yml"
 
 
 @unittest.skipUnless(
@@ -101,17 +103,24 @@ class ReleaseMainAncestryTests(unittest.TestCase):
     def test_malformed_event_sha_is_rejected(self) -> None:
         self.assertNotEqual(self.verify(expected_commit="0" * 39).returncode, 0)
 
-    def test_github_release_requires_concrete_main_ruleset_policy(self) -> None:
+    def test_github_release_uses_single_concrete_main_governance_ssot(self) -> None:
         gate = GATE.read_text(encoding="utf-8")
-        self.assertIn("$env:GITHUB_REPOSITORY", gate)
-        self.assertIn('default_branch -ne "main"', gate)
-        self.assertIn('/branches/main', gate)
-        self.assertIn('[bool]$githubMain.protected', gate)
-        self.assertIn('Blocked public release: canonical main is not protected', gate)
-        self.assertIn('/rules/branches/main?per_page=100', gate)
-        self.assertIn('"deletion", "non_fast_forward", "pull_request", "required_status_checks"', gate)
-        self.assertIn('required_review_thread_resolution', gate)
-        self.assertIn('strict_required_status_checks_policy', gate)
+        governance = GOVERNANCE.read_text(encoding="utf-8")
+
+        self.assertIn('assert-github-main-governance.ps1', gate)
+        self.assertIn('-ExpectedMainCommit $mainCommit', gate)
+        self.assertNotIn('Invoke-RestMethod', gate)
+        self.assertNotIn('/rules/branches/main', gate)
+
+        self.assertIn("$env:GITHUB_REPOSITORY", governance)
+        self.assertIn('default_branch -ne "main"', governance)
+        self.assertIn('/branches/main', governance)
+        self.assertIn('[bool]$githubMain.protected', governance)
+        self.assertIn('Blocked publication: canonical main is not protected', governance)
+        self.assertIn('/rules/branches/main?per_page=100', governance)
+        self.assertIn('"deletion", "non_fast_forward", "pull_request", "required_status_checks"', governance)
+        self.assertIn('required_review_thread_resolution', governance)
+        self.assertIn('strict_required_status_checks_policy', governance)
         for context in (
             "packaging-contracts",
             "build-installer",
@@ -119,11 +128,29 @@ class ReleaseMainAncestryTests(unittest.TestCase):
             "product-mcp-minimum-sdk",
             "runtime-contracts",
         ):
-            self.assertIn(f'"{context}"', gate)
-        self.assertIn('ORDAX_RELEASE_REPOSITORY_GOVERNANCE=PASS', gate)
-        self.assertIn('ORDAX_RELEASE_MAIN_RULESET_POLICY=PASS', gate)
-        self.assertIn('Canonical GitHub main moved after the trusted release checkout was resolved', gate)
-        self.assertNotIn('continue-on-error', gate)
+            self.assertIn(f'"{context}"', governance)
+        self.assertIn('ORDAX_REPOSITORY_GOVERNANCE=PASS', governance)
+        self.assertIn('ORDAX_MAIN_RULESET_POLICY=PASS', governance)
+        self.assertIn('Canonical GitHub main moved after the trusted publication commit was resolved', governance)
+        self.assertNotIn('continue-on-error', governance)
+
+    def test_owner_prerelease_separates_read_only_governance_from_write_publication(self) -> None:
+        workflow = OWNER_WORKFLOW.read_text(encoding="utf-8")
+        governance = workflow.split("  governance:", 1)[1].split("  publish:", 1)[0]
+        publish = workflow.split("  publish:", 1)[1]
+
+        self.assertIn("contents: read", governance)
+        self.assertIn("assert-github-main-governance.ps1", governance)
+        self.assertIn('-ExpectedMainCommit "${{ github.sha }}"', governance)
+        self.assertNotIn("contents: write", governance)
+        self.assertNotIn("GH_TOKEN", governance)
+        self.assertNotIn("gh release create", governance)
+
+        self.assertIn("needs: [build, governance]", publish)
+        self.assertIn("contents: write", publish)
+        self.assertIn("gh release create", publish)
+        self.assertNotIn("assert-github-main-governance.ps1", publish)
+        self.assertNotIn("actions/checkout@", publish)
 
 
 if __name__ == "__main__":
