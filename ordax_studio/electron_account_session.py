@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.config import AgentConfig, DEFAULT_PRODUCT_MCP_URL
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 from .product_auth import (
     ProductAccountError,
@@ -41,6 +41,7 @@ from .public_auth_metadata import (
 _SCHEMA = "ordax.studio-product-account-session/1"
 _MAX_INPUT = 1000
 _DEFAULT_CONTROL_PLANE = "https://mcp.ordax.com.br"
+_PRODUCT_MCP_TRANSPORT_FALLBACK = "https://ordax-mcp.ordaxsystems.workers.dev"
 _CALLBACK_HOST = "127.0.0.1"
 _CALLBACK_PORT = 8766
 _CALLBACK_PATH = "/oauth/callback"
@@ -65,6 +66,52 @@ def _write_failure(stdout: Any, code: str) -> None:
         separators=(",", ":"), ensure_ascii=True,
     ) + "\n")
     stdout.flush()
+
+
+def _normalize_product_base(value: str | None) -> str:
+    raw = str(value or DEFAULT_PRODUCT_MCP_URL).strip().rstrip("/")
+    parsed = urlparse(raw)
+    loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    if not parsed.netloc or parsed.scheme not in ({"http", "https"} if loopback else {"https"}):
+        raise ProductAccountError(
+            "product_mcp_url_invalid",
+            "O endereço Product configurado neste computador é inválido.",
+        )
+    return raw
+
+
+def _validate_product_subject(
+    token: str,
+    primary: str,
+    remote_factory: Callable[[str], Any],
+) -> tuple[dict[str, Any], str]:
+    primary = _normalize_product_base(primary)
+    branded = DEFAULT_PRODUCT_MCP_URL.rstrip("/")
+    candidates = [primary]
+    if primary == branded and _PRODUCT_MCP_TRANSPORT_FALLBACK != primary:
+        candidates.append(_PRODUCT_MCP_TRANSPORT_FALLBACK)
+
+    for index, base in enumerate(candidates):
+        try:
+            with remote_factory(base) as remote:
+                subject = remote.session(token)
+            if not isinstance(subject, dict):
+                raise ValueError("invalid_product_subject")
+            return subject, base
+        except ProductRemoteError as error:
+            # The fallback is only a second network path to the same Product
+            # authority. HTTP/auth/business failures are authoritative and must
+            # never be bypassed by trying another host.
+            can_retry = (
+                error.error_code == "product_remote_transport_error"
+                and index + 1 < len(candidates)
+            )
+            if not can_retry:
+                raise
+    raise ProductRemoteError(
+        "product_remote_transport_error", 0,
+        "Product transport was unavailable on all canonical endpoints",
+    )
 
 
 def browser_oauth_session(
@@ -191,6 +238,7 @@ def authorize_account(
     config_factory: Callable[[], AgentConfig] = AgentConfig.from_env,
     connect_device: Callable[..., dict[str, Any]] = connect_existing_device,
     control_plane: str | None = None,
+    product_mcp_url: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(data, dict) or set(data) != {"schema", "operation"}:
         raise ValueError("invalid_request")
@@ -203,17 +251,24 @@ def authorize_account(
     token = session.access_token
     if not token or len(token) > 16000 or "\r" in token or "\n" in token:
         raise ValueError("invalid_session")
-    base = control_plane or os.environ.get("ORDAX_PRODUCT_CONTROL_PLANE_URL") or _DEFAULT_CONTROL_PLANE
 
     config = config_factory()
     if not isinstance(config, AgentConfig):
         raise ValueError("invalid_runtime_config")
     if control_plane:
-        config = replace(config, control_plane_url=base)
+        config = replace(config, control_plane_url=str(control_plane).rstrip("/"))
 
-    with remote_factory(base) as remote:
-        subject = remote.session(token)
-    if not isinstance(subject, dict) or not isinstance(subject.get("subject_id"), str):
+    # `control_plane` is retained as an internal compatibility/test seam. In
+    # production, Product identity uses the dedicated AgentConfig field.
+    primary_product = product_mcp_url or config.product_mcp_url
+    if control_plane and product_mcp_url is None:
+        primary_product = control_plane
+    subject, selected_product = _validate_product_subject(
+        token,
+        _normalize_product_base(primary_product),
+        remote_factory,
+    )
+    if not isinstance(subject.get("subject_id"), str):
         raise ValueError("invalid_product_subject")
     try:
         owner_id = str(uuid.UUID(subject["subject_id"]))
@@ -222,7 +277,11 @@ def authorize_account(
     except (ValueError, AttributeError):
         raise ValueError("invalid_product_subject") from None
 
-    device = connect_device(config, session=session)
+    device = connect_device(
+        replace(config, product_mcp_url=selected_product),
+        session=session,
+        product_mcp_url=selected_product,
+    )
     if not isinstance(device, dict) or not isinstance(device.get("device_id"), str):
         raise ValueError("invalid_device_enrollment")
     try:
