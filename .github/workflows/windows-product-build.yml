@@ -14,6 +14,7 @@ on:
       - "scripts/windows/build-ordax-studio-product.ps1"
       - "scripts/windows/ordax-studio-start.ps1"
       - "scripts/windows/ordax-upgrade-quiesce.ps1"
+      - "scripts/windows/assert-runtime-package-capabilities.ps1"
       - "scripts/windows/assert-release-authenticode.ps1"
       - "scripts/windows/assert-release-provenance.ps1"
       - "scripts/windows/assert-release-main-ancestry.ps1"
@@ -21,6 +22,7 @@ on:
       - "scripts/windows/test-ordax-studio-install-smoke.ps1"
       - "tests/test_release_provenance.py"
       - "tests/test_windows_product_packaging.py"
+      - "tests/test_windows_runtime_provenance_packaging_gate.py"
       - "tests/test_release_signer_identity.py"
       - "pyproject.toml"
       - "studio-source.lock.json"
@@ -42,7 +44,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
-        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance tests.test_release_signer_identity tests.test_release_main_ancestry tests.test_studio_host_transport_boundary tests.test_studio_presentation_handoff_contract
+        run: python -m unittest tests.test_windows_product_packaging tests.test_windows_runtime_provenance_packaging_gate tests.test_release_provenance tests.test_release_signer_identity tests.test_release_main_ancestry tests.test_studio_host_transport_boundary tests.test_studio_presentation_handoff_contract
       - name: Reject PowerShell syntax errors before expensive Windows packaging
         shell: pwsh
         run: |
@@ -50,6 +52,7 @@ jobs:
           foreach ($path in @(
             'scripts/windows/build-ordax-studio-product.ps1',
             'scripts/windows/test-ordax-studio-install-smoke.ps1',
+            'scripts/windows/assert-runtime-package-capabilities.ps1',
             'scripts/windows/assert-installed-studio-ux.ps1',
             'scripts/windows/verify-studio-presentation-handoff.ps1'
           )) {
@@ -72,7 +75,7 @@ jobs:
       - name: Resolve canonical Studio source lock
         shell: powershell
         run: |
-          $lock = Get-Content .\\studio-source.lock.json -Raw | ConvertFrom-Json
+          $lock = Get-Content .\studio-source.lock.json -Raw | ConvertFrom-Json
           if ($lock.schema -ne "ordax.studio-source-lock/1") { throw "Studio source lock schema is invalid" }
           "ORDAX_STUDIO_SOURCE_COMMIT=$($lock.commit)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Checkout canonical ORDAX Studio app source

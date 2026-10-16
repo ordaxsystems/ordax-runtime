@@ -266,6 +266,8 @@ Write-Output "ORDAX_STUDIO_PACKAGE_SOURCE_VERIFIED=$($sourceLock.commit)"
 Copy-Item (Join-Path $repoRoot "scripts") (Join-Path $stageRoot "scripts") -Recurse -Force
 
 $privatePython = Join-Path $runtimeRoot "python.exe"
+$runtimePackageAssertion = Join-Path $repoRoot "scripts\windows\assert-runtime-package-capabilities.ps1"
+& $runtimePackageAssertion -PrivatePython $privatePython -RuntimeRoot $runtimeRoot -Phase "staged"
 & $privatePython -c "import ordax_studio, ordax_dev_agent, ordax_device_agent; print('ORDAX_PRIVATE_RUNTIME_OK')"
 if ($LASTEXITCODE -ne 0) {
     throw "Private ORDAX Python runtime import smoke failed"
@@ -274,6 +276,12 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "Packaged App Intelligence registry validation failed"
 }
+
+$runtimeVersion = (& $privatePython -I -c "import importlib.metadata as metadata; print(metadata.version('ordax-runtime'))").Trim()
+if ($LASTEXITCODE -ne 0 -or $runtimeVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+    throw "Packaged ORDAX Runtime version is missing or invalid: $runtimeVersion"
+}
+Write-Output "ORDAX_RUNTIME_PACKAGE_VERSION=$runtimeVersion"
 
 $cl = Get-Command cl.exe -ErrorAction SilentlyContinue
 if (-not $cl) {
@@ -319,6 +327,7 @@ $manifest = [ordered]@{
         source = $versionSource
         canonical_version_asserted = [bool]$canonicalVersion
     }
+    runtime_version = $runtimeVersion
     architecture = "x64"
     python = $PythonVersion
     entrypoints = @{
