@@ -56,6 +56,19 @@ def _auth_config() -> tuple[str, str]:
     return origin, publishable_key
 
 
+def _product_mcp_base(config: AgentConfig, override: str | None = None) -> str:
+    raw = str(override or config.product_mcp_url or "").strip().rstrip("/")
+    parsed = urlparse(raw)
+    loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    allowed = {"http", "https"} if loopback else {"https"}
+    if not parsed.netloc or parsed.scheme not in allowed:
+        raise ProductAccountError(
+            "product_mcp_url_invalid",
+            "O endereço Product configurado neste computador é inválido.",
+        )
+    return raw
+
+
 def sign_in_with_password(
     email: str,
     password: str,
@@ -210,6 +223,7 @@ def _revalidate_existing_device(
     config: AgentConfig,
     session: ProductAuthSession,
     *,
+    product_mcp_url: str | None = None,
     http: httpx.Client | None = None,
 ) -> str:
     token_path = resolve_token_path(config.state_dir)
@@ -234,12 +248,13 @@ def _revalidate_existing_device(
         "channel": str(os.environ.get("ORDAX_PRODUCT_CHANNEL", "development")).strip().lower(),
         "token_sha256": hashlib.sha256(raw_device_token.encode()).hexdigest(),
     }
+    product_base = _product_mcp_base(config, product_mcp_url)
     owns_http = http is None
     client = http or httpx.Client(timeout=20, follow_redirects=False)
     try:
         try:
             response = client.post(
-                config.control_plane_url.rstrip("/") + "/v3/device/setup",
+                product_base + "/v3/device/setup",
                 headers={
                     "authorization": "Bearer " + session.access_token,
                     "accept": "application/json",
@@ -250,14 +265,14 @@ def _revalidate_existing_device(
         except httpx.HTTPError as error:
             raise ProductAccountError(
                 "device_enrollment_unavailable",
-                "A conta foi autenticada, mas o Control Plane está indisponível.",
+                "A conta foi autenticada, mas o serviço Product está indisponível.",
             ) from error
         try:
             result: Any = response.json()
         except ValueError as error:
             raise ProductAccountError(
                 "device_enrollment_invalid_response",
-                "O Control Plane retornou uma resposta inválida ao validar este computador.",
+                "O serviço Product retornou uma resposta inválida ao validar este computador.",
             ) from error
         if response.status_code >= 400 or not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("error") if isinstance(result, dict) else None
@@ -274,7 +289,7 @@ def _revalidate_existing_device(
         if not isinstance(device_id, str) or not device_id:
             raise ProductAccountError(
                 "device_enrollment_invalid",
-                "O Control Plane não retornou uma identidade válida para este computador.",
+                "O serviço Product não retornou uma identidade válida para este computador.",
             )
         return device_id
     finally:
@@ -289,12 +304,13 @@ def _setup_error_to_product(error: SetupError) -> ProductAccountError:
         "SETUP_ALREADY_RUNNING": "O registro deste computador já está em andamento. Tente novamente em instantes.",
         "SETTINGS_INVALID_PRESERVED": "A configuração local do ORDAX está inválida e foi preservada para recuperação.",
         "CONTROL_PLANE_URL_INVALID": "O endereço do Control Plane configurado neste computador é inválido.",
-        "CONTROL_PLANE_UNAVAILABLE": "A conta foi autenticada, mas o Control Plane está indisponível.",
-        "CONTROL_PLANE_RESPONSE_INVALID": "O Control Plane retornou uma resposta inválida ao registrar este computador.",
+        "PRODUCT_MCP_URL_INVALID": "O endereço Product configurado neste computador é inválido.",
+        "CONTROL_PLANE_UNAVAILABLE": "A conta foi autenticada, mas o serviço Product está indisponível.",
+        "CONTROL_PLANE_RESPONSE_INVALID": "O serviço Product retornou uma resposta inválida ao registrar este computador.",
         "MACHINE_BINDING_MISMATCH": "A identidade local pertence a outro computador e foi preservada.",
         "PRODUCT_ACCOUNT_LOGIN_REQUIRED": "A sessão da Conta OrdaX não está disponível para registrar este computador.",
         "USER_AUTHORIZATION_REQUIRED": "A Conta OrdaX não autorizou o registro deste computador.",
-        "PROTOCOL_MISMATCH": "O Control Plane respondeu com um protocolo incompatível.",
+        "PROTOCOL_MISMATCH": "O serviço Product respondeu com um protocolo incompatível.",
         "DEVICE_KIND_INVALID": "O tipo deste dispositivo está configurado de forma inválida.",
         "PRODUCT_CHANNEL_INVALID": "O canal Product deste dispositivo está configurado de forma inválida.",
     }
@@ -311,12 +327,14 @@ def connect_existing_device(
     *,
     auth_http: httpx.Client | None = None,
     session: ProductAuthSession | None = None,
+    product_mcp_url: str | None = None,
 ) -> dict[str, Any]:
     if not config.control_plane_url:
         raise ProductAccountError(
             "control_plane_unconfigured",
             "O ORDAX Runtime não possui Control Plane configurado.",
         )
+    product_base = _product_mcp_base(config, product_mcp_url)
     if session is None:
         if not isinstance(email, str) or not isinstance(password, str):
             raise ProductAccountError(
@@ -332,6 +350,7 @@ def connect_existing_device(
         enrollment = configure_device(
             config.state_dir,
             control_plane_url=config.control_plane_url,
+            product_mcp_url=product_base,
             product_access_token=active_session.access_token,
         )
     except SetupError as error:
@@ -341,11 +360,15 @@ def connect_existing_device(
     if not device_id:
         raise ProductAccountError(
             "device_enrollment_invalid",
-            "O Control Plane não retornou uma identidade válida para este computador.",
+            "O serviço Product não retornou uma identidade válida para este computador.",
         )
 
-    validated_config = replace(config, device_id=device_id)
-    validated_device_id = _revalidate_existing_device(validated_config, active_session)
+    validated_config = replace(config, device_id=device_id, product_mcp_url=product_base)
+    validated_device_id = _revalidate_existing_device(
+        validated_config,
+        active_session,
+        product_mcp_url=product_base,
+    )
     if validated_device_id != device_id:
         raise ProductAccountError(
             "device_identity_changed",

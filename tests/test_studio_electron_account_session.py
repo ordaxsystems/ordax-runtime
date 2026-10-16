@@ -20,21 +20,34 @@ def request(**changes):
     }
 
 
-def runtime_config(control_plane: str = "https://control.example.com") -> AgentConfig:
+def runtime_config(
+    control_plane: str = "https://control.example.com",
+    product_mcp: str = "https://product.example.com",
+) -> AgentConfig:
     root = Path("C:/ordax-test")
     return AgentConfig(
         agent_name="test-pc", poll_seconds=1.0, state_dir=root / "state",
         agent_repo_path=root, hordax_path=root / "hordax", bridge_path=root,
-        control_plane_url=control_plane,
+        control_plane_url=control_plane, product_mcp_url=product_mcp,
     )
 
 
+def backend_with(*, subject=None, error=None):
+    backend = Mock()
+    if error is not None:
+        backend.session.side_effect = error
+    else:
+        backend.session.return_value = subject or {
+            "subject_id": "11111111-1111-4111-8111-111111111111"
+        }
+    backend.__enter__ = Mock(return_value=backend)
+    backend.__exit__ = Mock(return_value=None)
+    return backend
+
+
 class CanonicalElectronAccountSessionTests(unittest.TestCase):
-    def test_browser_session_checks_product_subject_and_enrolls_device_without_mcp_grant(self):
-        backend = Mock()
-        backend.session.return_value = {"subject_id": "11111111-1111-4111-8111-111111111111"}
-        backend.__enter__ = Mock(return_value=backend)
-        backend.__exit__ = Mock(return_value=None)
+    def test_browser_session_uses_product_mcp_but_preserves_operational_control_plane(self):
+        backend = backend_with()
         factory = Mock(return_value=backend)
         authenticate = Mock(return_value=ProductAuthSession(
             access_token="private.jwt.signature", email="user@example.com"))
@@ -42,21 +55,25 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
             "device_id": "22222222-2222-4222-8222-222222222222",
             "enrolled_now": True,
         })
-        config = runtime_config()
+        config = runtime_config(
+            control_plane="https://commands.example.com",
+            product_mcp="https://product.example.com",
+        )
         result = account.authorize_account(
             request(), authenticate=authenticate, remote_factory=factory,
             config_factory=lambda: config, connect_device=connect,
-            control_plane="https://control.example.com",
         )
         authenticate.assert_called_once_with()
-        factory.assert_called_once_with("https://control.example.com")
+        factory.assert_called_once_with("https://product.example.com")
         backend.session.assert_called_once_with("private.jwt.signature")
         backend.targets.assert_not_called()
         connect.assert_called_once()
         args, kwargs = connect.call_args
-        self.assertEqual(args[0].control_plane_url, "https://control.example.com")
+        self.assertEqual("https://commands.example.com", args[0].control_plane_url)
+        self.assertEqual("https://product.example.com", args[0].product_mcp_url)
         self.assertEqual(len(args), 1)
         self.assertEqual(kwargs["session"].access_token, "private.jwt.signature")
+        self.assertEqual(kwargs["product_mcp_url"], "https://product.example.com")
         self.assertEqual(result["schema"], request()["schema"])
         self.assertIs(result["ok"], True)
         self.assertEqual(result["access_token"], "private.jwt.signature")
@@ -64,6 +81,69 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
         self.assertEqual(result["device_id"], "22222222-2222-4222-8222-222222222222")
         self.assertIs(result["enrolled_now"], True)
         self.assertNotIn("password", json.dumps(result).lower())
+
+    def test_branded_product_transport_failure_uses_fixed_read_only_transport_fallback(self):
+        primary = backend_with(error=ProductRemoteError(
+            "product_remote_transport_error", 0, "network unavailable"))
+        fallback = backend_with()
+        factory = Mock(side_effect=[primary, fallback])
+        connect = Mock(return_value={
+            "device_id": "22222222-2222-4222-8222-222222222222",
+            "enrolled_now": True,
+        })
+        config = runtime_config(product_mcp="https://mcp.ordax.com.br")
+        result = account.authorize_account(
+            request(), authenticate=lambda: ProductAuthSession("jwt", None),
+            remote_factory=factory, config_factory=lambda: config,
+            connect_device=connect,
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            [call.args[0] for call in factory.call_args_list],
+            [
+                "https://mcp.ordax.com.br",
+                "https://ordax-mcp.ordaxsystems.workers.dev",
+            ],
+        )
+        args, kwargs = connect.call_args
+        self.assertEqual("https://control.example.com", args[0].control_plane_url)
+        self.assertEqual(
+            "https://ordax-mcp.ordaxsystems.workers.dev",
+            args[0].product_mcp_url,
+        )
+        self.assertEqual(
+            "https://ordax-mcp.ordaxsystems.workers.dev",
+            kwargs["product_mcp_url"],
+        )
+
+    def test_product_auth_failure_never_uses_transport_fallback(self):
+        denied = backend_with(error=ProductRemoteError(
+            "product_auth_required", 401, "private auth detail"))
+        factory = Mock(return_value=denied)
+        connect = Mock()
+        with self.assertRaises(ProductRemoteError) as raised:
+            account.authorize_account(
+                request(), authenticate=lambda: ProductAuthSession("jwt", None),
+                remote_factory=factory,
+                config_factory=lambda: runtime_config(product_mcp="https://mcp.ordax.com.br"),
+                connect_device=connect,
+            )
+        self.assertEqual("product_auth_required", raised.exception.error_code)
+        factory.assert_called_once_with("https://mcp.ordax.com.br")
+        connect.assert_not_called()
+
+    def test_custom_product_transport_failure_never_jumps_to_ordax_fallback(self):
+        unavailable = backend_with(error=ProductRemoteError(
+            "product_remote_transport_error", 0, "custom endpoint offline"))
+        factory = Mock(return_value=unavailable)
+        with self.assertRaises(ProductRemoteError):
+            account.authorize_account(
+                request(), authenticate=lambda: ProductAuthSession("jwt", None),
+                remote_factory=factory,
+                config_factory=lambda: runtime_config(product_mcp="https://tenant.example.com"),
+                connect_device=Mock(),
+            )
+        factory.assert_called_once_with("https://tenant.example.com")
 
     def test_protocol_rejects_credentials_and_extra_fields_before_browser(self):
         authenticate = Mock()
@@ -81,14 +161,12 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
             auth = Mock(return_value=ProductAuthSession(token, "user@example.com"))
             with self.subTest(token=token[:8]), self.assertRaises(ValueError):
                 account.authorize_account(request(), authenticate=auth)
-        backend = Mock()
-        backend.session.return_value = {"other": "not verified"}
-        backend.__enter__ = Mock(return_value=backend)
-        backend.__exit__ = Mock(return_value=None)
+        backend = backend_with(subject={"other": "not verified"})
         with self.assertRaisesRegex(ValueError, "invalid_product_subject"):
             account.authorize_account(
                 request(), authenticate=lambda: ProductAuthSession("jwt", None),
                 remote_factory=lambda _: backend,
+                config_factory=lambda: runtime_config(),
             )
 
     def test_stdin_protocol_redacts_tokens_and_disallows_duplicate_keys(self):

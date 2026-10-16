@@ -34,6 +34,7 @@ def config_for(state: Path, *, device_id: str | None) -> AgentConfig:
         projects={},
         device_id=device_id,
         control_plane_url="https://control.example.test",
+        product_mcp_url="https://product.example.test",
     )
 
 
@@ -69,7 +70,7 @@ class StudioProductAccountTests(unittest.TestCase):
         self.assertEqual("product_auth_rejected", raised.exception.code)
         self.assertNotIn("provider internal detail", raised.exception.message)
 
-    def test_existing_product_device_is_resolved_and_owner_revalidated_without_pairing(self) -> None:
+    def test_existing_product_device_uses_product_endpoint_without_rewriting_control_plane(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state = Path(raw) / "state"
             state.mkdir()
@@ -87,15 +88,54 @@ class StudioProductAccountTests(unittest.TestCase):
             enrollment.assert_called_once_with(
                 state,
                 control_plane_url="https://control.example.test",
+                product_mcp_url="https://product.example.test",
                 product_access_token="browser.jwt",
             )
-            self.assertEqual(DEVICE_ID, validate.call_args.args[0].device_id)
+            validated = validate.call_args.args[0]
+            self.assertEqual("https://control.example.test", validated.control_plane_url)
+            self.assertEqual("https://product.example.test", validated.product_mcp_url)
             self.assertIs(validate.call_args.args[1], session)
+            self.assertEqual(
+                "https://product.example.test",
+                validate.call_args.kwargs["product_mcp_url"],
+            )
             self.assertFalse(result["enrolled_now"])
             self.assertEqual(DEVICE_ID, result["device_id"])
             self.assertEqual("owner@example.com", result["email"])
             self.assertNotIn("browser.jwt", repr(result))
             self.assertNotIn("link", result)
+
+    def test_explicit_product_endpoint_override_never_changes_operational_control_plane(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            state.mkdir()
+            config = config_for(state, device_id=None)
+            session = ProductAuthSession("jwt", None)
+            with (
+                patch("ordax_studio.product_auth.configure_device", return_value={
+                    "ok": True, "device_id": DEVICE_ID, "protocol": "cloudflare-v3",
+                }) as enrollment,
+                patch("ordax_studio.product_auth._revalidate_existing_device", return_value=DEVICE_ID) as validate,
+            ):
+                connect_existing_device(
+                    config,
+                    session=session,
+                    product_mcp_url="https://fallback.product.test",
+                )
+            enrollment.assert_called_once_with(
+                state,
+                control_plane_url="https://control.example.test",
+                product_mcp_url="https://fallback.product.test",
+                product_access_token="jwt",
+            )
+            self.assertEqual(
+                "https://control.example.test",
+                validate.call_args.args[0].control_plane_url,
+            )
+            self.assertEqual(
+                "https://fallback.product.test",
+                validate.call_args.args[0].product_mcp_url,
+            )
 
     def test_legacy_local_identity_can_migrate_to_product_identity(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -129,6 +169,7 @@ class StudioProductAccountTests(unittest.TestCase):
             enrollment.assert_called_once_with(
                 state,
                 control_plane_url="https://control.example.test",
+                product_mcp_url="https://product.example.test",
                 product_access_token="sensitive-jwt",
             )
             self.assertEqual(DEVICE_ID, validate.call_args.args[0].device_id)
