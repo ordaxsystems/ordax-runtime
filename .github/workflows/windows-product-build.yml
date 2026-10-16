@@ -210,6 +210,9 @@ jobs:
           if ($env:ORDAX_RELEASE_SIGNER_THUMBPRINTS -cnotmatch '^[0-9a-fA-F]{40}(,[0-9a-fA-F]{40}){0,3}$') {
             throw 'Trusted ORDAX publisher certificate thumbprints are missing or invalid'
           }
+      - name: Verify tagged Runtime commit belongs to canonical main
+        shell: powershell
+        run: .\scripts\windows\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
       - name: Checkout canonical Apps main for immutable Studio source ancestry
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
