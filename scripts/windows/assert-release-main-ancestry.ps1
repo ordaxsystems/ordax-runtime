@@ -1,6 +1,6 @@
-# Gate public releases on the actual canonical Runtime Git history, not merely
-# a version-looking tag. A tag created on an unrelated branch must fail closed.
-# On GitHub Actions, the same gate also requires canonical main to be protected.
+# Gate public releases on the actual canonical Runtime Git history and GitHub main
+# governance, not merely a version-looking tag. A tag created on an unrelated
+# branch or a release from an unprotected main must fail closed.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
 if ($Tag -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
     throw "Release Git tag must be an exact stable version"
@@ -48,17 +49,41 @@ if ($LASTEXITCODE -ne 0) {
     throw "Release Runtime commit is not an ancestor of canonical origin/main"
 }
 
-# GitHub Actions always exposes GITHUB_REPOSITORY. Local contract tests intentionally
-# omit it so Git-history behavior can be exercised without external network state.
+# GitHub Actions always exposes GITHUB_REPOSITORY. Local Git-history contract tests
+# intentionally remove it so they do not depend on live repository administration.
 if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_REPOSITORY)) {
-    $governanceGate = Join-Path $PSScriptRoot "assert-release-repository-governance.ps1"
-    if (-not (Test-Path -LiteralPath $governanceGate -PathType Leaf)) {
-        throw "Release repository governance gate is missing"
+    if ($env:GITHUB_REPOSITORY -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+        throw "GitHub repository identity is missing or invalid"
     }
-    & $governanceGate -Repository $env:GITHUB_REPOSITORY
-    if ($LASTEXITCODE -ne 0) {
-        throw "Release repository governance gate failed"
+
+    $headers = @{
+        Accept = "application/vnd.github+json"
+        "X-GitHub-Api-Version" = "2022-11-28"
+        "User-Agent" = "ORDAX-Release-Governance-Gate"
     }
+    $repositoryUri = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)"
+    $repositoryState = Invoke-RestMethod -Method Get -Uri $repositoryUri -Headers $headers
+    if (-not $repositoryState -or [string]$repositoryState.default_branch -ne "main") {
+        throw "Public ORDAX releases require main to be the canonical GitHub default branch"
+    }
+
+    $branchUri = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/branches/main"
+    $githubMain = Invoke-RestMethod -Method Get -Uri $branchUri -Headers $headers
+    if (-not $githubMain -or $githubMain.name -ne "main") {
+        throw "Canonical GitHub main branch metadata could not be verified"
+    }
+    if (-not [bool]$githubMain.protected) {
+        throw "Blocked public release: canonical main is not protected by GitHub branch protection or rulesets"
+    }
+    if (-not $githubMain.commit -or [string]$githubMain.commit.sha -notmatch '^[0-9a-f]{40}$') {
+        throw "Canonical GitHub main branch commit identity is invalid"
+    }
+    if ([string]$githubMain.commit.sha -cne $mainCommit) {
+        throw "Canonical GitHub main moved after the trusted release checkout was resolved"
+    }
+
+    Write-Host "ORDAX_RELEASE_REPOSITORY_GOVERNANCE=PASS"
+    Write-Host "ORDAX_RELEASE_GITHUB_MAIN_COMMIT=$($githubMain.commit.sha)"
 }
 
 Write-Host "ORDAX_RELEASE_MAIN_ANCESTRY_VALID"
