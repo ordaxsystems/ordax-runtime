@@ -34,6 +34,7 @@ class ProductDeviceControlPlane:
     """
 
     uses_long_poll = False
+    runtime_kind = "desktop"
 
     def __init__(self, config: AgentConfig):
         if not config.product_mcp_url:
@@ -52,6 +53,11 @@ class ProductDeviceControlPlane:
         self.base_http_url = str(config.product_mcp_url).rstrip("/")
         self.agent_instance_id = str(uuid.uuid4())
         self.boot_id = str(uuid.uuid4())
+        # Execution provenance is immutable for this process. Heartbeat already
+        # publishes the same package version; carrying it with every fenced
+        # action lets Platform persist the version that actually performed the
+        # effect rather than attributing old actions to current presence later.
+        self.agent_version = str(DEVICE_AGENT_VERSION)
         self._jobs: dict[str, AgentJob] = {}
         self._terminal_outbox = TerminalOutbox(
             config.state_dir, "product-http-v1", self.device_id,
@@ -80,8 +86,13 @@ class ProductDeviceControlPlane:
         del capabilities, agent_version, metadata
         return False
 
-    @staticmethod
-    def _execution_context(job: AgentJob) -> dict[str, Any]:
+    def _runtime_provenance(self) -> dict[str, str]:
+        return {
+            "runtime_kind": self.runtime_kind,
+            "agent_version": self.agent_version,
+        }
+
+    def _execution_context(self, job: AgentJob) -> dict[str, Any]:
         required = {
             "job_id": job.id,
             "effect_id": job.effect_id,
@@ -90,6 +101,7 @@ class ProductDeviceControlPlane:
             "execution_epoch": job.execution_epoch,
             "agent_instance_id": job.agent_instance_id,
             "boot_id": job.boot_id,
+            **self._runtime_provenance(),
         }
         if any(value in (None, "") for value in required.values()):
             raise RuntimeError("canonical Product job execution context is incomplete")
@@ -174,6 +186,7 @@ class ProductDeviceControlPlane:
             "agent_instance_id": self.agent_instance_id,
             "boot_id": self.boot_id,
             "lease_seconds": 120,
+            **self._runtime_provenance(),
         }, timeout=15.0)
         row = payload.get("job")
         if row is None:
@@ -223,7 +236,8 @@ class ProductDeviceControlPlane:
         return {
             key: report[key] for key in (
                 "job_id", "effect_id", "attempt_id", "lease_id", "execution_epoch",
-                "agent_instance_id", "boot_id", "report_id", "status", "error_code",
+                "agent_instance_id", "boot_id", "runtime_kind", "agent_version",
+                "report_id", "status", "error_code",
             ) if key in report
         } | {
             "result_canonical_b64": encoded,
