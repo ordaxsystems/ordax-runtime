@@ -56,86 +56,6 @@ def _auth_config() -> tuple[str, str]:
     return origin, publishable_key
 
 
-def _product_mcp_base(config: AgentConfig, override: str | None = None) -> str:
-    raw = str(override or config.product_mcp_url or "").strip().rstrip("/")
-    parsed = urlparse(raw)
-    loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
-    allowed = {"http", "https"} if loopback else {"https"}
-    if not parsed.netloc or parsed.scheme not in allowed:
-        raise ProductAccountError(
-            "product_mcp_url_invalid",
-            "O endereço Product configurado neste computador é inválido.",
-        )
-    return raw
-
-
-def sign_in_with_password(
-    email: str,
-    password: str,
-    *,
-    http: httpx.Client | None = None,
-) -> ProductAuthSession:
-    email = str(email or "").strip()
-    password = str(password or "")
-    if not email or len(email) > 320 or "@" not in email:
-        raise ProductAccountError("product_auth_email_invalid", "Informe um e-mail válido.")
-    if not password or len(password) > 2048:
-        raise ProductAccountError("product_auth_password_invalid", "Informe a senha da sua conta ORDAX.")
-
-    origin, publishable_key = _auth_config()
-    owns_http = http is None
-    client = http or httpx.Client(timeout=httpx.Timeout(20.0), follow_redirects=False)
-    try:
-        try:
-            response = client.post(
-                f"{origin}/auth/v1/token",
-                params={"grant_type": "password"},
-                headers={
-                    "apikey": publishable_key,
-                    "authorization": f"Bearer {publishable_key}",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                    "user-agent": "ORDAX-Dev/0.4",
-                },
-                json={"email": email, "password": password},
-            )
-        except httpx.HTTPError as error:
-            raise ProductAccountError(
-                "product_auth_unavailable",
-                "Não foi possível alcançar o serviço de autenticação ORDAX.",
-            ) from error
-        try:
-            body: Any = response.json()
-        except ValueError as error:
-            raise ProductAccountError(
-                "product_auth_invalid_response",
-                "O serviço de autenticação retornou uma resposta inválida.",
-            ) from error
-        if response.status_code >= 400:
-            raise ProductAccountError("product_auth_rejected", "E-mail ou senha não conferem.")
-        if not isinstance(body, dict):
-            raise ProductAccountError(
-                "product_auth_invalid_response",
-                "O serviço de autenticação retornou uma resposta inválida.",
-            )
-        access_token = body.get("access_token")
-        if not isinstance(access_token, str) or not access_token or len(access_token) > 16_000:
-            raise ProductAccountError(
-                "product_auth_token_missing",
-                "A autenticação não retornou uma sessão válida.",
-            )
-        user = body.get("user")
-        authenticated_email = (
-            user.get("email")
-            if isinstance(user, dict) and isinstance(user.get("email"), str)
-            else None
-        )
-        return ProductAuthSession(access_token=access_token, email=authenticated_email)
-    finally:
-        if owns_http:
-            client.close()
-
-
 def exchange_authorization_code(
     code: str,
     code_verifier: str,
@@ -322,35 +242,28 @@ def _setup_error_to_product(error: SetupError) -> ProductAccountError:
 
 def connect_existing_device(
     config: AgentConfig,
-    email: str | None = None,
-    password: str | None = None,
     *,
-    auth_http: httpx.Client | None = None,
-    session: ProductAuthSession | None = None,
+    session: ProductAuthSession,
     product_mcp_url: str | None = None,
 ) -> dict[str, Any]:
     if not config.product_mcp_url and not product_mcp_url:
         raise ProductAccountError(
             "product_mcp_unconfigured",
-            "O ORDAX Runtime n?o possui o endpoint Product configurado.",
+            "O ORDAX Runtime não possui o endpoint Product configurado.",
         )
     product_base = _product_mcp_base(config, product_mcp_url)
-    if session is None:
-        if not isinstance(email, str) or not isinstance(password, str):
-            raise ProductAccountError(
-                "product_auth_session_required",
-                "Abra a Conta ORDAX no navegador para continuar.",
-            )
-        active_session = sign_in_with_password(email, password, http=auth_http)
-    else:
-        active_session = session
+    if not isinstance(session, ProductAuthSession):
+        raise ProductAccountError(
+            "product_auth_session_required",
+            "Abra a Conta ORDAX no navegador para continuar.",
+        )
 
     previous_device_id = str(config.device_id or "")
     try:
         enrollment = configure_device(
             config.state_dir,
             product_mcp_url=product_base,
-            product_access_token=active_session.access_token,
+            product_access_token=session.access_token,
         )
     except SetupError as error:
         raise _setup_error_to_product(error) from error
@@ -365,7 +278,7 @@ def connect_existing_device(
     validated_config = replace(config, device_id=device_id, product_mcp_url=product_base)
     validated_device_id = _revalidate_existing_device(
         validated_config,
-        active_session,
+        session,
         product_mcp_url=product_base,
     )
     if validated_device_id != device_id:
@@ -375,7 +288,7 @@ def connect_existing_device(
         )
 
     return {
-        "email": active_session.email or (email.strip() if isinstance(email, str) else None),
+        "email": session.email,
         "device_id": device_id,
         "enrolled_now": previous_device_id != device_id,
     }
