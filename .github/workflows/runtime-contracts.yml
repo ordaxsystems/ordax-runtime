@@ -48,12 +48,14 @@ jobs:
       - name: Compile Runtime packages
         run: python -m compileall -q ordax_dev_agent ordax_device_agent ordax_studio mcp_blender_unity
 
-      - name: Validate managed runtime and production updater PowerShell syntax
+      - name: Validate managed runtime, updater, and publication governance PowerShell syntax
         shell: pwsh
         run: |
           foreach ($path in @(
             'scripts/windows/ordax-device-agent-setup.ps1',
-            'scripts/windows/apply-ordax-production-update.ps1'
+            'scripts/windows/apply-ordax-production-update.ps1',
+            'scripts/windows/assert-release-main-ancestry.ps1',
+            'scripts/windows/assert-github-main-governance.ps1'
           )) {
             $tokens = $null
             $errors = $null
@@ -67,9 +69,10 @@ jobs:
               exit 1
             }
           }
-      - name: Run Runtime ownership and Computer Control contracts
+      - name: Run Runtime ownership, release governance, and Computer Control contracts
         run: >-
           python -m unittest
+          tests.test_release_main_ancestry
           tests.test_product_gateway
           tests.test_application_intelligence_actions
           tests.test_product_mcp
