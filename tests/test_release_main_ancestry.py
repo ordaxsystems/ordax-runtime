@@ -101,14 +101,27 @@ class ReleaseMainAncestryTests(unittest.TestCase):
     def test_malformed_event_sha_is_rejected(self) -> None:
         self.assertNotEqual(self.verify(expected_commit="0" * 39).returncode, 0)
 
-    def test_github_release_requires_protected_canonical_main(self) -> None:
+    def test_github_release_requires_concrete_main_ruleset_policy(self) -> None:
         gate = GATE.read_text(encoding="utf-8")
         self.assertIn("$env:GITHUB_REPOSITORY", gate)
         self.assertIn('default_branch -ne "main"', gate)
         self.assertIn('/branches/main', gate)
         self.assertIn('[bool]$githubMain.protected', gate)
         self.assertIn('Blocked public release: canonical main is not protected', gate)
+        self.assertIn('/rules/branches/main?per_page=100', gate)
+        self.assertIn('"deletion", "non_fast_forward", "pull_request", "required_status_checks"', gate)
+        self.assertIn('required_review_thread_resolution', gate)
+        self.assertIn('strict_required_status_checks_policy', gate)
+        for context in (
+            "packaging-contracts",
+            "build-installer",
+            "install-smoke",
+            "product-mcp-minimum-sdk",
+            "runtime-contracts",
+        ):
+            self.assertIn(f'"{context}"', gate)
         self.assertIn('ORDAX_RELEASE_REPOSITORY_GOVERNANCE=PASS', gate)
+        self.assertIn('ORDAX_RELEASE_MAIN_RULESET_POLICY=PASS', gate)
         self.assertIn('Canonical GitHub main moved after the trusted release checkout was resolved', gate)
         self.assertNotIn('continue-on-error', gate)
 
