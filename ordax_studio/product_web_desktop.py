@@ -67,13 +67,13 @@ def _restart_packaged_runtime_after_enrollment() -> bool:
 
 
 _OWNER_REMOTE_COMPUTER_GRANT_MODES = frozenset({
+    "computer-observe",
     "full-computer-control",
     "interactive-computer-control",
     "computer-filesystem",
     "computer-clipboard",
     "computer-process-control",
 })
-
 _OWNER_PROJECT_BROWSER_GRANT_MODE = "project-browser-automation"
 _OWNER_APP_INTELLIGENCE_GRANT_MODE = "app-intelligence-read"
 
@@ -81,9 +81,8 @@ _OWNER_APP_INTELLIGENCE_GRANT_MODE = "app-intelligence-read"
 class StudioProductApi(StudioApi):
     """Windows product surface layered over the canonical Studio API.
 
-    The base Studio API remains provider-neutral. Account authentication,
-    device ownership and interactive desktop lifecycle operations live here so
-    development hosts do not need to own or store Product credentials.
+    The base Studio API remains provider-neutral. Product owner grants are
+    managed only through the canonical MCP/PostgreSQL grant-group authority.
     """
 
     def __init__(self, agent: ActionRegistry | None = None):
@@ -118,8 +117,67 @@ class StudioProductApi(StudioApi):
         return {
             "ok": False,
             "code": error.error_code,
-            "summary": "O Control Plane recusou a operação de autorização remota.",
+            "summary": "A autoridade Product recusou a operação de autorização remota.",
         }
+
+    @staticmethod
+    def _grant_expiry(expires_days: int, code: str) -> str:
+        try:
+            days = int(expires_days)
+        except (TypeError, ValueError) as error:
+            raise ProductAccountError(code, "A validade deve ser informada em dias inteiros.") from error
+        if not 1 <= days <= 365:
+            raise ProductAccountError(code, "A validade deve ficar entre 1 e 365 dias.")
+        return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+
+    @staticmethod
+    def _select_owner_mcp_client(
+        authority: dict[str, Any],
+        requested_client_id: str | None,
+    ) -> dict[str, Any]:
+        clients = [item for item in authority.get("clients", []) if isinstance(item, dict)]
+        requested = str(requested_client_id or "").strip().lower()
+        if requested:
+            clients = [item for item in clients if str(item.get("client_id") or "").lower() == requested]
+        if not clients:
+            raise ProductAccountError(
+                "product_mcp_client_unavailable",
+                "Nenhum cliente MCP com consentimento ativo corresponde a esta conta.",
+            )
+        if len(clients) != 1:
+            raise ProductAccountError(
+                "product_mcp_client_required",
+                "Há mais de um cliente MCP autorizado; selecione explicitamente o cliente correto.",
+            )
+        return clients[0]
+
+    @staticmethod
+    def _profile_groups(
+        authority: dict[str, Any],
+        profiles: set[str] | frozenset[str],
+    ) -> list[dict[str, Any]]:
+        return [
+            dict(item) for item in authority.get("grant_groups", [])
+            if isinstance(item, dict) and str(item.get("profile_key") or "") in profiles
+        ]
+
+    @staticmethod
+    def _grant_for_revoke(
+        authority: dict[str, Any],
+        grant_group_id: str,
+        profiles: set[str] | frozenset[str],
+    ) -> dict[str, Any]:
+        group_id = str(grant_group_id or "").strip().lower()
+        matches = [
+            group for group in StudioProductApi._profile_groups(authority, profiles)
+            if str(group.get("grant_group_id") or "").lower() == group_id
+        ]
+        if len(matches) != 1:
+            raise ProductAccountError(
+                "owner_grant_group_not_found",
+                "A autorização informada não pertence ao perfil e dispositivo atuais.",
+            )
+        return matches[0]
 
     def connect_product_account(self, email: str, password: str) -> dict[str, Any]:
         try:
@@ -131,11 +189,7 @@ class StudioProductApi(StudioApi):
                 session=session,
             )
         except ProductAccountError as error:
-            return {
-                "ok": False,
-                "code": error.code,
-                "summary": error.message,
-            }
+            return {"ok": False, "code": error.code, "summary": error.message}
         except Exception as error:
             return {
                 "ok": False,
@@ -147,24 +201,18 @@ class StudioProductApi(StudioApi):
         if data.get("enrolled_now"):
             data["runtime_restarted"] = _restart_packaged_runtime_after_enrollment()
             data["runtime_restart_required"] = not data["runtime_restarted"]
-        return {
-            "ok": True,
-            "summary": "Conta ORDAX conectada a este computador",
-            "data": data,
-        }
+        return {"ok": True, "summary": "Conta ORDAX conectada a este computador", "data": data}
 
     def assistant_catalog(self) -> dict[str, Any]:
         result = super().assistant_catalog()
         if not result.get("ok"):
             return result
         data = dict(result.get("data") or {})
-        accounts = [
-            {
-                "id": "ordax",
-                "label": "Conta ORDAX",
-                "connected": isinstance(getattr(self, "_product_session", None), ProductAuthSession),
-            }
-        ]
+        accounts = [{
+            "id": "ordax",
+            "label": "Conta ORDAX",
+            "connected": isinstance(getattr(self, "_product_session", None), ProductAuthSession),
+        }]
         accounts.extend(list(data.get("accounts") or []))
         data["accounts"] = accounts
         result["data"] = data
@@ -178,27 +226,24 @@ class StudioProductApi(StudioApi):
         )
         return (account_id, "openai", "gpt-4o")
 
+    def _owner_authority(self) -> tuple[ProductAuthSession, str, dict[str, Any]]:
+        session = self._product_session_required()
+        device_id = self._current_product_device_id()
+        with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
+            authority = remote.owner_remote_authority(session.access_token, device_id=device_id)
+        return session, device_id, authority
+
     def remote_computer_grants(self) -> dict[str, Any]:
         try:
-            session = self._product_session_required()
-            device_id = self._current_product_device_id()
-            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
-                links = [
-                    link for link in remote.device_links(session.access_token)
-                    if str(link.get("device_id") or "") == device_id
-                ]
-                grants = [
-                    grant for grant in remote.device_computer_grants(session.access_token)
-                    if str(grant.get("device_id") or "") == device_id
-                ]
+            _session, device_id, authority = self._owner_authority()
+            grants = self._profile_groups(authority, _OWNER_REMOTE_COMPUTER_GRANT_MODES)
         except ProductAccountError as error:
             return {"ok": False, "code": error.code, "summary": error.message}
         except ProductRemoteError as error:
             return self._safe_product_error(error)
         except (ValueError, httpx.HTTPError) as error:
             return {
-                "ok": False,
-                "code": "product_remote_unavailable",
+                "ok": False, "code": "product_remote_unavailable",
                 "summary": f"{type(error).__name__}: autorização remota indisponível",
             }
         return {
@@ -206,8 +251,8 @@ class StudioProductApi(StudioApi):
             "summary": "Autorizações remotas carregadas",
             "data": {
                 "device_id": device_id,
-                "links": links,
-                "grants": grants,
+                "clients": authority["clients"],
+                "grant_groups": grants,
                 "available_modes": sorted(_OWNER_REMOTE_COMPUTER_GRANT_MODES),
             },
         }
@@ -215,7 +260,7 @@ class StudioProductApi(StudioApi):
     def authorize_remote_computer_grant(
         self,
         mode: str,
-        link_id: str | None = None,
+        client_id: str | None = None,
         expires_days: int = 30,
     ) -> dict[str, Any]:
         normalized_mode = str(mode or "").strip()
@@ -241,46 +286,18 @@ class StudioProductApi(StudioApi):
                     "summary": "Ative e salve Full Access local antes de autorizar acesso total remoto.",
                 }
         try:
-            days = int(expires_days)
-        except (TypeError, ValueError):
-            return {
-                "ok": False,
-                "code": "owner_device_grant_expiry_invalid",
-                "summary": "A validade deve ser informada em dias inteiros.",
-            }
-        if not 1 <= days <= 365:
-            return {
-                "ok": False,
-                "code": "owner_device_grant_expiry_invalid",
-                "summary": "A validade deve ficar entre 1 e 365 dias.",
-            }
-
-        try:
+            expires_at = self._grant_expiry(expires_days, "owner_device_grant_expiry_invalid")
             session = self._product_session_required()
             device_id = self._current_product_device_id()
             with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
-                links = [
-                    link for link in remote.device_links(session.access_token)
-                    if str(link.get("device_id") or "") == device_id
-                ]
-                requested_link = str(link_id or "").strip()
-                if requested_link:
-                    links = [link for link in links if str(link.get("link_id") or "") == requested_link]
-                if len(links) != 1:
-                    code = "product_device_link_not_found" if not links else "product_device_link_ambiguous"
-                    summary = (
-                        "Nenhum vínculo ativo desta conta corresponde a este computador."
-                        if not links else
-                        "Há mais de um vínculo ativo para este computador; selecione o vínculo explicitamente."
-                    )
-                    return {"ok": False, "code": code, "summary": summary}
-                selected_link = str(links[0].get("link_id") or "")
-                expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-                created = remote.create_device_computer_grant(
+                authority = remote.owner_remote_authority(session.access_token, device_id=device_id)
+                client = self._select_owner_mcp_client(authority, client_id)
+                created = remote.replace_owner_remote_grant_group(
                     session.access_token,
-                    link_id=selected_link,
-                    mode=normalized_mode,
-                    expires_at=expires_at,
+                    client_id=str(client.get("client_id") or ""),
+                    device_id=device_id,
+                    profile_key=normalized_mode,
+                    valid_until=expires_at,
                 )
         except ProductAccountError as error:
             return {"ok": False, "code": error.code, "summary": error.message}
@@ -288,65 +305,47 @@ class StudioProductApi(StudioApi):
             return self._safe_product_error(error)
         except (ValueError, httpx.HTTPError) as error:
             return {
-                "ok": False,
-                "code": "product_remote_unavailable",
+                "ok": False, "code": "product_remote_unavailable",
                 "summary": f"{type(error).__name__}: autorização remota indisponível",
             }
-        return {
-            "ok": True,
-            "summary": "Perfil remoto autorizado",
-            "data": created,
-        }
+        return {"ok": True, "summary": "Perfil remoto autorizado", "data": created}
 
-    def revoke_remote_computer_grant(self, grant_id: str) -> dict[str, Any]:
-        grant_id = str(grant_id or "").strip()
-        if not grant_id or len(grant_id) > 128:
-            return {
-                "ok": False,
-                "code": "owner_device_grant_id_invalid",
-                "summary": "Identificador de autorização inválido.",
-            }
-        try:
-            session = self._product_session_required()
-            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
-                result = remote.revoke_device_computer_grant(session.access_token, grant_id)
-        except ProductAccountError as error:
-            return {"ok": False, "code": error.code, "summary": error.message}
-        except ProductRemoteError as error:
-            return self._safe_product_error(error)
-        except (ValueError, httpx.HTTPError) as error:
-            return {
-                "ok": False,
-                "code": "product_remote_unavailable",
-                "summary": f"{type(error).__name__}: autorização remota indisponível",
-            }
-        return {
-            "ok": True,
-            "summary": "Autorização remota revogada",
-            "data": result,
-        }
-
-    def remote_app_intelligence_grants(self) -> dict[str, Any]:
+    def revoke_remote_computer_grant(self, grant_group_id: str) -> dict[str, Any]:
         try:
             session = self._product_session_required()
             device_id = self._current_product_device_id()
             with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
-                links = [
-                    link for link in remote.device_links(session.access_token)
-                    if str(link.get("device_id") or "") == device_id
-                ]
-                grants = [
-                    grant for grant in remote.device_intelligence_grants(session.access_token)
-                    if str(grant.get("device_id") or "") == device_id
-                ]
+                authority = remote.owner_remote_authority(session.access_token, device_id=device_id)
+                group = self._grant_for_revoke(
+                    authority, grant_group_id, _OWNER_REMOTE_COMPUTER_GRANT_MODES,
+                )
+                result = remote.revoke_owner_remote_grant_group(
+                    session.access_token,
+                    client_id=str(group.get("client_id") or ""),
+                    grant_group_id=str(group.get("grant_group_id") or ""),
+                )
         except ProductAccountError as error:
             return {"ok": False, "code": error.code, "summary": error.message}
         except ProductRemoteError as error:
             return self._safe_product_error(error)
         except (ValueError, httpx.HTTPError) as error:
             return {
-                "ok": False,
-                "code": "product_remote_unavailable",
+                "ok": False, "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autorização remota indisponível",
+            }
+        return {"ok": True, "summary": "Autorização remota revogada", "data": result}
+
+    def remote_app_intelligence_grants(self) -> dict[str, Any]:
+        try:
+            _session, device_id, authority = self._owner_authority()
+            grants = self._profile_groups(authority, frozenset({_OWNER_APP_INTELLIGENCE_GRANT_MODE}))
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
+            return {
+                "ok": False, "code": "product_remote_unavailable",
                 "summary": f"{type(error).__name__}: autorização de inteligência dos apps indisponível",
             }
         return {
@@ -354,60 +353,55 @@ class StudioProductApi(StudioApi):
             "summary": "Autorizações de inteligência dos apps carregadas",
             "data": {
                 "device_id": device_id,
-                "links": links,
-                "grants": grants,
+                "clients": authority["clients"],
+                "grant_groups": grants,
                 "available_modes": [_OWNER_APP_INTELLIGENCE_GRANT_MODE],
             },
         }
 
     def authorize_remote_app_intelligence_grant(
         self,
-        link_id: str | None = None,
+        client_id: str | None = None,
         expires_days: int = 30,
     ) -> dict[str, Any]:
         try:
-            days = int(expires_days)
-        except (TypeError, ValueError):
+            expires_at = self._grant_expiry(expires_days, "owner_intelligence_grant_expiry_invalid")
+            session = self._product_session_required()
+            device_id = self._current_product_device_id()
+            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
+                authority = remote.owner_remote_authority(session.access_token, device_id=device_id)
+                client = self._select_owner_mcp_client(authority, client_id)
+                created = remote.replace_owner_remote_grant_group(
+                    session.access_token,
+                    client_id=str(client.get("client_id") or ""),
+                    device_id=device_id,
+                    profile_key=_OWNER_APP_INTELLIGENCE_GRANT_MODE,
+                    valid_until=expires_at,
+                )
+        except ProductAccountError as error:
+            return {"ok": False, "code": error.code, "summary": error.message}
+        except ProductRemoteError as error:
+            return self._safe_product_error(error)
+        except (ValueError, httpx.HTTPError) as error:
             return {
-                "ok": False,
-                "code": "owner_intelligence_grant_expiry_invalid",
-                "summary": "A validade deve ser informada em dias inteiros.",
+                "ok": False, "code": "product_remote_unavailable",
+                "summary": f"{type(error).__name__}: autorização de inteligência dos apps indisponível",
             }
-        if not 1 <= days <= 365:
-            return {
-                "ok": False,
-                "code": "owner_intelligence_grant_expiry_invalid",
-                "summary": "A validade deve ficar entre 1 e 365 dias.",
-            }
+        return {"ok": True, "summary": "Leitura de inteligência dos apps autorizada", "data": created}
 
+    def revoke_remote_app_intelligence_grant(self, grant_group_id: str) -> dict[str, Any]:
         try:
             session = self._product_session_required()
             device_id = self._current_product_device_id()
             with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
-                links = [
-                    link for link in remote.device_links(session.access_token)
-                    if str(link.get("device_id") or "") == device_id
-                ]
-                requested_link = str(link_id or "").strip()
-                if requested_link:
-                    links = [
-                        link for link in links
-                        if str(link.get("link_id") or "") == requested_link
-                    ]
-                if len(links) != 1:
-                    code = "product_device_link_not_found" if not links else "product_device_link_ambiguous"
-                    summary = (
-                        "Nenhum vínculo ativo desta conta corresponde a este computador."
-                        if not links else
-                        "Há mais de um vínculo ativo para este computador; selecione o vínculo explicitamente."
-                    )
-                    return {"ok": False, "code": code, "summary": summary}
-                expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-                created = remote.create_device_intelligence_grant(
+                authority = remote.owner_remote_authority(session.access_token, device_id=device_id)
+                group = self._grant_for_revoke(
+                    authority, grant_group_id, frozenset({_OWNER_APP_INTELLIGENCE_GRANT_MODE}),
+                )
+                result = remote.revoke_owner_remote_grant_group(
                     session.access_token,
-                    link_id=str(links[0].get("link_id") or ""),
-                    mode=_OWNER_APP_INTELLIGENCE_GRANT_MODE,
-                    expires_at=expires_at,
+                    client_id=str(group.get("client_id") or ""),
+                    grant_group_id=str(group.get("grant_group_id") or ""),
                 )
         except ProductAccountError as error:
             return {"ok": False, "code": error.code, "summary": error.message}
@@ -415,76 +409,22 @@ class StudioProductApi(StudioApi):
             return self._safe_product_error(error)
         except (ValueError, httpx.HTTPError) as error:
             return {
-                "ok": False,
-                "code": "product_remote_unavailable",
+                "ok": False, "code": "product_remote_unavailable",
                 "summary": f"{type(error).__name__}: autorização de inteligência dos apps indisponível",
             }
-        return {
-            "ok": True,
-            "summary": "Leitura de inteligência dos apps autorizada",
-            "data": created,
-        }
-
-    def revoke_remote_app_intelligence_grant(self, grant_id: str) -> dict[str, Any]:
-        grant_id = str(grant_id or "").strip()
-        if not grant_id or len(grant_id) > 128:
-            return {
-                "ok": False,
-                "code": "owner_intelligence_grant_id_invalid",
-                "summary": "Identificador de autorização inválido.",
-            }
-        try:
-            session = self._product_session_required()
-            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
-                result = remote.revoke_device_intelligence_grant(
-                    session.access_token,
-                    grant_id,
-                )
-        except ProductAccountError as error:
-            return {"ok": False, "code": error.code, "summary": error.message}
-        except ProductRemoteError as error:
-            return self._safe_product_error(error)
-        except (ValueError, httpx.HTTPError) as error:
-            return {
-                "ok": False,
-                "code": "product_remote_unavailable",
-                "summary": f"{type(error).__name__}: autorização de inteligência dos apps indisponível",
-            }
-        return {
-            "ok": True,
-            "summary": "Autorização de inteligência dos apps revogada",
-            "data": result,
-        }
+        return {"ok": True, "summary": "Autorização de inteligência dos apps revogada", "data": result}
 
     def remote_project_browser_grants(self) -> dict[str, Any]:
         try:
-            session = self._product_session_required()
-            device_id = self._current_product_device_id()
-            project = str(self.project or "").strip()
-            if not project:
-                return {
-                    "ok": False,
-                    "code": "project_required",
-                    "summary": "Selecione um projeto antes de gerenciar o navegador remoto.",
-                }
-            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
-                links = [
-                    link for link in remote.device_links(session.access_token)
-                    if str(link.get("device_id") or "") == device_id
-                ]
-                grants = [
-                    grant for grant in remote.project_capability_grants(session.access_token)
-                    if str(grant.get("device_id") or "") == device_id
-                    and project in (grant.get("projects") or [])
-                ]
+            _session, device_id, authority = self._owner_authority()
+            grants = self._profile_groups(authority, frozenset({_OWNER_PROJECT_BROWSER_GRANT_MODE}))
         except ProductAccountError as error:
             return {"ok": False, "code": error.code, "summary": error.message}
         except ProductRemoteError as error:
             return self._safe_product_error(error)
         except (ValueError, httpx.HTTPError) as error:
             return {
-                "ok": False,
-                "code": "product_remote_unavailable",
+                "ok": False, "code": "product_remote_unavailable",
                 "summary": f"{type(error).__name__}: autorização do navegador indisponível",
             }
         return {
@@ -492,68 +432,42 @@ class StudioProductApi(StudioApi):
             "summary": "Autorizações do navegador gerenciado carregadas",
             "data": {
                 "device_id": device_id,
-                "project": project,
-                "links": links,
-                "grants": grants,
+                "project": str(self.project or "").strip(),
+                "clients": authority["clients"],
+                "grant_groups": grants,
                 "available_modes": [_OWNER_PROJECT_BROWSER_GRANT_MODE],
+                "requires_canonical_project_scope": True,
             },
         }
 
     def authorize_remote_project_browser_grant(
         self,
-        link_id: str | None = None,
+        client_id: str | None = None,
+        space_id: str | None = None,
+        project_id: str | None = None,
         expires_days: int = 30,
     ) -> dict[str, Any]:
-        project = str(self.project or "").strip()
-        if not project:
+        if not str(space_id or "").strip() or not str(project_id or "").strip():
             return {
                 "ok": False,
-                "code": "project_required",
-                "summary": "Selecione um projeto antes de autorizar o navegador remoto.",
+                "code": "canonical_project_scope_required",
+                "summary": "A autorização do navegador exige Space e projeto canônicos; o slug local não é autoridade.",
             }
         try:
-            days = int(expires_days)
-        except (TypeError, ValueError):
-            return {
-                "ok": False,
-                "code": "owner_project_grant_expiry_invalid",
-                "summary": "A validade deve ser informada em dias inteiros.",
-            }
-        if not 1 <= days <= 365:
-            return {
-                "ok": False,
-                "code": "owner_project_grant_expiry_invalid",
-                "summary": "A validade deve ficar entre 1 e 365 dias.",
-            }
-        try:
+            expires_at = self._grant_expiry(expires_days, "owner_project_grant_expiry_invalid")
             session = self._product_session_required()
             device_id = self._current_product_device_id()
             with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
-                links = [
-                    link for link in remote.device_links(session.access_token)
-                    if str(link.get("device_id") or "") == device_id
-                ]
-                requested_link = str(link_id or "").strip()
-                if requested_link:
-                    links = [
-                        link for link in links
-                        if str(link.get("link_id") or "") == requested_link
-                    ]
-                if len(links) != 1:
-                    code = "product_device_link_not_found" if not links else "product_device_link_ambiguous"
-                    summary = (
-                        "Nenhum vínculo ativo desta conta corresponde a este computador."
-                        if not links else
-                        "Há mais de um vínculo ativo para este computador; selecione o vínculo explicitamente."
-                    )
-                    return {"ok": False, "code": code, "summary": summary}
-                expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-                created = remote.create_project_capability_grant(
+                authority = remote.owner_remote_authority(session.access_token, device_id=device_id)
+                client = self._select_owner_mcp_client(authority, client_id)
+                created = remote.replace_owner_remote_grant_group(
                     session.access_token,
-                    link_id=str(links[0].get("link_id") or ""),
-                    mode=_OWNER_PROJECT_BROWSER_GRANT_MODE,
-                    projects=[project],
-                    expires_at=expires_at,
+                    client_id=str(client.get("client_id") or ""),
+                    device_id=device_id,
+                    profile_key=_OWNER_PROJECT_BROWSER_GRANT_MODE,
+                    space_id=str(space_id),
+                    project_id=str(project_id),
+                    valid_until=expires_at,
                 )
         except ProductAccountError as error:
             return {"ok": False, "code": error.code, "summary": error.message}
@@ -561,43 +475,39 @@ class StudioProductApi(StudioApi):
             return self._safe_product_error(error)
         except (ValueError, httpx.HTTPError) as error:
             return {
-                "ok": False,
-                "code": "product_remote_unavailable",
+                "ok": False, "code": "product_remote_unavailable",
                 "summary": f"{type(error).__name__}: autorização do navegador indisponível",
             }
         return {
             "ok": True,
-            "summary": "Navegador remoto autorizado somente para o projeto atual",
+            "summary": "Navegador remoto autorizado para o escopo canônico informado",
             "data": created,
         }
 
-    def revoke_remote_project_browser_grant(self, grant_id: str) -> dict[str, Any]:
-        grant_id = str(grant_id or "").strip()
-        if not grant_id or len(grant_id) > 128:
-            return {
-                "ok": False,
-                "code": "owner_project_grant_id_invalid",
-                "summary": "Identificador de autorização inválido.",
-            }
+    def revoke_remote_project_browser_grant(self, grant_group_id: str) -> dict[str, Any]:
         try:
             session = self._product_session_required()
+            device_id = self._current_product_device_id()
             with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
-                result = remote.revoke_project_capability_grant(session.access_token, grant_id)
+                authority = remote.owner_remote_authority(session.access_token, device_id=device_id)
+                group = self._grant_for_revoke(
+                    authority, grant_group_id, frozenset({_OWNER_PROJECT_BROWSER_GRANT_MODE}),
+                )
+                result = remote.revoke_owner_remote_grant_group(
+                    session.access_token,
+                    client_id=str(group.get("client_id") or ""),
+                    grant_group_id=str(group.get("grant_group_id") or ""),
+                )
         except ProductAccountError as error:
             return {"ok": False, "code": error.code, "summary": error.message}
         except ProductRemoteError as error:
             return self._safe_product_error(error)
         except (ValueError, httpx.HTTPError) as error:
             return {
-                "ok": False,
-                "code": "product_remote_unavailable",
+                "ok": False, "code": "product_remote_unavailable",
                 "summary": f"{type(error).__name__}: autorização do navegador indisponível",
             }
-        return {
-            "ok": True,
-            "summary": "Autorização remota do navegador revogada",
-            "data": result,
-        }
+        return {"ok": True, "summary": "Autorização remota do navegador revogada", "data": result}
 
     def browser_list(self) -> dict[str, Any]:
         return self._result(self.agent.execute("browser.list", {"project": self.project}))
