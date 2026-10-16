@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .config import DEFAULT_CONTROL_PLANE_URL
+from .config import DEFAULT_PRODUCT_MCP_URL
 from .device_credentials import resolve_pending_token_path, resolve_token_path
 from .identity import machine_id
 
@@ -206,26 +206,13 @@ def _resolve_base_url(value: str | None, *, fallback: str, error_code: str) -> s
     return raw
 
 
-def _resolve_control_plane(control_plane_url: str | None) -> tuple[str, str]:
-    raw = _resolve_base_url(
-        control_plane_url,
-        fallback=DEFAULT_CONTROL_PLANE_URL,
-        error_code="CONTROL_PLANE_URL_INVALID",
-    )
-    return raw, raw + "/v3/device/setup"
-
-
-def _resolve_product_mcp(product_mcp_url: str | None, *, control_plane: str) -> tuple[str, str]:
-    # Backward-compatible callers that have not learned the Product endpoint yet
-    # use their existing control plane. New Product-aware callers pass the
-    # dedicated Product MCP origin explicitly.
+def _resolve_product_mcp(product_mcp_url: str | None) -> tuple[str, str]:
     raw = _resolve_base_url(
         product_mcp_url,
-        fallback=control_plane,
+        fallback=DEFAULT_PRODUCT_MCP_URL,
         error_code="PRODUCT_MCP_URL_INVALID",
     )
     return raw, raw + "/v3/device/setup"
-
 
 def _quarantine_invalid_pending_token(pending: Path) -> Path:
     """Preserve a malformed interrupted-setup token before replacing it.
@@ -247,7 +234,6 @@ def _configure(
     client=None,
     binding=None,
     home=None,
-    control_plane_url: str | None = None,
     product_mcp_url: str | None = None,
     product_access_token: str | None = None,
     device_kind: str | None = None,
@@ -255,8 +241,7 @@ def _configure(
 ) -> dict:
     settings_path = state / "agent-settings.json"
     settings = load_settings(settings_path)
-    control_plane, _legacy_setup_endpoint = _resolve_control_plane(control_plane_url)
-    product_mcp, endpoint = _resolve_product_mcp(product_mcp_url, control_plane=control_plane)
+    product_mcp, endpoint = _resolve_product_mcp(product_mcp_url)
     binding = binding or machine_id()
     token = resolve_token_path(state)
     pending = resolve_pending_token_path(state)
@@ -332,8 +317,8 @@ def _configure(
         if identity.get("protocol") != "cloudflare-v3":
             raise SetupError("PROTOCOL_MISMATCH")
 
+        settings.pop("control_plane_url", None)
         settings.update(
-            control_plane_url=control_plane,
             product_mcp_url=product_mcp,
             control_plane_protocol="cloudflare-v3",
             device_id=device_id,
@@ -359,7 +344,6 @@ def _configure(
             "ok": True,
             "device_id": device_id,
             "protocol": "cloudflare-v3",
-            "control_plane_url": control_plane,
             "product_mcp_url": product_mcp,
         }
     finally:
@@ -370,10 +354,6 @@ def _configure(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--interactive", action="store_true")
-    parser.add_argument(
-        "--control-plane-url",
-        default=os.environ.get("ORDAX_CONTROL_PLANE_URL", DEFAULT_CONTROL_PLANE_URL),
-    )
     parser.add_argument(
         "--product-mcp-url",
         default=os.environ.get("ORDAX_PRODUCT_MCP_URL"),
@@ -394,7 +374,6 @@ def main() -> int:
         result = configure(
             state,
             interactive=args.interactive,
-            control_plane_url=args.control_plane_url,
             product_mcp_url=args.product_mcp_url,
             device_kind=args.device_kind,
             channel=args.channel,

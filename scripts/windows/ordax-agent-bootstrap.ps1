@@ -43,7 +43,7 @@ function Ensure-ConfiguredDeviceIdentity {
     }
 
     $setupSettingsPath = Join-Path $stateDir "agent-settings.json"
-    $setupControlPlaneUrl = "https://mcp.ordax.com.br"
+    $setupProductMcpUrl = "https://mcp.ordax.com.br"
     if (Test-Path $setupSettingsPath -PathType Leaf) {
         try {
             $setupSettings = Get-Content $setupSettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -55,12 +55,15 @@ function Ensure-ConfiguredDeviceIdentity {
             Write-BootstrapLog "IDENTITY_RECOVERY_SKIP existing settings empty"
             return $false
         }
-        if ($setupSettings.control_plane_url) {
-            $setupControlPlaneUrl = ([string]$setupSettings.control_plane_url).TrimEnd('/')
+        if ($setupSettings.product_mcp_url) {
+            $setupProductMcpUrl = ([string]$setupSettings.product_mcp_url).TrimEnd('/')
+        } elseif ($setupSettings.control_plane_url) {
+            # One-shot migration input for pre-cutover installations.
+            $setupProductMcpUrl = ([string]$setupSettings.control_plane_url).TrimEnd('/')
         }
     }
 
-    & $python -m ordax_dev_agent.device_setup --control-plane-url $setupControlPlaneUrl |
+    & $python -m ordax_dev_agent.device_setup --product-mcp-url $setupProductMcpUrl |
         ForEach-Object { Write-BootstrapLog "SETUP $_" }
     return $LASTEXITCODE -eq 0
 }

@@ -182,7 +182,7 @@ class StudioProductApi(StudioApi):
         try:
             session = self._product_session_required()
             device_id = self._current_product_device_id()
-            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
                 links = [
                     link for link in remote.device_links(session.access_token)
                     if str(link.get("device_id") or "") == device_id
@@ -258,7 +258,7 @@ class StudioProductApi(StudioApi):
         try:
             session = self._product_session_required()
             device_id = self._current_product_device_id()
-            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
                 links = [
                     link for link in remote.device_links(session.access_token)
                     if str(link.get("device_id") or "") == device_id
@@ -308,7 +308,7 @@ class StudioProductApi(StudioApi):
             }
         try:
             session = self._product_session_required()
-            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
                 result = remote.revoke_device_computer_grant(session.access_token, grant_id)
         except ProductAccountError as error:
             return {"ok": False, "code": error.code, "summary": error.message}
@@ -330,7 +330,7 @@ class StudioProductApi(StudioApi):
         try:
             session = self._product_session_required()
             device_id = self._current_product_device_id()
-            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
                 links = [
                     link for link in remote.device_links(session.access_token)
                     if str(link.get("device_id") or "") == device_id
@@ -383,7 +383,7 @@ class StudioProductApi(StudioApi):
         try:
             session = self._product_session_required()
             device_id = self._current_product_device_id()
-            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
                 links = [
                     link for link in remote.device_links(session.access_token)
                     if str(link.get("device_id") or "") == device_id
@@ -435,7 +435,7 @@ class StudioProductApi(StudioApi):
             }
         try:
             session = self._product_session_required()
-            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
                 result = remote.revoke_device_intelligence_grant(
                     session.access_token,
                     grant_id,
@@ -467,7 +467,7 @@ class StudioProductApi(StudioApi):
                     "code": "project_required",
                     "summary": "Selecione um projeto antes de gerenciar o navegador remoto.",
                 }
-            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
                 links = [
                     link for link in remote.device_links(session.access_token)
                     if str(link.get("device_id") or "") == device_id
@@ -528,7 +528,7 @@ class StudioProductApi(StudioApi):
         try:
             session = self._product_session_required()
             device_id = self._current_product_device_id()
-            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
                 links = [
                     link for link in remote.device_links(session.access_token)
                     if str(link.get("device_id") or "") == device_id
@@ -581,7 +581,7 @@ class StudioProductApi(StudioApi):
             }
         try:
             session = self._product_session_required()
-            with ProductRemoteClient(str(self.agent.config.control_plane_url or "")) as remote:
+            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
                 result = remote.revoke_project_capability_grant(session.access_token, grant_id)
         except ProductAccountError as error:
             return {"ok": False, "code": error.code, "summary": error.message}

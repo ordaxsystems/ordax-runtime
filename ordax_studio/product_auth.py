@@ -329,10 +329,10 @@ def connect_existing_device(
     session: ProductAuthSession | None = None,
     product_mcp_url: str | None = None,
 ) -> dict[str, Any]:
-    if not config.control_plane_url:
+    if not config.product_mcp_url and not product_mcp_url:
         raise ProductAccountError(
-            "control_plane_unconfigured",
-            "O ORDAX Runtime não possui Control Plane configurado.",
+            "product_mcp_unconfigured",
+            "O ORDAX Runtime n?o possui o endpoint Product configurado.",
         )
     product_base = _product_mcp_base(config, product_mcp_url)
     if session is None:
@@ -349,7 +349,6 @@ def connect_existing_device(
     try:
         enrollment = configure_device(
             config.state_dir,
-            control_plane_url=config.control_plane_url,
             product_mcp_url=product_base,
             product_access_token=active_session.access_token,
         )

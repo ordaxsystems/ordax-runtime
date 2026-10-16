@@ -1,7 +1,7 @@
 from pathlib import Path
 import unittest
 
-from ordax_dev_agent.config import DEFAULT_CONTROL_PLANE_URL, DEFAULT_PRODUCT_MCP_URL
+from ordax_dev_agent.config import DEFAULT_PRODUCT_MCP_URL
 
 
 CANONICAL = "https://mcp.ordax.com.br"
@@ -17,9 +17,10 @@ CANONICAL_READ_OR_BOOTSTRAP_PATHS = (
 
 
 class CanonicalControlPlaneDefaultsTests(unittest.TestCase):
-    def test_agent_defaults_share_the_canonical_product_ingress(self):
-        self.assertEqual(CANONICAL, DEFAULT_CONTROL_PLANE_URL)
+    def test_agent_has_one_canonical_product_ingress(self):
         self.assertEqual(CANONICAL, DEFAULT_PRODUCT_MCP_URL)
+        config = Path("ordax_dev_agent/config.py").read_text(encoding="utf-8")
+        self.assertNotIn("DEFAULT_CONTROL_PLANE_URL", config)
 
     def test_read_and_bootstrap_paths_cannot_regress_to_legacy_workers_dev(self):
         for raw_path in CANONICAL_READ_OR_BOOTSTRAP_PATHS:

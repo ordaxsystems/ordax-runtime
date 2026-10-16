@@ -68,13 +68,10 @@ jobs:
           tests.test_product_mcp
           tests.test_product_remote_client
           tests.test_product_action_recovery
-          tests.test_product_device_presence_client
-          tests.test_product_presence_bridge
           tests.test_product_central_session
-          tests.test_cloudflare_control_plane
+          tests.test_product_device_control_plane
           tests.test_versioning
           tests.test_studio_managed_browser_contract
-          tests.test_product_audit_outbox
           tests.test_product_action_scope_parity
           tests.test_computer_parity_contract
           tests.test_computer_focus_window

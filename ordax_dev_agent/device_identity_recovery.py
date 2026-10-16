@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from .config import DEFAULT_CONTROL_PLANE_URL
+from .config import DEFAULT_PRODUCT_MCP_URL
 from .device_credentials import resolve_pending_token_path, resolve_token_path
 from .device_setup import atomic_json, load_settings, request
 from .identity import machine_id
@@ -35,7 +35,7 @@ def _state_dir() -> Path:
 def recover_existing_device_identity(
     state: Path | None = None,
     *,
-    control_plane_url: str | None = None,
+    product_mcp_url: str | None = None,
     client: Any | None = None,
     binding: str | None = None,
 ) -> dict[str, Any]:
@@ -56,12 +56,13 @@ def recover_existing_device_identity(
             "changed": False,
         }
 
-    control_plane = str(
-        control_plane_url
+    product_mcp = str(
+        product_mcp_url
+        or settings.get("product_mcp_url")
         or settings.get("control_plane_url")
-        or DEFAULT_CONTROL_PLANE_URL
+        or DEFAULT_PRODUCT_MCP_URL
     ).strip().rstrip("/")
-    if not control_plane.startswith("https://"):
+    if not product_mcp.startswith("https://"):
         return {
             "ok": False,
             "state": "control-plane-invalid",
@@ -87,7 +88,7 @@ def recover_existing_device_identity(
                 continue
             identity = request(
                 http,
-                control_plane + "/v3/device/setup",
+                product_mcp + "/v3/device/setup",
                 {
                     "operation": "identify",
                     "machine_binding_sha256": binding or machine_id(),
@@ -117,8 +118,9 @@ def recover_existing_device_identity(
                     "changed": False,
                 }
 
+            settings.pop("control_plane_url", None)
             settings.update(
-                control_plane_url=control_plane,
+                product_mcp_url=product_mcp,
                 control_plane_protocol="cloudflare-v3",
                 device_id=device_id,
             )

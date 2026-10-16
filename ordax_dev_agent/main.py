@@ -230,7 +230,7 @@ def main() -> int:
     protocol = str(config.control_plane_protocol or "").strip().lower()
     remote_control_configured = bool(
         protocol == "cloudflare-v3"
-        and config.control_plane_url
+        and config.product_mcp_url
         and config.device_id
     )
     runtime["state"] = "pairing" if remote_control_configured else "local-ready"
