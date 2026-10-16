@@ -160,7 +160,7 @@ jobs:
         shell: powershell
         run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
 
-  publish-release:
+  sign-release:
     if: startsWith(github.ref, 'refs/tags/v')
     environment: windows-production-release
     needs:
@@ -168,7 +168,7 @@ jobs:
       - install-smoke
     runs-on: [self-hosted, windows, x64, ordax-release-signing]
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout tagged Runtime source and canonical Studio lock
         uses: actions/checkout@v4
@@ -180,16 +180,17 @@ jobs:
         env:
           ORDAX_RELEASE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
           ORDAX_RELEASE_SIGNING_KEY_PROVIDERS: ${{ vars.ORDAX_RELEASE_SIGNING_KEY_PROVIDERS }}
+          ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:ORDAX_RELEASE_RUNNER_ENVIRONMENT -ne 'self-hosted') {
-            throw 'Public ORDAX releases must run only on the dedicated self-hosted signing runner'
+            throw 'Public ORDAX releases must sign only on the dedicated self-hosted signing runner'
           }
           if ([string]::IsNullOrWhiteSpace($env:ORDAX_RELEASE_SIGNING_KEY_PROVIDERS)) {
             throw 'Approved HSM/KSP/CSP release signing providers are not configured'
           }
-          if (-not (Get-Command gh.exe -CommandType Application -ErrorAction SilentlyContinue)) {
-            throw 'GitHub CLI is required on the dedicated release signing runner'
+          if ($env:ORDAX_RELEASE_SIGNER_THUMBPRINTS -cnotmatch '^[0-9a-fA-F]{40}(,[0-9a-fA-F]{40}){0,3}$') {
+            throw 'Trusted ORDAX publisher certificate thumbprints are missing or invalid'
           }
       - name: Verify tagged Runtime commit belongs to canonical main
         shell: powershell
@@ -216,15 +217,14 @@ jobs:
             throw 'Blocked release: locked Studio source was not integrated into canonical Apps main'
           }
           Write-Host "ORDAX_STUDIO_RELEASE_SOURCE_MAIN_ANCESTRY=PASS"
-      - name: Download validated Windows installer
+      - name: Download validated unsigned Windows installer
         uses: actions/download-artifact@v4
         with:
           name: ordax-studio-windows-x64
           path: artifact
-      - name: Verify release provenance and artifact digest
+      - name: Verify release provenance and unsigned artifact digest
         shell: powershell
-        run: |
-          .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
+        run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Sign final production installer
         shell: pwsh
         env:
@@ -235,15 +235,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
-          if (-not $installer) { throw "Validated ORDAX Studio installer is missing" }
+          if (-not $installer) { throw 'Validated ORDAX Studio installer is missing' }
           .\scripts\windows\sign-release-authenticode.ps1 -Path $installer.FullName -CertificateThumbprint $env:ORDAX_RELEASE_SIGNING_CERT_THUMBPRINT -TimestampServer $env:ORDAX_RELEASE_TIMESTAMP_URL -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS -AllowedKeyProviders $env:ORDAX_RELEASE_SIGNING_KEY_PROVIDERS
-      - name: Verify production Authenticode signature and authorized publisher
+      - name: Verify production Authenticode signature on signing runner
         shell: powershell
         env:
           ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
         run: |
           $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
-          if (-not $installer) { throw "Validated ORDAX Studio installer is missing" }
+          if (-not $installer) { throw 'Signed ORDAX Studio installer is missing' }
           .\scripts\windows\assert-release-authenticode.ps1 -Path $installer.FullName -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS
       - name: Replace checksums with final signed installer digest
         shell: pwsh
@@ -253,10 +253,86 @@ jobs:
           if (-not $installer) { throw 'Signed ORDAX Studio installer is missing' }
           $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $($installer.Name)" | Set-Content .\artifact\SHA256SUMS.txt -Encoding ascii
+      - name: Verify final signed release provenance before handoff
+        shell: powershell
+        run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
+      - name: Upload immutable signed Windows installer handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: ordax-studio-windows-x64-signed
+          path: |
+            artifact/ORDAX-Studio-Setup-*.exe
+            artifact/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  signed-release-smoke:
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: windows-production-release
+    needs: sign-release
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout pinned Runtime signed smoke implementation
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download immutable signed Windows installer handoff
+        uses: actions/download-artifact@v4
+        with:
+          name: ordax-studio-windows-x64-signed
+          path: artifact
+      - name: Verify production Authenticode signature on clean hosted runner
+        shell: powershell
+        env:
+          ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
+        run: |
+          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Signed ORDAX Studio installer is missing' }
+          .\scripts\windows\assert-release-authenticode.ps1 -Path $installer.FullName -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS
+      - name: Verify final signed release provenance before installation smoke
+        shell: powershell
+        run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Install and upgrade from final signed release bytes
         shell: powershell
         run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
       - name: Reverify final installer SHA-256 after signed installation smoke
+        shell: powershell
+        run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: windows-production-release
+    needs:
+      - sign-release
+      - signed-release-smoke
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout tagged Runtime publication implementation
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify tagged Runtime commit still belongs to protected canonical main before publication
+        shell: powershell
+        run: .\scripts\windows\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
+      - name: Download immutable signed Windows installer handoff
+        uses: actions/download-artifact@v4
+        with:
+          name: ordax-studio-windows-x64-signed
+          path: artifact
+      - name: Reverify production Authenticode signature before publication
+        shell: powershell
+        env:
+          ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
+        run: |
+          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Signed ORDAX Studio installer is missing' }
+          .\scripts\windows\assert-release-authenticode.ps1 -Path $installer.FullName -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS
+      - name: Reverify final release provenance before publication
         shell: powershell
         run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Publish GitHub Release assets
