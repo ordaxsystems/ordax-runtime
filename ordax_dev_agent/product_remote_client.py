@@ -6,17 +6,25 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
 
 _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 _ACTION_STATUSES = _TERMINAL_STATUSES | {"queued", "leased", "running"}
-# Includes the published 2 MiB inline artifact after base64 expansion and metadata.
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _REQUEST_ID = re.compile(r"[A-Za-z0-9:_-]{1,128}")
 _ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,127}")
+_UUID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+_CLIENT_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+_PROFILE_KEY = re.compile(r"[a-z][a-z0-9._-]{1,79}")
 
 
 @dataclass
@@ -40,11 +48,12 @@ class ProductActionWaitTimeout(TimeoutError):
 
 
 class ProductRemoteClient:
-    """Thin Product client over the authenticated Cloudflare v3 API.
+    """Thin client for the canonical Product MCP HTTP authority.
 
-    The client intentionally does not store a Product access token. Every call
-    receives the current token explicitly so a future MCP/Web host can own token
-    refresh and session lifecycle without duplicating authorization rules here.
+    This client never stores a Product access token. Owner authorization uses
+    only the canonical remote-authority / grant-group endpoints backed by
+    PostgreSQL. Retired device-link, pairing and specialized grant routes are
+    intentionally absent.
     """
 
     def __init__(
@@ -91,17 +100,26 @@ class ProductRemoteClient:
             raise ValueError("Product request id must be a bounded path-safe identifier")
         return value
 
+    @staticmethod
+    def _uuid(value: Any, label: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if _UUID.fullmatch(normalized) is None:
+            raise ValueError(f"{label} must be a canonical UUID")
+        return normalized
+
+    @staticmethod
+    def _client_id(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if _CLIENT_ID.fullmatch(normalized) is None:
+            raise ValueError("Product MCP client_id must be a canonical UUID")
+        return normalized
+
     def _request(
         self, method: str, url: str, *, deadline: float | None = None, **kwargs: Any,
     ) -> httpx.Response:
-        # The bound applies while reading, including decompressed response bytes.
-        # Never follow a redirect with a Product bearer token, even when the
-        # caller injects a Client configured to follow redirects.
         try:
             with self.http.stream(method, url, follow_redirects=False, **kwargs) as response:
                 content = bytearray()
-                # Do not coalesce chunks: a slow stream must not postpone the
-                # wait deadline until a large buffer becomes full.
                 for chunk in response.iter_bytes():
                     if deadline is not None and time.monotonic() >= deadline:
                         raise ProductRemoteError(
@@ -111,22 +129,27 @@ class ProductRemoteClient:
                     if len(content) + len(chunk) > _MAX_RESPONSE_BYTES:
                         raise ProductRemoteError(
                             "product_remote_invalid_response", response.status_code,
-                            "Control Plane response exceeds the Product response limit",
+                            "Product response exceeds the configured response limit",
                         )
                     content.extend(chunk)
                 if deadline is not None and time.monotonic() >= deadline:
-                    raise ProductRemoteError("product_action_wait_timeout", 0,
-                                             "Product action wait deadline elapsed")
+                    raise ProductRemoteError(
+                        "product_action_wait_timeout", 0,
+                        "Product action wait deadline elapsed",
+                    )
                 return httpx.Response(
                     response.status_code,
-                    headers={key: value for key, value in response.headers.items()
-                             if key not in {"content-encoding", "content-length"}},
-                    content=bytes(content), request=response.request,
+                    headers={
+                        key: value for key, value in response.headers.items()
+                        if key not in {"content-encoding", "content-length"}
+                    },
+                    content=bytes(content),
+                    request=response.request,
                 )
         except httpx.HTTPError as error:
             raise ProductRemoteError(
                 "product_remote_transport_error", 0,
-                "Control Plane transport failed",
+                "Product MCP transport failed",
             ) from error
 
     @staticmethod
@@ -135,32 +158,38 @@ class ProductRemoteClient:
             raise ValueError("Non-finite JSON number")
 
         try:
-            if response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+            media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if media_type != "application/json":
                 raise ValueError("Product response must use application/json")
-            body = json.loads(response.content.decode("utf-8"), parse_constant=reject_nonfinite)
+            body = json.loads(
+                response.content.decode("utf-8"),
+                parse_constant=reject_nonfinite,
+            )
         except (ValueError, RecursionError) as error:
             raise ProductRemoteError(
                 "product_remote_invalid_response",
                 response.status_code,
-                "Control Plane returned non-JSON data",
+                "Product MCP returned invalid JSON",
             ) from error
         if not isinstance(body, dict):
             raise ProductRemoteError(
                 "product_remote_invalid_response",
                 response.status_code,
-                "Control Plane returned a non-object JSON body",
+                "Product MCP returned a non-object JSON body",
             )
         if not response.is_success or body.get("ok") is not True:
             code = body.get("error")
             raise ProductRemoteError(
-                code if isinstance(code, str) and _ERROR_CODE.fullmatch(code) else "product_remote_error",
+                code if isinstance(code, str) and _ERROR_CODE.fullmatch(code)
+                else "product_remote_error",
                 response.status_code,
-                "Control Plane rejected the Product request",
+                "Product MCP rejected the request",
             )
         return body
 
     def session(self, access_token: str) -> dict[str, Any]:
-        response = self._request("GET",
+        response = self._request(
+            "GET",
             f"{self.base_url}/v3/product/session",
             headers=self._headers(access_token),
         )
@@ -181,7 +210,8 @@ class ProductRemoteClient:
         space_id: str | None = None,
     ) -> list[dict[str, Any]]:
         params = {"space_id": space_id} if space_id is not None else None
-        response = self._request("GET",
+        response = self._request(
+            "GET",
             f"{self.base_url}/v3/product/targets",
             headers=self._headers(access_token),
             params=params,
@@ -196,258 +226,94 @@ class ProductRemoteClient:
             )
         return [dict(item) for item in targets]
 
-    def claim_device_pairing(
+    def owner_remote_authority(
         self,
         access_token: str,
         *,
-        pairing_id: str,
-        pairing_secret: str,
-        space_id: str | None = None,
+        device_id: str,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "pairing_id": pairing_id,
-            "pairing_secret": pairing_secret,
+        normalized_device = self._uuid(device_id, "device_id")
+        response = self._request(
+            "GET",
+            f"{self.base_url}/v3/owner/remote-authority",
+            headers=self._headers(access_token),
+            params={"device_id": normalized_device},
+        )
+        body = self._body(response)
+        if str(body.get("device_id") or "").lower() != normalized_device:
+            raise ProductRemoteError(
+                "product_remote_invalid_response",
+                response.status_code,
+                "Owner remote authority returned another device",
+            )
+        clients = body.get("clients")
+        groups = body.get("grant_groups")
+        if (
+            not isinstance(clients, list)
+            or not all(isinstance(item, dict) for item in clients)
+            or not isinstance(groups, list)
+            or not all(isinstance(item, dict) for item in groups)
+        ):
+            raise ProductRemoteError(
+                "product_remote_invalid_response",
+                response.status_code,
+                "Owner remote authority payload is invalid",
+            )
+        return {
+            "device_id": normalized_device,
+            "clients": [dict(item) for item in clients],
+            "grant_groups": [dict(item) for item in groups],
         }
-        if space_id is not None:
-            payload["space_id"] = space_id
-        response = self._request("POST",
-            f"{self.base_url}/v3/product/device-links",
+
+    def replace_owner_remote_grant_group(
+        self,
+        access_token: str,
+        *,
+        client_id: str,
+        device_id: str,
+        profile_key: str,
+        space_id: str | None = None,
+        project_id: str | None = None,
+        valid_until: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_client = self._client_id(client_id)
+        normalized_device = self._uuid(device_id, "device_id")
+        normalized_profile = str(profile_key or "").strip()
+        if _PROFILE_KEY.fullmatch(normalized_profile) is None:
+            raise ValueError("profile_key is invalid")
+        payload: dict[str, Any] = {
+            "client_id": normalized_client,
+            "device_id": normalized_device,
+            "profile_key": normalized_profile,
+            "space_id": self._uuid(space_id, "space_id") if space_id else None,
+            "project_id": self._uuid(project_id, "project_id") if project_id else None,
+            "valid_until": valid_until,
+        }
+        response = self._request(
+            "POST",
+            f"{self.base_url}/v3/owner/remote-grant-groups",
             headers={
                 **self._headers(access_token),
                 "content-type": "application/json",
             },
             json=payload,
         )
-        body = self._body(response)
-        link = body.get("link")
-        if not isinstance(link, dict):
-            raise ProductRemoteError(
-                "product_remote_invalid_response",
-                response.status_code,
-                "Product device link payload is missing",
-            )
-        return link
-
-    def device_links(
-        self,
-        access_token: str,
-        *,
-        space_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        params = {"space_id": space_id} if space_id is not None else None
-        response = self._request("GET",
-            f"{self.base_url}/v3/product/device-links",
-            headers=self._headers(access_token),
-            params=params,
-        )
-        body = self._body(response)
-        links = body.get("links")
-        if not isinstance(links, list) or not all(isinstance(item, dict) for item in links):
-            raise ProductRemoteError(
-                "product_remote_invalid_response",
-                response.status_code,
-                "Product device link catalog is invalid",
-            )
-        return [dict(item) for item in links]
-
-    def revoke_device_link(
-        self,
-        access_token: str,
-        link_id: str,
-    ) -> dict[str, Any]:
-        response = self._request("DELETE",
-            f"{self.base_url}/v3/product/device-links/{link_id}",
-            headers=self._headers(access_token),
-        )
         return self._body(response)
 
-    def device_computer_grants(
+    def revoke_owner_remote_grant_group(
         self,
         access_token: str,
         *,
-        link_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        params = {"link_id": link_id} if link_id is not None else None
-        response = self._request("GET",
-            f"{self.base_url}/v3/product/device-computer-grants",
-            headers=self._headers(access_token),
-            params=params,
-        )
-        body = self._body(response)
-        grants = body.get("grants")
-        if not isinstance(grants, list) or not all(isinstance(item, dict) for item in grants):
-            raise ProductRemoteError(
-                "product_remote_invalid_response",
-                response.status_code,
-                "Product device grant catalog is invalid",
-            )
-        return [dict(item) for item in grants]
-
-    def create_device_computer_grant(
-        self,
-        access_token: str,
-        *,
-        link_id: str,
-        mode: str,
-        expires_at: str | None = None,
+        client_id: str,
+        grant_group_id: str,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"link_id": link_id, "mode": mode}
-        if expires_at is not None:
-            payload["expires_at"] = expires_at
-        response = self._request("POST",
-            f"{self.base_url}/v3/product/device-computer-grants",
-            headers={**self._headers(access_token), "content-type": "application/json"},
-            json=payload,
-        )
-        body = self._body(response)
-        grant = body.get("grant")
-        if not isinstance(grant, dict):
-            raise ProductRemoteError(
-                "product_remote_invalid_response",
-                response.status_code,
-                "Product device grant payload is missing",
-            )
-        return {"mode": body.get("mode"), "replayed": bool(body.get("replayed")), "grant": dict(grant)}
-
-    def revoke_device_computer_grant(
-        self,
-        access_token: str,
-        grant_id: str,
-    ) -> dict[str, Any]:
-        response = self._request("DELETE",
-            f"{self.base_url}/v3/product/device-computer-grants/{grant_id}",
+        normalized_client = self._client_id(client_id)
+        normalized_group = self._uuid(grant_group_id, "grant_group_id")
+        response = self._request(
+            "DELETE",
+            f"{self.base_url}/v3/owner/remote-grant-groups/{quote(normalized_group, safe='')}",
             headers=self._headers(access_token),
-        )
-        return self._body(response)
-
-    def device_intelligence_grants(
-        self,
-        access_token: str,
-        *,
-        link_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        params = {"link_id": link_id} if link_id is not None else None
-        response = self._request("GET",
-            f"{self.base_url}/v3/product/device-intelligence-grants",
-            headers=self._headers(access_token),
-            params=params,
-        )
-        body = self._body(response)
-        grants = body.get("grants")
-        if not isinstance(grants, list) or not all(isinstance(item, dict) for item in grants):
-            raise ProductRemoteError(
-                "product_remote_invalid_response",
-                response.status_code,
-                "Product App Intelligence grant catalog is invalid",
-            )
-        return [dict(item) for item in grants]
-
-    def create_device_intelligence_grant(
-        self,
-        access_token: str,
-        *,
-        link_id: str,
-        mode: str = "app-intelligence-read",
-        expires_at: str | None = None,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"link_id": link_id, "mode": mode}
-        if expires_at is not None:
-            payload["expires_at"] = expires_at
-        response = self._request("POST",
-            f"{self.base_url}/v3/product/device-intelligence-grants",
-            headers={**self._headers(access_token), "content-type": "application/json"},
-            json=payload,
-        )
-        body = self._body(response)
-        grant = body.get("grant")
-        if not isinstance(grant, dict):
-            raise ProductRemoteError(
-                "product_remote_invalid_response",
-                response.status_code,
-                "Product App Intelligence grant payload is missing",
-            )
-        return {
-            "mode": body.get("mode"),
-            "replayed": bool(body.get("replayed")),
-            "grant": dict(grant),
-        }
-
-    def revoke_device_intelligence_grant(
-        self,
-        access_token: str,
-        grant_id: str,
-    ) -> dict[str, Any]:
-        response = self._request("DELETE",
-            f"{self.base_url}/v3/product/device-intelligence-grants/{grant_id}",
-            headers=self._headers(access_token),
-        )
-        return self._body(response)
-
-    def project_capability_grants(
-        self,
-        access_token: str,
-        *,
-        link_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        params = {"link_id": link_id} if link_id is not None else None
-        response = self._request("GET",
-            f"{self.base_url}/v3/product/project-capability-grants",
-            headers=self._headers(access_token),
-            params=params,
-        )
-        body = self._body(response)
-        grants = body.get("grants")
-        if not isinstance(grants, list) or not all(isinstance(item, dict) for item in grants):
-            raise ProductRemoteError(
-                "product_remote_invalid_response",
-                response.status_code,
-                "Product project grant catalog is invalid",
-            )
-        return [dict(item) for item in grants]
-
-    def create_project_capability_grant(
-        self,
-        access_token: str,
-        *,
-        link_id: str,
-        mode: str,
-        projects: list[str],
-        expires_at: str | None = None,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "link_id": link_id,
-            "mode": mode,
-            "projects": list(projects),
-        }
-        if expires_at is not None:
-            payload["expires_at"] = expires_at
-        response = self._request("POST",
-            f"{self.base_url}/v3/product/project-capability-grants",
-            headers={**self._headers(access_token), "content-type": "application/json"},
-            json=payload,
-        )
-        body = self._body(response)
-        grant = body.get("grant")
-        if not isinstance(grant, dict):
-            raise ProductRemoteError(
-                "product_remote_invalid_response",
-                response.status_code,
-                "Product project grant payload is missing",
-            )
-        return {
-            "mode": body.get("mode"),
-            "replayed": bool(body.get("replayed")),
-            "grant": dict(grant),
-        }
-
-    def revoke_project_capability_grant(
-        self,
-        access_token: str,
-        grant_id: str,
-    ) -> dict[str, Any]:
-        response = self._request("DELETE",
-            f"{self.base_url}/v3/product/project-capability-grants/{grant_id}",
-            headers=self._headers(access_token),
+            params={"client_id": normalized_client},
         )
         return self._body(response)
 
@@ -472,7 +338,8 @@ class ProductRemoteClient:
             payload["space_id"] = space_id
 
         try:
-            response = self._request("POST",
+            response = self._request(
+                "POST",
                 f"{self.base_url}/v3/product/actions",
                 headers={
                     **self._headers(access_token),
@@ -485,16 +352,20 @@ class ProductRemoteClient:
                 return self._request_id(body.get("request_id"))
             except ValueError as error:
                 raise ProductRemoteError(
-                    "product_remote_invalid_response", response.status_code,
+                    "product_remote_invalid_response",
+                    response.status_code,
                     "Product action request id is missing or invalid",
                 ) from error
         except ProductRemoteError as error:
-            # No response / malformed ACK is not evidence that POST had no effect.
             raise ProductRemoteError(
-                error.error_code, error.status_code, error.detail,
-                acceptance_unknown=(error.status_code in {0, 408}
-                                    or error.status_code >= 500
-                                    or error.error_code == "product_remote_invalid_response"),
+                error.error_code,
+                error.status_code,
+                error.detail,
+                acceptance_unknown=(
+                    error.status_code in {0, 408}
+                    or error.status_code >= 500
+                    or error.error_code == "product_remote_invalid_response"
+                ),
             ) from error
 
     def action(
@@ -506,28 +377,39 @@ class ProductRemoteClient:
         _deadline: float | None = None,
     ) -> dict[str, Any]:
         self._request_id(request_id)
-        if timeout_seconds is not None and (not math.isfinite(timeout_seconds) or timeout_seconds <= 0):
+        if timeout_seconds is not None and (
+            not math.isfinite(timeout_seconds) or timeout_seconds <= 0
+        ):
             raise ValueError("Action request timeout must be finite and positive")
         options = {"timeout": timeout_seconds} if timeout_seconds is not None else {}
         try:
-            response = self._request("GET",
+            response = self._request(
+                "GET",
                 f"{self.base_url}/v3/product/actions/{request_id}",
-                headers=self._headers(access_token), deadline=_deadline, **options,
+                headers=self._headers(access_token),
+                deadline=_deadline,
+                **options,
             )
             body = self._body(response)
             action = body.get("action")
-            if (not isinstance(action, dict)
-                    or action.get("request_id") != request_id
-                    or not isinstance(action.get("status"), str)
-                    or action["status"] not in _ACTION_STATUSES):
+            if (
+                not isinstance(action, dict)
+                or action.get("request_id") != request_id
+                or not isinstance(action.get("status"), str)
+                or action["status"] not in _ACTION_STATUSES
+            ):
                 raise ProductRemoteError(
-                    "product_remote_invalid_response", response.status_code,
+                    "product_remote_invalid_response",
+                    response.status_code,
                     "Product action identity or status is invalid",
                 )
             return action
         except ProductRemoteError as error:
             raise ProductRemoteError(
-                error.error_code, error.status_code, error.detail, request_id=request_id,
+                error.error_code,
+                error.status_code,
+                error.detail,
+                request_id=request_id,
             ) from error
 
     def wait_action(
@@ -538,9 +420,17 @@ class ProductRemoteClient:
         timeout_seconds: float = 30.0,
         poll_interval_seconds: float = 0.5,
     ) -> dict[str, Any]:
-        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0 or timeout_seconds > 300:
+        if (
+            not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+            or timeout_seconds > 300
+        ):
             raise ValueError("timeout_seconds must be between 0 and 300")
-        if not math.isfinite(poll_interval_seconds) or poll_interval_seconds < 0.1 or poll_interval_seconds > 5:
+        if (
+            not math.isfinite(poll_interval_seconds)
+            or poll_interval_seconds < 0.1
+            or poll_interval_seconds > 5
+        ):
             raise ValueError("poll_interval_seconds must be between 0.1 and 5")
 
         deadline = time.monotonic() + timeout_seconds
@@ -549,7 +439,12 @@ class ProductRemoteClient:
             if remaining <= 0:
                 raise ProductActionWaitTimeout(request_id)
             try:
-                result = self.action(access_token, request_id, timeout_seconds=remaining, _deadline=deadline)
+                result = self.action(
+                    access_token,
+                    request_id,
+                    timeout_seconds=remaining,
+                    _deadline=deadline,
+                )
             except ProductRemoteError as error:
                 if error.error_code == "product_action_wait_timeout":
                     raise ProductActionWaitTimeout(request_id) from error
