@@ -15,6 +15,7 @@ on:
       - "scripts/windows/ordax-studio-start.ps1"
       - "scripts/windows/ordax-upgrade-quiesce.ps1"
       - "scripts/windows/assert-runtime-package-capabilities.ps1"
+      - "scripts/windows/sign-release-authenticode.ps1"
       - "scripts/windows/assert-release-authenticode.ps1"
       - "scripts/windows/assert-release-provenance.ps1"
       - "scripts/windows/assert-release-main-ancestry.ps1"
@@ -24,6 +25,7 @@ on:
       - "tests/test_windows_product_packaging.py"
       - "tests/test_windows_runtime_provenance_packaging_gate.py"
       - "tests/test_release_signer_identity.py"
+      - "tests/test_release_signing_contract.py"
       - "pyproject.toml"
       - "studio-source.lock.json"
       - ".github/workflows/windows-product-build.yml"
@@ -44,7 +46,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
-        run: python -m unittest tests.test_windows_product_packaging tests.test_windows_runtime_provenance_packaging_gate tests.test_release_provenance tests.test_release_signer_identity tests.test_release_main_ancestry tests.test_studio_host_transport_boundary tests.test_studio_presentation_handoff_contract
+        run: python -m unittest tests.test_windows_product_packaging tests.test_windows_runtime_provenance_packaging_gate tests.test_release_provenance tests.test_release_signer_identity tests.test_release_signing_contract tests.test_release_main_ancestry tests.test_studio_host_transport_boundary tests.test_studio_presentation_handoff_contract
       - name: Reject PowerShell syntax errors before expensive Windows packaging
         shell: pwsh
         run: |
@@ -53,6 +55,10 @@ jobs:
             'scripts/windows/build-ordax-studio-product.ps1',
             'scripts/windows/test-ordax-studio-install-smoke.ps1',
             'scripts/windows/assert-runtime-package-capabilities.ps1',
+            'scripts/windows/sign-release-authenticode.ps1',
+            'scripts/windows/assert-release-authenticode.ps1',
+            'scripts/windows/assert-release-provenance.ps1',
+            'scripts/windows/assert-release-main-ancestry.ps1',
             'scripts/windows/assert-installed-studio-ux.ps1',
             'scripts/windows/verify-studio-presentation-handoff.ps1'
           )) {
@@ -160,7 +166,7 @@ jobs:
     needs:
       - build-installer
       - install-smoke
-    runs-on: windows-latest
+    runs-on: [self-hosted, windows, x64, ordax-release-signing]
     permissions:
       contents: write
     steps:
@@ -169,6 +175,22 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Assert dedicated production signing runner prerequisites
+        shell: pwsh
+        env:
+          ORDAX_RELEASE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          ORDAX_RELEASE_SIGNING_KEY_PROVIDERS: ${{ vars.ORDAX_RELEASE_SIGNING_KEY_PROVIDERS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:ORDAX_RELEASE_RUNNER_ENVIRONMENT -ne 'self-hosted') {
+            throw 'Public ORDAX releases must run only on the dedicated self-hosted signing runner'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:ORDAX_RELEASE_SIGNING_KEY_PROVIDERS)) {
+            throw 'Approved HSM/KSP/CSP release signing providers are not configured'
+          }
+          if (-not (Get-Command gh.exe -CommandType Application -ErrorAction SilentlyContinue)) {
+            throw 'GitHub CLI is required on the dedicated release signing runner'
+          }
       - name: Verify tagged Runtime commit belongs to canonical main
         shell: powershell
         run: .\scripts\windows\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
@@ -203,6 +225,18 @@ jobs:
         shell: powershell
         run: |
           .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
+      - name: Sign final production installer
+        shell: pwsh
+        env:
+          ORDAX_RELEASE_SIGNING_CERT_THUMBPRINT: ${{ vars.ORDAX_RELEASE_SIGNING_CERT_THUMBPRINT }}
+          ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
+          ORDAX_RELEASE_SIGNING_KEY_PROVIDERS: ${{ vars.ORDAX_RELEASE_SIGNING_KEY_PROVIDERS }}
+          ORDAX_RELEASE_TIMESTAMP_URL: ${{ vars.ORDAX_RELEASE_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
+          if (-not $installer) { throw "Validated ORDAX Studio installer is missing" }
+          .\scripts\windows\sign-release-authenticode.ps1 -Path $installer.FullName -CertificateThumbprint $env:ORDAX_RELEASE_SIGNING_CERT_THUMBPRINT -TimestampServer $env:ORDAX_RELEASE_TIMESTAMP_URL -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS -AllowedKeyProviders $env:ORDAX_RELEASE_SIGNING_KEY_PROVIDERS
       - name: Verify production Authenticode signature and authorized publisher
         shell: powershell
         env:
@@ -211,6 +245,14 @@ jobs:
           $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
           if (-not $installer) { throw "Validated ORDAX Studio installer is missing" }
           .\scripts\windows\assert-release-authenticode.ps1 -Path $installer.FullName -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS
+      - name: Replace checksums with final signed installer digest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Signed ORDAX Studio installer is missing' }
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content .\artifact\SHA256SUMS.txt -Encoding ascii
       - name: Install and upgrade from final signed release bytes
         shell: powershell
         run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
