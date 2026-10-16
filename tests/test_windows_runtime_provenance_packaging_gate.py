@@ -21,6 +21,9 @@ class WindowsRuntimeProvenancePackagingGateTests(unittest.TestCase):
         self.assertIn("ordax_dev_agent.product_device_control_plane", helper)
         self.assertIn("from ordax_dev_agent.control_plane import build_control_plane", helper)
         self.assertIn("ProductDeviceControlPlane", helper)
+        self.assertIn('ProductDeviceControlPlane.runtime_kind != "desktop-agent"', helper)
+        self.assertIn('getattr(ProductDeviceControlPlane, "_runtime_provenance", None)', helper)
+        self.assertIn("transport.DEVICE_AGENT_VERSION != ordax_dev_agent.__version__", helper)
         self.assertIn("$probe | & $privatePythonPath -I - $expectedModule", helper)
         self.assertNotIn("-I -c $probe", helper)
 

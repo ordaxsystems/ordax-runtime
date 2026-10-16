@@ -24,6 +24,7 @@ $probe = @'
 from pathlib import Path
 import sys
 
+import ordax_dev_agent
 import ordax_dev_agent.product_device_control_plane as transport
 from ordax_dev_agent.control_plane import build_control_plane
 from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
@@ -36,6 +37,14 @@ if ProductDeviceControlPlane is not transport.ProductDeviceControlPlane:
     raise SystemExit("Product device control-plane class identity is inconsistent")
 if not callable(build_control_plane):
     raise SystemExit("Canonical control-plane factory is not callable")
+if ProductDeviceControlPlane.runtime_kind != "desktop-agent":
+    raise SystemExit("Product device control-plane runtime kind is not canonical")
+if not callable(getattr(ProductDeviceControlPlane, "_runtime_provenance", None)):
+    raise SystemExit("Product device control-plane runtime provenance sender is missing")
+if transport.DEVICE_AGENT_VERSION != ordax_dev_agent.__version__:
+    raise SystemExit("Product device control-plane version authority is inconsistent")
+if not isinstance(ordax_dev_agent.__version__, str) or not ordax_dev_agent.__version__.strip():
+    raise SystemExit("ORDAX Runtime package version authority is empty")
 '@
 
 $probe | & $privatePythonPath -I - $expectedModule
