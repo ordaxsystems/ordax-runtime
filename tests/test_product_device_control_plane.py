@@ -105,7 +105,7 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             for _path, body in seen:
                 self.assertEqual(body["agent_instance_id"], plane.agent_instance_id)
                 self.assertEqual(body["boot_id"], plane.boot_id)
-                self.assertEqual(body["runtime_kind"], "desktop")
+                self.assertEqual(body["runtime_kind"], "desktop-agent")
                 self.assertEqual(body["agent_version"], DEVICE_AGENT_VERSION)
             plane.http.close()
 
@@ -133,7 +133,7 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             decoded = json.loads(base64.b64decode(report["result_canonical_b64"]))
             self.assertEqual(decoded, {"data": {"value": 1}, "ok": True, "summary": "ok"})
             self.assertNotIn("result", report)
-            self.assertEqual(report["runtime_kind"], "desktop")
+            self.assertEqual(report["runtime_kind"], "desktop-agent")
             self.assertEqual(report["agent_version"], DEVICE_AGENT_VERSION)
             plane.http.close()
 
@@ -153,7 +153,7 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
                 "execution_epoch": 1,
                 "agent_instance_id": "77777777-7777-4777-8777-777777777777",
                 "boot_id": "88888888-8888-4888-8888-888888888888",
-                "runtime_kind": "desktop",
+                "runtime_kind": "desktop-agent",
                 "agent_version": "0.3.0-old",
                 "report_id": "99999999-9999-4999-8999-999999999999",
                 "status": "succeeded",
@@ -166,7 +166,7 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             self.assertEqual(recovered, 1)
             self.assertEqual(seen[-1][0], "/v3/device/transport/recover-report")
             self.assertEqual(seen[-1][1]["agent_version"], "0.3.0-old")
-            self.assertEqual(seen[-1][1]["runtime_kind"], "desktop")
+            self.assertEqual(seen[-1][1]["runtime_kind"], "desktop-agent")
             plane.http.close()
 
     def test_auth_failure_requires_device_recovery(self):
