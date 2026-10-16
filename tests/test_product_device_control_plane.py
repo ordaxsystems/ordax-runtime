@@ -10,6 +10,7 @@ from pathlib import Path
 
 import httpx
 
+from ordax_dev_agent import __version__ as DEVICE_AGENT_VERSION
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.models import ActionResult
 from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
@@ -70,7 +71,7 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             self.assertNotIn("legacy-control.invalid", str(seen))
             plane.http.close()
 
-    def test_claim_starts_same_fenced_job_context(self):
+    def test_claim_starts_same_fenced_job_context_with_runtime_provenance(self):
         payload = {"request_id": "r", "action": "agent.status"}
         raw = json.dumps(payload, separators=(",", ":")).encode()
         job = {
@@ -101,11 +102,14 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             self.assertEqual([item[0] for item in seen], [
                 "/v3/device/transport/claim", "/v3/device/transport/start",
             ])
-            self.assertEqual(seen[1][1]["job_id"], job["job_id"])
-            self.assertEqual(seen[1][1]["agent_instance_id"], plane.agent_instance_id)
+            for _path, body in seen:
+                self.assertEqual(body["agent_instance_id"], plane.agent_instance_id)
+                self.assertEqual(body["boot_id"], plane.boot_id)
+                self.assertEqual(body["runtime_kind"], "desktop-agent")
+                self.assertEqual(body["agent_version"], DEVICE_AGENT_VERSION)
             plane.http.close()
 
-    def test_complete_persists_canonical_b64_report(self):
+    def test_complete_persists_canonical_b64_report_and_runtime_provenance(self):
         seen = []
         def handler(request):
             seen.append((request.url.path, json.loads(request.content)))
@@ -129,6 +133,40 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             decoded = json.loads(base64.b64decode(report["result_canonical_b64"]))
             self.assertEqual(decoded, {"data": {"value": 1}, "ok": True, "summary": "ok"})
             self.assertNotIn("result", report)
+            self.assertEqual(report["runtime_kind"], "desktop-agent")
+            self.assertEqual(report["agent_version"], DEVICE_AGENT_VERSION)
+            plane.http.close()
+
+    def test_recovery_replays_persisted_execution_version_not_current_process_version(self):
+        seen = []
+        def handler(request):
+            seen.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(200, json={"ok": True})
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            plane = self.plane(root, handler)
+            report = {
+                "job_id": "33333333-3333-4333-8333-333333333333",
+                "effect_id": "44444444-4444-4444-8444-444444444444",
+                "attempt_id": "55555555-5555-4555-8555-555555555555",
+                "lease_id": "66666666-6666-4666-8666-666666666666",
+                "execution_epoch": 1,
+                "agent_instance_id": "77777777-7777-4777-8777-777777777777",
+                "boot_id": "88888888-8888-4888-8888-888888888888",
+                "runtime_kind": "desktop-agent",
+                "agent_version": "0.3.0-old",
+                "report_id": "99999999-9999-4999-8999-999999999999",
+                "status": "succeeded",
+                "result": {"ok": True, "summary": "done", "data": {}},
+                "error_code": None,
+            }
+            plane._terminal_outbox.persist(report)
+            plane.agent_version = "0.4.0-new"
+            recovered = plane.recover_pending_reports()
+            self.assertEqual(recovered, 1)
+            self.assertEqual(seen[-1][0], "/v3/device/transport/recover-report")
+            self.assertEqual(seen[-1][1]["agent_version"], "0.3.0-old")
+            self.assertEqual(seen[-1][1]["runtime_kind"], "desktop-agent")
             plane.http.close()
 
     def test_auth_failure_requires_device_recovery(self):
