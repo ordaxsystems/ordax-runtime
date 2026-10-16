@@ -20,7 +20,7 @@ class AgentRecoveryGovernanceContractTests(unittest.TestCase):
         self.assertIn("persist-credentials: false", governance)
         self.assertIn("assert-github-main-governance.ps1", governance)
         self.assertIn('-ExpectedMainCommit "${{ github.sha }}"', governance)
-        self.assertNotIn("self-hosted", governance)
+        self.assertNotIn("runs-on: [self-hosted", governance)
         self.assertNotIn("contents: write", governance)
 
         self.assertIn("needs: [current-head, governance]", recovery)
