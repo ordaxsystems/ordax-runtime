@@ -14,6 +14,7 @@ on:
       - "scripts/windows/build-ordax-studio-product.ps1"
       - "scripts/windows/ordax-studio-start.ps1"
       - "scripts/windows/ordax-upgrade-quiesce.ps1"
+      - "scripts/windows/assert-installed-runtime-provenance.ps1"
       - "scripts/windows/assert-release-authenticode.ps1"
       - "scripts/windows/assert-release-provenance.ps1"
       - "scripts/windows/assert-release-main-ancestry.ps1"
@@ -50,6 +51,7 @@ jobs:
           foreach ($path in @(
             'scripts/windows/build-ordax-studio-product.ps1',
             'scripts/windows/test-ordax-studio-install-smoke.ps1',
+            'scripts/windows/assert-installed-runtime-provenance.ps1',
             'scripts/windows/assert-installed-studio-ux.ps1',
             'scripts/windows/verify-studio-presentation-handoff.ps1'
           )) {
@@ -150,6 +152,9 @@ jobs:
       - name: Install, migrate legacy launcher, upgrade running runtime, and verify health
         shell: powershell
         run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
+      - name: Prove installed Runtime carries immutable action provenance sender
+        shell: powershell
+        run: .\scripts\windows\assert-installed-runtime-provenance.ps1 -ArtifactDirectory ".\artifact"
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -211,6 +216,9 @@ jobs:
       - name: Install and upgrade from final signed release bytes
         shell: powershell
         run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
+      - name: Prove final signed Runtime carries immutable action provenance sender
+        shell: powershell
+        run: .\scripts\windows\assert-installed-runtime-provenance.ps1 -ArtifactDirectory ".\artifact"
       - name: Reverify final installer SHA-256 after signed installation smoke
         shell: powershell
         run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
