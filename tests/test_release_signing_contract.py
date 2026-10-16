@@ -6,7 +6,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ROOT / ".github" / "workflows" / "windows-product-build.yml"
+WORKFLOWS = ROOT / ".github" / "workflows"
+WORKFLOW = WORKFLOWS / "windows-product-build.yml"
 SIGNER = ROOT / "scripts" / "windows" / "sign-release-authenticode.ps1"
 
 
@@ -30,24 +31,40 @@ class ReleaseSigningContractTests(unittest.TestCase):
         self.assertNotIn("Set-AuthenticodeSignature", text)
         self.assertNotIn("New-SelfSignedCertificate", text)
 
-    def test_windows_release_workflow_remote_actions_are_immutable(self) -> None:
-        text = WORKFLOW.read_text(encoding="utf-8")
-        uses = re.findall(r"^\s*-\s+uses:\s+([^\s#]+)", text, flags=re.MULTILINE)
-        self.assertGreater(len(uses), 0)
-        for action in uses:
-            if action.startswith("./"):
-                continue
-            self.assertRegex(
-                action,
-                r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$",
-                msg=f"remote action is not pinned to an immutable commit: {action}",
+    def test_repository_workflow_remote_actions_are_immutable(self) -> None:
+        workflow_paths = sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml"))
+        self.assertGreater(len(workflow_paths), 0)
+
+        remote_action_count = 0
+        for workflow_path in workflow_paths:
+            text = workflow_path.read_text(encoding="utf-8")
+            uses = re.findall(r"^\s*-\s+uses:\s+([^\s#]+)", text, flags=re.MULTILINE)
+            for action in uses:
+                if action.startswith("./"):
+                    continue
+                remote_action_count += 1
+                self.assertRegex(
+                    action,
+                    r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$",
+                    msg=(
+                        f"{workflow_path.relative_to(ROOT)} remote action is not pinned "
+                        f"to an immutable commit: {action}"
+                    ),
+                )
+            self.assertNotRegex(
+                text,
+                r"uses:\s+[^\s]+@(v[0-9]+|main|master)\b",
+                msg=f"{workflow_path.relative_to(ROOT)} contains a mutable remote action ref",
             )
-        self.assertNotRegex(text, r"uses:\s+[^\s]+@(v[0-9]+|main|master)\b")
-        self.assertIn("actions/checkout@11d5960a326750d5838078e36cf38b85af677262", text)
-        self.assertIn("actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065", text)
-        self.assertIn("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", text)
-        self.assertIn("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", text)
-        self.assertIn("ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756", text)
+
+        self.assertGreater(remote_action_count, 0)
+
+        windows_text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("actions/checkout@11d5960a326750d5838078e36cf38b85af677262", windows_text)
+        self.assertIn("actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065", windows_text)
+        self.assertIn("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", windows_text)
+        self.assertIn("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", windows_text)
+        self.assertIn("ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756", windows_text)
 
     def test_hsm_runner_only_signs_and_hands_off_immutable_artifact(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
