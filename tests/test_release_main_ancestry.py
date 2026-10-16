@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts" / "windows" / "assert-release-main-ancestry.ps1"
+GOVERNANCE_GATE = ROOT / "scripts" / "windows" / "assert-release-repository-governance.ps1"
 
 
 @unittest.skipUnless(
@@ -53,13 +55,17 @@ class ReleaseMainAncestryTests(unittest.TestCase):
     def verify(
         self, tag: str = "v0.5.8", expected_commit: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        # Git-history unit contracts must not depend on the live repository's
+        # administrative state. The real release job keeps GITHUB_REPOSITORY.
+        env.pop("GITHUB_REPOSITORY", None)
         return subprocess.run(
             [
                 "powershell", "-NoProfile", "-NonInteractive", "-File", str(GATE),
                 "-Tag", tag, "-ExpectedCommit", expected_commit or self.first,
                 "-RepositoryRoot", str(self.repo),
             ],
-            check=False, capture_output=True, text=True, timeout=30,
+            check=False, capture_output=True, text=True, timeout=30, env=env,
         )
 
     def test_tag_on_previous_main_commit_is_allowed(self) -> None:
@@ -95,6 +101,32 @@ class ReleaseMainAncestryTests(unittest.TestCase):
 
     def test_malformed_event_sha_is_rejected(self) -> None:
         self.assertNotEqual(self.verify(expected_commit="0" * 39).returncode, 0)
+
+    def test_github_release_requires_protected_canonical_main(self) -> None:
+        ancestry = GATE.read_text(encoding="utf-8")
+        governance = GOVERNANCE_GATE.read_text(encoding="utf-8")
+        self.assertIn("$env:GITHUB_REPOSITORY", ancestry)
+        self.assertIn('assert-release-repository-governance.ps1', ancestry)
+        self.assertIn('-Repository $env:GITHUB_REPOSITORY', ancestry)
+        self.assertIn('default_branch -ne "main"', governance)
+        self.assertIn('/branches/main', governance)
+        self.assertIn('[bool]$main.protected', governance)
+        self.assertIn('Blocked public release: canonical main is not protected', governance)
+        self.assertIn('ORDAX_RELEASE_REPOSITORY_GOVERNANCE=PASS', governance)
+        self.assertNotIn('continue-on-error', governance)
+
+    def test_repository_governance_gate_has_valid_powershell_syntax(self) -> None:
+        command = (
+            "$tokens=$null; $errors=$null; "
+            f"[System.Management.Automation.Language.Parser]::ParseFile('{GOVERNANCE_GATE}', "
+            "[ref]$tokens, [ref]$errors) | Out-Null; "
+            "if (@($errors).Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            check=False, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
