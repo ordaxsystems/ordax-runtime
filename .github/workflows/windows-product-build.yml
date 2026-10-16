@@ -205,7 +205,7 @@ jobs:
         with:
           name: ordax-studio-windows-x64
           path: artifact
-      - name: Verify release provenance and unsigned build digest
+      - name: Verify release provenance and artifact digest
         shell: powershell
         run: |
           .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
@@ -274,7 +274,7 @@ jobs:
       - name: Install and upgrade from final signed release bytes
         shell: powershell
         run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
-      - name: Reverify final signed release provenance
+      - name: Reverify final installer SHA-256 after signed installation smoke
         shell: powershell
         run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Publish GitHub Release assets
