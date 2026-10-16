@@ -20,15 +20,12 @@ def request(**changes):
     }
 
 
-def runtime_config(
-    control_plane: str = "https://control.example.com",
-    product_mcp: str = "https://product.example.com",
-) -> AgentConfig:
+def runtime_config(product_mcp: str = "https://product.example.com") -> AgentConfig:
     root = Path("C:/ordax-test")
     return AgentConfig(
         agent_name="test-pc", poll_seconds=1.0, state_dir=root / "state",
         agent_repo_path=root, hordax_path=root / "hordax", bridge_path=root,
-        control_plane_url=control_plane, product_mcp_url=product_mcp,
+        product_mcp_url=product_mcp,
     )
 
 
@@ -46,7 +43,7 @@ def backend_with(*, subject=None, error=None):
 
 
 class CanonicalElectronAccountSessionTests(unittest.TestCase):
-    def test_browser_session_uses_product_mcp_but_preserves_operational_control_plane(self):
+    def test_browser_session_uses_single_canonical_product_endpoint(self):
         backend = backend_with()
         factory = Mock(return_value=backend)
         authenticate = Mock(return_value=ProductAuthSession(
@@ -55,10 +52,7 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
             "device_id": "22222222-2222-4222-8222-222222222222",
             "enrolled_now": True,
         })
-        config = runtime_config(
-            control_plane="https://commands.example.com",
-            product_mcp="https://product.example.com",
-        )
+        config = runtime_config(product_mcp="https://product.example.com")
         result = account.authorize_account(
             request(), authenticate=authenticate, remote_factory=factory,
             config_factory=lambda: config, connect_device=connect,
@@ -69,7 +63,6 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
         backend.targets.assert_not_called()
         connect.assert_called_once()
         args, kwargs = connect.call_args
-        self.assertEqual("https://commands.example.com", args[0].control_plane_url)
         self.assertEqual("https://product.example.com", args[0].product_mcp_url)
         self.assertEqual(len(args), 1)
         self.assertEqual(kwargs["session"].access_token, "private.jwt.signature")
@@ -106,7 +99,6 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
             ],
         )
         args, kwargs = connect.call_args
-        self.assertEqual("https://control.example.com", args[0].control_plane_url)
         self.assertEqual(
             "https://ordax-mcp.ordaxsystems.workers.dev",
             args[0].product_mcp_url,

@@ -20,13 +20,15 @@ from ordax_dev_agent.remote_protocol import (
 
 
 class ProviderNeutralRemoteProtocolTests(unittest.TestCase):
-    def test_cloudflare_transport_does_not_import_development_v2(self) -> None:
+    def test_canonical_product_transport_does_not_import_retired_providers(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        source = (root / "ordax_dev_agent" / "cloudflare_control_plane.py").read_text(
+        source = (root / "ordax_dev_agent" / "product_device_control_plane.py").read_text(
             encoding="utf-8"
         )
         self.assertNotIn("development_control_plane", source)
         self.assertNotIn("DevelopmentControlPlane", source)
+        self.assertNotIn("/v3/device/ws", source)
+        self.assertNotIn("ORDAX_OPERATOR_TOKEN", source)
         self.assertIn("from .remote_protocol import", source)
 
     def test_digest_dispatch_and_result_are_provider_neutral(self) -> None:

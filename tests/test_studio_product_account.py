@@ -33,7 +33,6 @@ def config_for(state: Path, *, device_id: str | None) -> AgentConfig:
         bridge_path=state.parent / "bridge",
         projects={},
         device_id=device_id,
-        control_plane_url="https://control.example.test",
         product_mcp_url="https://product.example.test",
     )
 
@@ -70,7 +69,7 @@ class StudioProductAccountTests(unittest.TestCase):
         self.assertEqual("product_auth_rejected", raised.exception.code)
         self.assertNotIn("provider internal detail", raised.exception.message)
 
-    def test_existing_product_device_uses_product_endpoint_without_rewriting_control_plane(self) -> None:
+    def test_existing_product_device_uses_canonical_product_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state = Path(raw) / "state"
             state.mkdir()
@@ -87,12 +86,10 @@ class StudioProductAccountTests(unittest.TestCase):
             password_login.assert_not_called()
             enrollment.assert_called_once_with(
                 state,
-                control_plane_url="https://control.example.test",
                 product_mcp_url="https://product.example.test",
                 product_access_token="browser.jwt",
             )
             validated = validate.call_args.args[0]
-            self.assertEqual("https://control.example.test", validated.control_plane_url)
             self.assertEqual("https://product.example.test", validated.product_mcp_url)
             self.assertIs(validate.call_args.args[1], session)
             self.assertEqual(
@@ -105,7 +102,7 @@ class StudioProductAccountTests(unittest.TestCase):
             self.assertNotIn("browser.jwt", repr(result))
             self.assertNotIn("link", result)
 
-    def test_explicit_product_endpoint_override_never_changes_operational_control_plane(self) -> None:
+    def test_explicit_product_endpoint_override_is_single_selected_origin(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state = Path(raw) / "state"
             state.mkdir()
@@ -124,13 +121,8 @@ class StudioProductAccountTests(unittest.TestCase):
                 )
             enrollment.assert_called_once_with(
                 state,
-                control_plane_url="https://control.example.test",
                 product_mcp_url="https://fallback.product.test",
                 product_access_token="jwt",
-            )
-            self.assertEqual(
-                "https://control.example.test",
-                validate.call_args.args[0].control_plane_url,
             )
             self.assertEqual(
                 "https://fallback.product.test",
@@ -168,7 +160,6 @@ class StudioProductAccountTests(unittest.TestCase):
                 result = connect_existing_device(config, session=session)
             enrollment.assert_called_once_with(
                 state,
-                control_plane_url="https://control.example.test",
                 product_mcp_url="https://product.example.test",
                 product_access_token="sensitive-jwt",
             )

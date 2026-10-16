@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_CONTROL_PLANE_URL = "https://mcp.ordax.com.br"
 DEFAULT_PRODUCT_MCP_URL = "https://mcp.ordax.com.br"
 
 
@@ -24,7 +23,6 @@ class AgentConfig:
     adapters: tuple[str, ...] = ()
     control_plane_protocol: str = "cloudflare-v3"
     device_id: str | None = None
-    control_plane_url: str | None = DEFAULT_CONTROL_PLANE_URL
     product_mcp_url: str | None = DEFAULT_PRODUCT_MCP_URL
     workspace_root: Path | None = None
 
@@ -55,6 +53,12 @@ class AgentConfig:
         if not isinstance(settings.get("adapters", []), list):
             raise ValueError("adapters must be a list of locally installed adapter names")
 
+        # One-shot migration input only: old installs stored the same Product
+        # origin under control_plane_url. Do not keep two runtime authorities.
+        if not settings.get("product_mcp_url") and settings.get("control_plane_url"):
+            settings["product_mcp_url"] = settings["control_plane_url"]
+        settings.pop("control_plane_url", None)
+
         projects = settings.get("projects")
         default_project = settings.get("default_project", "hordax")
         if (
@@ -79,10 +83,6 @@ class AgentConfig:
             device_id=os.environ.get(
                 "ORDAX_DEVICE_ID",
                 settings.get("device_id"),
-            ),
-            control_plane_url=os.environ.get(
-                "ORDAX_CONTROL_PLANE_URL",
-                settings.get("control_plane_url") or DEFAULT_CONTROL_PLANE_URL,
             ),
             product_mcp_url=os.environ.get(
                 "ORDAX_PRODUCT_MCP_URL",
@@ -159,8 +159,6 @@ class AgentConfig:
             "hordax_path": str(self.hordax_path),
             "bridge_path": str(self.bridge_path),
             "workspace_root": str((self.workspace_root or self.hordax_path.parent).resolve()),
-            "control_plane_url_configured": bool(self.control_plane_url),
-            "control_plane_url": self.control_plane_url,
             "product_mcp_url_configured": bool(self.product_mcp_url),
             "product_mcp_url": self.product_mcp_url,
             "control_plane_protocol": self.control_plane_protocol,

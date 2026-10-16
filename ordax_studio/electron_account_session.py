@@ -237,7 +237,6 @@ def authorize_account(
     remote_factory: Callable[[str], Any] = ProductRemoteClient,
     config_factory: Callable[[], AgentConfig] = AgentConfig.from_env,
     connect_device: Callable[..., dict[str, Any]] = connect_existing_device,
-    control_plane: str | None = None,
     product_mcp_url: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(data, dict) or set(data) != {"schema", "operation"}:
@@ -255,14 +254,7 @@ def authorize_account(
     config = config_factory()
     if not isinstance(config, AgentConfig):
         raise ValueError("invalid_runtime_config")
-    if control_plane:
-        config = replace(config, control_plane_url=str(control_plane).rstrip("/"))
-
-    # `control_plane` is retained as an internal compatibility/test seam. In
-    # production, Product identity uses the dedicated AgentConfig field.
     primary_product = product_mcp_url or config.product_mcp_url
-    if control_plane and product_mcp_url is None:
-        primary_product = control_plane
     subject, selected_product = _validate_product_subject(
         token,
         _normalize_product_base(primary_product),

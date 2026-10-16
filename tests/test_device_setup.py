@@ -81,7 +81,7 @@ class SetupTests(unittest.TestCase):
         )
 
     def run_setup(self, **kwargs):
-        kwargs.setdefault("control_plane_url", "https://control.example")
+        kwargs.setdefault("product_mcp_url", "https://control.example")
         kwargs.setdefault("product_access_token", "ordax-product-session")
         return configure(
             self.state,
@@ -102,7 +102,8 @@ class SetupTests(unittest.TestCase):
         self.assertNotIn("ordax-product-session", (self.state / "agent-settings.json").read_text())
         settings = json.loads((self.state / "agent-settings.json").read_text())
         self.assertEqual("cloudflare-v3", settings["control_plane_protocol"])
-        self.assertEqual("https://control.example", settings["control_plane_url"])
+        self.assertEqual("https://control.example", settings["product_mcp_url"])
+        self.assertNotIn("control_plane_url", settings)
         self.assertEqual(self.device, settings["device_id"])
         self.assertIn("cerco-no-interior-mvp", settings["projects"])
         self.assertEqual("/v3/device/setup", self.last_request_path)
@@ -134,7 +135,7 @@ class SetupTests(unittest.TestCase):
             client=custom_client,
             binding=self.binding,
             home=self.home,
-            control_plane_url="https://control.example",
+            product_mcp_url="https://control.example",
             product_access_token="ordax-product-session",
             device_kind="laptop",
             channel="stable",
@@ -245,12 +246,12 @@ class SetupTests(unittest.TestCase):
         self.assertTrue((self.state / "device-token.cloudflare-v3.txt").is_file())
 
     def test_requires_https_outside_loopback(self):
-        with self.assertRaisesRegex(SetupError, "CONTROL_PLANE_URL_INVALID"):
-            self.run_setup(control_plane_url="http://control.example")
+        with self.assertRaisesRegex(SetupError, "PRODUCT_MCP_URL_INVALID"):
+            self.run_setup(product_mcp_url="http://control.example")
         self.assertEqual([], self.calls)
 
     def test_allows_loopback_http_for_local_verification(self):
-        result = self.run_setup(control_plane_url="http://127.0.0.1:8787")
+        result = self.run_setup(product_mcp_url="http://127.0.0.1:8787")
         self.assertEqual("cloudflare-v3", result["protocol"])
 
     def test_corrupt_settings_are_not_overwritten(self):

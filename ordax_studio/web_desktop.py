@@ -659,7 +659,7 @@ class StudioApi:
             "summary": "Device Agent ativo" if local_health else (resilience.summary if not resilience.ok else "Device Agent sem health local"),
         }
 
-        base_url = str(config.control_plane_url or "").rstrip("/")
+        base_url = str(config.product_mcp_url or "").rstrip("/")
         remote_mcp = {
             "ok": False,
             "endpoint": f"{base_url}/mcp" if base_url else None,

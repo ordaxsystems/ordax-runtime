@@ -304,7 +304,7 @@ class OrdaxStudioWebTests(unittest.TestCase):
             (root / "agent-settings.json").write_text(json.dumps({
                 "default_project": "demo",
                 "device_id": "device-1",
-                "control_plane_url": "https://example.test",
+                "product_mcp_url": "https://example.test",
                 "projects": {"demo": {"path": str(project), "apps": ["blender"], "blender": {}}},
             }), encoding="utf-8")
             env = {"ORDAX_AGENT_STATE_DIR": str(root), "ORDAX_MEMORY_DB": str(root / "memory.db")}
