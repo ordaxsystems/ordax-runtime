@@ -224,18 +224,21 @@ jobs:
           if ($env:ORDAX_RELEASE_SIGNING_CERT_THUMBPRINT -cnotmatch '^[0-9a-fA-F]{40}$') {
             throw 'Production release signing certificate thumbprint is missing or invalid'
           }
+          $expectedThumbprint = $env:ORDAX_RELEASE_SIGNING_CERT_THUMBPRINT.ToUpperInvariant()
           $pfxPath = Join-Path $env:RUNNER_TEMP 'ordax-production-release-signing.pfx'
           try {
             $bytes = [Convert]::FromBase64String($env:ORDAX_RELEASE_SIGNING_PFX_BASE64)
             [IO.File]::WriteAllBytes($pfxPath, $bytes)
             $password = ConvertTo-SecureString $env:ORDAX_RELEASE_SIGNING_PFX_PASSWORD -AsPlainText -Force
-            $certificate = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation 'Cert:\CurrentUser\My' -Password $password -Exportable:$false
-            if (-not $certificate) { throw 'Production release signing certificate import returned no certificate' }
-            $actualThumbprint = [string]$certificate.Thumbprint
-            if ($actualThumbprint.ToUpperInvariant() -ne $env:ORDAX_RELEASE_SIGNING_CERT_THUMBPRINT.ToUpperInvariant()) {
-              throw 'Imported production signing certificate does not match the configured publisher identity'
+            $imported = @(Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation 'Cert:\CurrentUser\My' -Password $password -Exportable:$false)
+            $matching = @($imported | Where-Object { [string]$_.Thumbprint -and $_.Thumbprint.ToUpperInvariant() -eq $expectedThumbprint })
+            if ($matching.Count -ne 1) {
+              throw 'Imported PFX does not contain exactly one configured ORDAX publisher certificate'
             }
-            "ORDAX_IMPORTED_RELEASE_CERT_THUMBPRINT=$($actualThumbprint.ToUpperInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            if (-not $matching[0].HasPrivateKey) {
+              throw 'Configured ORDAX publisher certificate was imported without its private key'
+            }
+            "ORDAX_IMPORTED_RELEASE_CERT_THUMBPRINT=$expectedThumbprint" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           } finally {
             if (Test-Path -LiteralPath $pfxPath -PathType Leaf) {
               Remove-Item -LiteralPath $pfxPath -Force
@@ -271,17 +274,9 @@ jobs:
       - name: Install and upgrade from final signed release bytes
         shell: powershell
         run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
-      - name: Verify final signed installer checksum
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
-          if (-not $installer) { throw 'Signed ORDAX Studio installer is missing' }
-          $checksumLine = Get-Content .\artifact\SHA256SUMS.txt -Encoding ascii | Select-Object -First 1
-          $actualHash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($checksumLine -ne "$actualHash  $($installer.Name)") {
-            throw 'Final signed installer checksum does not match SHA256SUMS.txt'
-          }
+      - name: Reverify final signed release provenance
+        shell: powershell
+        run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Publish GitHub Release assets
         shell: powershell
         env:
