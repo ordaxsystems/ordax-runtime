@@ -1,5 +1,6 @@
 # Gate public releases on the actual canonical Runtime Git history, not merely
 # a version-looking tag. A tag created on an unrelated branch must fail closed.
+# On GitHub Actions, the same gate also requires canonical main to be protected.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
@@ -45,6 +46,19 @@ if ($head -cne $ExpectedCommit -or $tagCommit -cne $ExpectedCommit) {
 & git -C $RepositoryRoot merge-base --is-ancestor $ExpectedCommit $mainCommit
 if ($LASTEXITCODE -ne 0) {
     throw "Release Runtime commit is not an ancestor of canonical origin/main"
+}
+
+# GitHub Actions always exposes GITHUB_REPOSITORY. Local contract tests intentionally
+# omit it so Git-history behavior can be exercised without external network state.
+if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_REPOSITORY)) {
+    $governanceGate = Join-Path $PSScriptRoot "assert-release-repository-governance.ps1"
+    if (-not (Test-Path -LiteralPath $governanceGate -PathType Leaf)) {
+        throw "Release repository governance gate is missing"
+    }
+    & $governanceGate -Repository $env:GITHUB_REPOSITORY
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release repository governance gate failed"
+    }
 }
 
 Write-Host "ORDAX_RELEASE_MAIN_ANCESTRY_VALID"
