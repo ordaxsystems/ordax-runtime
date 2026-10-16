@@ -41,8 +41,8 @@ jobs:
   packaging-contracts:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
@@ -77,7 +77,7 @@ jobs:
     needs: packaging-contracts
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Resolve canonical Studio source lock
         shell: powershell
         run: |
@@ -85,13 +85,13 @@ jobs:
           if ($lock.schema -ne "ordax.studio-source-lock/1") { throw "Studio source lock schema is invalid" }
           "ORDAX_STUDIO_SOURCE_COMMIT=$($lock.commit)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Checkout canonical ORDAX Studio app source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ordaxsystems/ordax-apps
           ref: ${{ env.ORDAX_STUDIO_SOURCE_COMMIT }}
           path: .ordax/apps
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -100,7 +100,7 @@ jobs:
           cache: npm
           cache-dependency-path: .ordax/apps/tools/assistant-host/package-lock.json
       - name: Enable MSVC command line
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: x64
       - name: Install Inno Setup
@@ -134,7 +134,7 @@ jobs:
             "$hash  $($_.Name)" | Add-Content .\dist\windows\SHA256SUMS.txt -Encoding ascii
           }
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ordax-studio-windows-x64
           path: |
@@ -148,11 +148,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout pinned Runtime smoke implementation
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Download Windows installer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ordax-studio-windows-x64
           path: artifact
@@ -171,7 +171,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout tagged Runtime source and canonical Studio lock
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -196,7 +196,7 @@ jobs:
         shell: powershell
         run: .\scripts\windows\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
       - name: Checkout canonical Apps main for immutable Studio source ancestry
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ordaxsystems/ordax-apps
           ref: main
@@ -218,7 +218,7 @@ jobs:
           }
           Write-Host "ORDAX_STUDIO_RELEASE_SOURCE_MAIN_ANCESTRY=PASS"
       - name: Download validated unsigned Windows installer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ordax-studio-windows-x64
           path: artifact
@@ -257,7 +257,7 @@ jobs:
         shell: powershell
         run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Upload immutable signed Windows installer handoff
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ordax-studio-windows-x64-signed
           path: |
@@ -275,11 +275,11 @@ jobs:
       contents: read
     steps:
       - name: Checkout pinned Runtime signed smoke implementation
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Download immutable signed Windows installer handoff
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ordax-studio-windows-x64-signed
           path: artifact
@@ -312,7 +312,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout tagged Runtime publication implementation
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -320,7 +320,7 @@ jobs:
         shell: powershell
         run: .\scripts\windows\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
       - name: Download immutable signed Windows installer handoff
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ordax-studio-windows-x64-signed
           path: artifact
