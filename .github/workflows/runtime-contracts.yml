@@ -19,7 +19,7 @@ jobs:
       - name: Install Runtime with the supported MCP SDK floor
         run: python -m pip install --disable-pip-version-check . "mcp==1.30.0"
       - name: Verify registered tools and recovery on the minimum SDK
-        run: python -m unittest tests.test_product_action_recovery tests.test_product_remote_client tests.test_product_mcp_server
+        run: python -m unittest tests.test_product_action_recovery tests.test_product_remote_client tests.test_product_mcp_server tests.test_device_mcp_headless_files
 
   runtime-contracts:
     runs-on: windows-latest
@@ -93,6 +93,7 @@ jobs:
           tests.test_computer_dispatch_policy
           tests.test_computer_runtime_integrity
           tests.test_computer_filesystem_actions
+          tests.test_device_mcp_headless_files
           tests.test_studio_product_account
           tests.test_studio_electron_account_session
           tests.test_computer_process_actions
