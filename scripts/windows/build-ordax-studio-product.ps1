@@ -287,18 +287,83 @@ $cl = Get-Command cl.exe -ErrorAction SilentlyContinue
 if (-not $cl) {
     throw "cl.exe was not found. Run from a Visual Studio developer environment."
 }
+$rc = Get-Command rc.exe -ErrorAction SilentlyContinue
+if (-not $rc) {
+    throw "rc.exe was not found. Run from a Visual Studio developer environment."
+}
+
+function Convert-ToWindowsVersionQuad([string]$SemanticVersion) {
+    $core = ($SemanticVersion -split '[+-]', 2)[0]
+    $parts = $core -split '\.'
+    if ($parts.Count -ne 3 -or ($parts | Where-Object { $_ -notmatch '^\d+$' }).Count -ne 0) {
+        throw "Version cannot be represented as a Windows VERSIONINFO value: $SemanticVersion"
+    }
+    return "$($parts[0]),$($parts[1]),$($parts[2]),0"
+}
+
+function Write-LauncherVersionResource(
+    [string]$Path,
+    [string]$SemanticVersion,
+    [string]$Description,
+    [string]$InternalName,
+    [string]$OriginalFilename
+) {
+    $quad = Convert-ToWindowsVersionQuad $SemanticVersion
+    $resource = @"
+#include <windows.h>
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION $quad
+ PRODUCTVERSION $quad
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "ORDAX\0"
+            VALUE "FileDescription", "$Description\0"
+            VALUE "FileVersion", "$SemanticVersion\0"
+            VALUE "InternalName", "$InternalName\0"
+            VALUE "OriginalFilename", "$OriginalFilename\0"
+            VALUE "ProductName", "ORDAX\0"
+            VALUE "ProductVersion", "$SemanticVersion\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
+"@
+    [System.IO.File]::WriteAllText($Path, $resource, [System.Text.Encoding]::ASCII)
+}
+
 $launcherSource = Join-Path $repoRoot "packaging\windows\ordax_launcher.c"
 $studioExe = Join-Path $stageRoot "ORDAX Studio.exe"
 $legacyStudioExe = Join-Path $stageRoot "ORDAX Dev.exe"
 $runtimeExe = Join-Path $stageRoot "ORDAX Runtime.exe"
+$studioRc = Join-Path $buildRoot "ordax-studio-version.rc"
+$studioRes = Join-Path $buildRoot "ordax-studio-version.res"
+$runtimeRc = Join-Path $buildRoot "ordax-runtime-version.rc"
+$runtimeRes = Join-Path $buildRoot "ordax-runtime-version.res"
+Write-LauncherVersionResource $studioRc $Version "ORDAX Studio launcher" "ORDAX Studio" "ORDAX Studio.exe"
+Write-LauncherVersionResource $runtimeRc $runtimeVersion "ORDAX Runtime launcher" "ORDAX Runtime" "ORDAX Runtime.exe"
 
 Push-Location $buildRoot
 try {
-    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=0 "/Fe:$studioExe" $launcherSource /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib
+    & rc.exe /nologo "/fo$studioRes" $studioRc
+    if ($LASTEXITCODE -ne 0) { throw "ORDAX Studio VERSIONINFO compilation failed" }
+    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=0 "/Fe:$studioExe" $launcherSource $studioRes /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib
     if ($LASTEXITCODE -ne 0) { throw "ORDAX Studio launcher compilation failed" }
     Remove-Item "ordax_launcher.obj" -Force -ErrorAction SilentlyContinue
 
-    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=1 "/Fe:$runtimeExe" $launcherSource /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib
+    & rc.exe /nologo "/fo$runtimeRes" $runtimeRc
+    if ($LASTEXITCODE -ne 0) { throw "ORDAX Runtime VERSIONINFO compilation failed" }
+    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=1 "/Fe:$runtimeExe" $launcherSource $runtimeRes /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib
     if ($LASTEXITCODE -ne 0) { throw "ORDAX Runtime launcher compilation failed" }
     Remove-Item "ordax_launcher.obj" -Force -ErrorAction SilentlyContinue
 } finally {
@@ -308,6 +373,16 @@ try {
 if (-not (Test-Path $studioExe) -or -not (Test-Path $runtimeExe)) {
     throw "Native ORDAX launchers were not produced"
 }
+$studioVersionInfo = (Get-Item -LiteralPath $studioExe).VersionInfo
+if ($studioVersionInfo.FileVersion -ne $Version -or $studioVersionInfo.ProductVersion -ne $Version) {
+    throw "ORDAX Studio launcher VERSIONINFO does not match canonical Studio version $Version"
+}
+$runtimeVersionInfo = (Get-Item -LiteralPath $runtimeExe).VersionInfo
+if ($runtimeVersionInfo.FileVersion -ne $runtimeVersion -or $runtimeVersionInfo.ProductVersion -ne $runtimeVersion) {
+    throw "ORDAX Runtime launcher VERSIONINFO does not match packaged Runtime version $runtimeVersion"
+}
+Write-Output "ORDAX_STUDIO_LAUNCHER_VERSION=$($studioVersionInfo.FileVersion)"
+Write-Output "ORDAX_RUNTIME_LAUNCHER_VERSION=$($runtimeVersionInfo.FileVersion)"
 
 # Compatibility only: old shortcuts/automation may still point at ORDAX Dev.exe.
 # Keep one implementation by copying the exact Studio launcher bytes rather than
