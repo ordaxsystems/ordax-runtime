@@ -152,6 +152,61 @@ def project_patch(
     return {"ok": result.ok, "summary": result.summary, "data": result.data}
 
 
+def _computer_result(action: str, payload: dict) -> dict:
+    """Dispatch through the one Runtime registry, including its local policy."""
+    result = registry().execute(action, payload)
+    return {"ok": result.ok, "summary": result.summary, "data": result.data}
+
+
+@mcp.tool()
+def computer_access_status() -> dict:
+    """Inspect the current owner-defined local computer access policy."""
+    return _computer_result("computer.access_status", {})
+
+
+@mcp.tool()
+def computer_directory_list(path: str, max_depth: int = 2, max_entries: int = 200) -> dict:
+    """List a bounded directory within the local owner's allowed roots."""
+    return _computer_result("computer.directory_list", {
+        "path": path, "max_depth": max_depth, "max_entries": max_entries,
+    })
+
+
+@mcp.tool()
+def computer_text_read(path: str, start_line: int = 1, end_line: int | None = None) -> dict:
+    """Read bounded UTF-8 text and return its SHA-256 for safe edits."""
+    return _computer_result("computer.text_read", {
+        "path": path, "start_line": start_line, "end_line": end_line,
+    })
+
+
+@mcp.tool()
+def computer_text_write(
+    path: str,
+    content: str,
+    expected_sha256: str = "",
+    create: bool = False,
+) -> dict:
+    """Create or overwrite allowed text; existing files require the current SHA-256."""
+    return _computer_result("computer.text_write", {
+        "path": path, "content": content,
+        "expected_sha256": expected_sha256, "create": create,
+    })
+
+
+@mcp.tool()
+def computer_text_patch(
+    path: str,
+    expected_sha256: str,
+    replacements: list[dict],
+) -> dict:
+    """Apply exact replacements only when the file still matches its SHA-256."""
+    return _computer_result("computer.text_patch", {
+        "path": path, "expected_sha256": expected_sha256,
+        "replacements": replacements,
+    })
+
+
 @mcp.tool()
 def git_quick_status(project: str | None = None) -> dict:
     """Read a bounded tracked-file Git status for responsive UI/health checks."""
