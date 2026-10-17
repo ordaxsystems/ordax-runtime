@@ -3,10 +3,22 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from ordax_dev_agent.main import _mark_transport_delivery_error, _mark_transport_healthy
+from ordax_dev_agent.main import (
+    _mark_transport_delivery_error,
+    _mark_transport_healthy,
+    _transport_retry_delay,
+)
 
 
 class TransportHealthRecoveryTests(unittest.TestCase):
+    def test_bounded_retry_progression_limits_backend_and_log_pressure(self) -> None:
+        delays = [_transport_retry_delay(attempt) for attempt in range(1, 11)]
+        self.assertEqual([5.0, 10.0, 20.0, 30.0], delays[:4])
+        self.assertTrue(all(delay == 30.0 for delay in delays[4:]))
+        self.assertEqual(5.0, _transport_retry_delay(1))  # first poll after recovery
+        with self.assertRaises(ValueError):
+            _transport_retry_delay(0)
+
     def test_successful_heartbeat_clears_active_delivery_error_but_preserves_history(self) -> None:
         runtime = {
             "state": "ready",
