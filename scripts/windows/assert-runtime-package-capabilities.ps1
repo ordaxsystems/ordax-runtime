@@ -21,6 +21,7 @@ if (-not (Test-Path -LiteralPath $expectedModule -PathType Leaf)) {
 }
 
 $probe = @'
+from importlib import metadata
 from pathlib import Path
 import sys
 
@@ -42,10 +43,14 @@ if ProductDeviceControlPlane.runtime_kind != "desktop-agent":
 if not callable(getattr(ProductDeviceControlPlane, "_runtime_provenance", None)):
     raise SystemExit("Product device control-plane runtime provenance sender is missing")
 if transport.DEVICE_AGENT_VERSION != ordax_dev_agent.__version__:
-    raise SystemExit("Product device control-plane version authority is inconsistent")
+    raise SystemExit("Product device control-plane agent version authority is inconsistent")
 if not isinstance(ordax_dev_agent.__version__, str) or not ordax_dev_agent.__version__.strip():
-    raise SystemExit("ORDAX Runtime package version authority is empty")
-print(f"ORDAX_RUNTIME_PACKAGE_VERSION={ordax_dev_agent.__version__.strip()}")
+    raise SystemExit("ORDAX device-agent version authority is empty")
+runtime_package_version = metadata.version("ordax-runtime").strip()
+if not runtime_package_version:
+    raise SystemExit("ORDAX Runtime distribution version authority is empty")
+print(f"ORDAX_DEVICE_AGENT_VERSION={ordax_dev_agent.__version__.strip()}")
+print(f"ORDAX_RUNTIME_PACKAGE_VERSION={runtime_package_version}")
 '@
 
 $probeOutput = @($probe | & $privatePythonPath -I - $expectedModule)
@@ -62,7 +67,7 @@ if ($runtimePackageVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9
 }
 
 # The staged builder verifies its just-linked launchers before product-manifest.json exists.
-# Installed lifecycle phases must additionally prove that the immutable package authority,
+# Installed lifecycle phases must additionally prove that the immutable distribution authority,
 # installed manifest, and native launcher VERSIONINFO all describe the same Runtime.
 if ($Phase -ne "staged") {
     $productRoot = Split-Path -Parent $runtimeRootPath
