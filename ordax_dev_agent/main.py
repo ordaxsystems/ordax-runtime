@@ -47,6 +47,16 @@ def _startup_log(config: AgentConfig | None, message: str) -> None:
         pass
 
 
+def _transport_retry_delay(consecutive_failures: int) -> float:
+    """Bounded exponential wait while remote transport is unavailable.
+
+    Successful polls reset the streak; no background polling thread is needed.
+    """
+    if consecutive_failures < 1:
+        raise ValueError("consecutive_failures must be positive")
+    return min(30.0, 5.0 * (2 ** min(consecutive_failures - 1, 3)))
+
+
 def _mark_transport_delivery_error(runtime: dict, error: Exception) -> None:
     summary = str(error)
     runtime["state"] = "control-plane-error"
@@ -248,10 +258,12 @@ def main() -> int:
     print(json.dumps(status_payload(), indent=2))
 
     stop = False
+    stop_requested = threading.Event()
 
     def _stop(*_args) -> None:
         nonlocal stop
         stop = True
+        stop_requested.set()
 
     signal.signal(signal.SIGINT, _stop)
     if hasattr(signal, "SIGTERM"):
@@ -330,6 +342,7 @@ def main() -> int:
 
     next_heartbeat = 0.0
     idle_claim_misses = 0
+    transport_failures = 0
 
     try:
         while not stop:
@@ -359,6 +372,8 @@ def main() -> int:
 
                 claim_started = time.monotonic()
                 job = control.claim_next_job()
+                transport_failures = 0
+                runtime.pop("transport_retry_seconds", None)
                 claim_seconds = time.monotonic() - claim_started
                 if job is None:
                     idle_claim_misses += 1
@@ -502,9 +517,15 @@ def main() -> int:
                     runtime["state"] = "credential-recovery-required"
                     return 43
                 _mark_transport_delivery_error(runtime, error)
-                print(f"control-plane error: {error}", file=sys.stderr)
-                time.sleep(max(5.0, config.poll_seconds))
-                runtime["state"] = "ready"
+                transport_failures += 1
+                retry_delay = _transport_retry_delay(transport_failures)
+                runtime["transport_retry_seconds"] = retry_delay
+                # Report the first failures and powers of two, not every
+                # identical error through a prolonged backend outage.
+                if transport_failures <= 2 or (transport_failures & (transport_failures - 1)) == 0:
+                    print(f"control-plane error (retry in {retry_delay:.0f}s): {error}", file=sys.stderr)
+                stop_requested.wait(retry_delay)
+                runtime["state"] = "stopping" if stop else "ready"
     finally:
         runtime["state"] = "stopping"
         try:
