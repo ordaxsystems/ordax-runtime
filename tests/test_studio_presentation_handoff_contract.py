@@ -54,6 +54,13 @@ class StudioPresentationHandoffContractTests(unittest.TestCase):
         ):
             self.assertIn(required, source)
 
+    def test_official_packager_requires_validated_product_origin_account_handoff(self) -> None:
+        build = (ROOT / "scripts/windows/build-ordax-studio-product.ps1").read_text("utf-8")
+        self.assertIn("acceptAccountToken(token, subjectId, productOrigin)", build)
+        self.assertIn("acceptAccountToken(token, verifiedSubjectId, verifiedProductOrigin)", build)
+        self.assertNotIn('Contains("acceptAccountToken(token, subjectId)")', build)
+        self.assertNotIn('Contains("acceptAccountToken(token, verifiedSubjectId)")', build)
+
     def test_ci_builds_on_real_windows_from_apps_checkout_without_release_upload(self) -> None:
         workflow = (ROOT / ".github/workflows/studio-presentation-handoff.yml").read_text("utf-8")
         self.assertIn("runs-on: windows-2025", workflow)
