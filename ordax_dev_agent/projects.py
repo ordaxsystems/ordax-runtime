@@ -2,9 +2,16 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+
+
+_GITHUB_REPOSITORY_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$"
+)
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,78 @@ class Project:
         return {"slug": self.slug, "path": str(self.root), "apps": list(self.apps),
                 "available": self.root.is_dir(), "allowed_branches": list(self.allowed_branches),
                 "unity": self.unity, "blender": self.blender, "preview": self.preview}
+
+
+def canonical_github_repository_full_name(value: str) -> str | None:
+    """Return canonical ``owner/repository`` for supported GitHub remote forms.
+
+    This parser deliberately accepts only github.com remotes. Product project
+    authority is GitHub-backed today, so a non-GitHub remote must fail closed
+    instead of being guessed from a basename.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+
+    candidate: str | None = None
+    if raw.startswith("git@github.com:"):
+        candidate = raw[len("git@github.com:"):]
+    else:
+        try:
+            parsed = urlparse(raw)
+        except ValueError:
+            return None
+        if (parsed.hostname or "").lower() != "github.com":
+            return None
+        candidate = parsed.path.lstrip("/")
+
+    candidate = candidate.removesuffix(".git").strip("/")
+    if not _GITHUB_REPOSITORY_RE.fullmatch(candidate):
+        return None
+    owner, repository = candidate.split("/", 1)
+    return f"{owner}/{repository}".lower()
+
+
+def project_repository_full_name(project: Project) -> str | None:
+    """Read one registered project's canonical GitHub origin without a shell."""
+    if not project.root.is_dir():
+        return None
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(project.root), "remote", "get-url", "origin"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            shell=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return canonical_github_repository_full_name(completed.stdout.strip())
+
+
+def resolve_project_for_repository(config, repository_full_name: str) -> Project:
+    """Bind canonical Product project authority to exactly one local project.
+
+    The caller supplies a repository identity that came from the authenticated
+    Platform project resolver. Local slugs are never treated as authority here.
+    """
+    canonical = canonical_github_repository_full_name(repository_full_name)
+    if canonical is None:
+        raise RuntimeError("canonical Product project repository is invalid")
+
+    matches = [
+        project
+        for project in load_projects(config).values()
+        if project_repository_full_name(project) == canonical
+    ]
+    if not matches:
+        raise RuntimeError("authorized Product repository is not bound to a registered local project")
+    if len(matches) != 1:
+        raise RuntimeError("authorized Product repository maps to multiple registered local projects")
+    return matches[0]
 
 
 def load_projects(config) -> dict[str, Project]:
