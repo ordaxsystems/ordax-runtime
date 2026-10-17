@@ -80,7 +80,10 @@ class DeviceMcpFileRoundTripTests(unittest.IsolatedAsyncioTestCase):
 
                     policy = tool_payload(await session.call_tool("computer_access_status", {}))
                     self.assertTrue(policy["ok"])
-                    self.assertEqual([str(allowed)], policy["data"]["allowed_roots"])
+                    self.assertEqual(1, len(policy["data"]["allowed_roots"]))
+                    self.assertTrue(os.path.samefile(
+                        policy["data"]["allowed_roots"][0], allowed,
+                    ))
 
                     created = tool_payload(await session.call_tool("computer_text_write", {
                         "path": str(target), "content": "v1\n", "create": True,
