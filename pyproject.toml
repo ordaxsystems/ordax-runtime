@@ -34,7 +34,7 @@ ordax-studio = "ordax_studio.cli:main"
 ordax-dev = "ordax_studio.product_web_desktop:main"
 
 [tool.setuptools.packages.find]
-include = ["mcp_blender_unity*", "ordax_core*", "ordax_studio*", "ordax_dev_agent*", "ordax_device_agent*"]
+include = ["mcp_blender_unity*", "ordax_core*", "ordax_studio*", "ordax_connector*", "ordax_dev_agent*", "ordax_device_agent*"]
 
 [tool.setuptools.package-data]
 ordax_dev_agent = ["assets/*.py", "assets/*.cs", "assets/*.json"]

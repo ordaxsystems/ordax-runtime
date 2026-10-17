@@ -66,9 +66,26 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             plane = self.plane(Path(raw), handler)
             plane.heartbeat(["agent.status"], agent_version="1.2.3")
             self.assertEqual(seen[0][0], "/v3/device/transport/heartbeat")
-            self.assertEqual(seen[0][1]["capabilities"], ["agent.status"])
+            expected = hashlib.sha256(b'["agent.status"]').hexdigest()
+            self.assertEqual(seen[0][1]["capabilities_digest"], expected)
+            self.assertNotIn("capabilities", seen[0][1])
             self.assertEqual(plane.product_central_session.ticks, 1)
             self.assertNotIn("legacy-control.invalid", str(seen))
+            plane.http.close()
+
+    def test_heartbeat_digest_is_order_independent_and_cached(self):
+        seen = []
+        def handler(request):
+            seen.append(json.loads(request.content))
+            return httpx.Response(200, json={"ok": True, "recorded": True})
+        with tempfile.TemporaryDirectory() as raw:
+            plane = self.plane(Path(raw), handler)
+            plane.heartbeat(["b", "a", "a"], agent_version="1")
+            first = seen[-1]["capabilities_digest"]
+            plane.heartbeat(["a", "b"], agent_version="1")
+            self.assertEqual(seen[-1]["capabilities_digest"], first)
+            self.assertEqual(first, hashlib.sha256(b'["a","b"]').hexdigest())
+            self.assertEqual(plane._heartbeat_capabilities, ("a", "b"))
             plane.http.close()
 
     def test_claim_starts_same_fenced_job_context_with_runtime_provenance(self):
