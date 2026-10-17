@@ -14,6 +14,7 @@ from .config import AgentConfig
 from .device_credentials import resolve_token_path
 from .models import ActionResult, AgentJob
 from .product_central_session import ProductCentralSessionClient
+from .projects import resolve_project_for_repository
 from .remote_protocol import (
     DeviceAuthorizationError,
     TransientDeliveryError,
@@ -23,6 +24,15 @@ from .remote_protocol import (
     read_secret,
 )
 from .terminal_outbox import TerminalOutbox
+
+
+_PROJECT_SCOPE_ACTIONS = frozenset({
+    "agent.project_briefing",
+    "continuity.get",
+    "continuity.update",
+    "handoff.create",
+    "handoff.get",
+})
 
 
 class ProductDeviceControlPlane:
@@ -158,8 +168,35 @@ class ProductDeviceControlPlane:
                 # Session attestation never weakens device transport health.
                 pass
 
+    def _bind_project_scope(self, row: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        capability = str(row.get("capability") or row.get("operation") or "")
+        raw_scope = payload.pop("_ordax_project_scope", None)
+        if capability not in _PROJECT_SCOPE_ACTIONS:
+            if raw_scope is not None:
+                raise RuntimeError("canonical Product project scope attestation is unexpected")
+            return payload
+
+        project_id = str(row.get("project_id") or "")
+        try:
+            uuid.UUID(project_id)
+        except ValueError as error:
+            raise RuntimeError("canonical Product project id is missing or invalid") from error
+        if not isinstance(raw_scope, dict):
+            raise RuntimeError("canonical Product project scope attestation is missing")
+
+        scope_project_id = str(raw_scope.get("project_id") or "")
+        repository_full_name = str(raw_scope.get("repository_full_name") or "")
+        if scope_project_id.lower() != project_id.lower():
+            raise RuntimeError("canonical Product project scope id mismatch")
+
+        local_project = resolve_project_for_repository(self.config, repository_full_name)
+        rebound = dict(payload)
+        rebound.pop("project", None)
+        rebound["project"] = local_project.slug
+        return rebound
+
     def _job_from_wire(self, row: dict[str, Any]) -> AgentJob:
-        payload = decode_job_payload(row)
+        payload = self._bind_project_scope(row, decode_job_payload(row))
         action, action_payload, project = dispatch_job(row, payload)
         job = AgentJob(
             id=str(row.get("job_id") or ""),
