@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.client
 import json
 import unittest
+from pathlib import Path
 
 from ordax_dev_agent.status_server import start_status_server
 
@@ -57,6 +58,61 @@ class LocalRuntimeStatusSecurityTests(unittest.TestCase):
                         self.assertIn("private", body.decode())
                     if path == "/capabilities":
                         self.assertTrue(body.startswith(b"{"))
+
+    def test_lightweight_health_does_not_evaluate_full_status(self) -> None:
+        counts = {"full": 0, "health": 0}
+
+        def full() -> dict:
+            counts["full"] += 1
+            return {"agent_version": "0.4.6", "runtime": {"state": "busy"}}
+
+        def health() -> dict:
+            counts["health"] += 1
+            return {
+                "agent_version": "0.4.6",
+                "runtime": {"state": "busy", "last_job_id": "job-123"},
+            }
+
+        lightweight = start_status_server(full, port=0, health_provider=health)
+        self.addCleanup(lightweight.server_close)
+        self.addCleanup(lightweight.shutdown)
+        port = lightweight.server_port
+
+        def call(path: str, host: str) -> tuple[int, bytes]:
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+            try:
+                connection.putrequest("GET", path, skip_host=True)
+                connection.putheader("Host", host)
+                connection.endheaders()
+                response = connection.getresponse()
+                return response.status, response.read()
+            finally:
+                connection.close()
+
+        for _ in range(3):
+            code, payload = call("/health", f"127.0.0.1:{port}")
+            self.assertEqual(200, code)
+            self.assertEqual(
+                {
+                    "ok": True, "state": "busy", "version": "0.4.6",
+                    "runtime": {"state": "busy", "last_job_id": "job-123"},
+                },
+                json.loads(payload),
+            )
+        self.assertEqual({"full": 0, "health": 3}, counts)
+        code, payload = call("/health", "evil.example")
+        self.assertEqual((403, b""), (code, payload))
+        self.assertEqual({"full": 0, "health": 3}, counts)
+        code, _ = call("/status", f"127.0.0.1:{port}")
+        self.assertEqual(200, code)
+        self.assertEqual({"full": 1, "health": 3}, counts)
+
+    def test_watchdog_uses_lightweight_health_without_cim(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "scripts" / "windows"
+                  / "ordax-agent-watchdog.ps1").read_text(encoding="utf-8")
+        self.assertIn('$healthUrl = "http://127.0.0.1:8765/health"', source)
+        self.assertIn("$runtime.last_job_id", source)
+        self.assertNotIn("Get-CimInstance", source)
 
     def test_untrusted_hosts_never_reach_provider_on_any_endpoint(self) -> None:
         cases = [

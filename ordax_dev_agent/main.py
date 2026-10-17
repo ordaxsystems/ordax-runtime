@@ -217,7 +217,17 @@ def main() -> int:
         base["runtime"] = dict(runtime)
         return base
 
-    status_server = start_status_server(status_payload)
+    def health_payload() -> dict:
+        # A watchdog probe must not enumerate projects, integrations or actions.
+        return {
+            "agent_version": __version__,
+            "runtime": {
+                "state": runtime["state"],
+                "last_job_id": runtime["last_job_id"],
+            },
+        }
+
+    status_server = start_status_server(status_payload, health_provider=health_payload)
     _startup_log(config, "STATUS_SERVER_READY port=8765")
 
     from .actions import ActionRegistry

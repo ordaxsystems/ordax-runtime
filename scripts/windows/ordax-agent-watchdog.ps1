@@ -10,7 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "SilentlyContinue"
-$healthUrl = "http://127.0.0.1:8765/status"
+$healthUrl = "http://127.0.0.1:8765/health"
 $stateDir = Join-Path $env:LOCALAPPDATA "OrdaX\DevAgent"
 $logPath = Join-Path $stateDir "watchdog.log"
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null

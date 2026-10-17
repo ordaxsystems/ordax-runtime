@@ -222,7 +222,7 @@ async function refresh() {
   }
 }
 refresh();
-setInterval(refresh, 2000);
+setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 5000);
 </script>
 </body>
 </html>
@@ -233,6 +233,8 @@ def start_status_server(
     status_provider: Callable[[], dict],
     host: str = "127.0.0.1",
     port: int = 8765,
+    *,
+    health_provider: Callable[[], dict] | None = None,
 ) -> ThreadingHTTPServer:
     # This service returns device/project paths and Runtime metadata. Never
     # expose it on an external interface, even when explicitly misconfigured.
@@ -292,18 +294,24 @@ def start_status_server(
                 return
 
             if path == "/health":
-                status = status_provider()
+                # The Runtime supplies an O(1) snapshot for frequent watchdog probes.
+                # Keep the legacy full provider as a compatibility fallback.
+                status = health_provider() if health_provider is not None else status_provider()
                 runtime = status.get("runtime") or {}
-                body = json.dumps(
-                    {
-                        "ok": runtime.get("state") not in {
-                            "pairing-error",
-                            "control-plane-error",
-                        },
+                payload = {
+                    "ok": runtime.get("state") not in {
+                        "pairing-error",
+                        "control-plane-error",
+                    },
+                    "state": runtime.get("state"),
+                    "version": status.get("agent_version"),
+                }
+                if health_provider is not None:
+                    payload["runtime"] = {
                         "state": runtime.get("state"),
-                        "version": status.get("agent_version"),
+                        "last_job_id": runtime.get("last_job_id"),
                     }
-                ).encode("utf-8")
+                body = json.dumps(payload).encode("utf-8")
                 self._headers("application/json; charset=utf-8", len(body))
                 self.wfile.write(body)
                 return
