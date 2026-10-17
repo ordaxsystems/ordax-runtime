@@ -154,8 +154,8 @@ if ($studioAppSource) {
     $accountHostSource = Get-Content -LiteralPath $accountHost -Raw -Encoding UTF8
     $accountRuntimeSource = Get-Content -LiteralPath $accountRuntime -Raw -Encoding UTF8
     $consumerVerifiedSubject = $accountConsumerSource.Contains("subject_id") -and $accountConsumerSource.Contains("SUBJECT_UUID")
-    $hostAttestedSubject = $accountHostSource.Contains("acceptAccountToken(token, subjectId)")
-    $runtimeAttestedSubject = $accountRuntimeSource.Contains("acceptAccountToken(token, verifiedSubjectId)")
+    $hostAttestedSubject = $accountHostSource.Contains("acceptAccountToken(token, subjectId, productOrigin)")
+    $runtimeAttestedSubject = $accountRuntimeSource.Contains("acceptAccountToken(token, verifiedSubjectId, verifiedProductOrigin)")
     if (-not ($consumerVerifiedSubject -and $hostAttestedSubject -and $runtimeAttestedSubject)) {
         throw "Pinned Studio account protocol cannot consume verified Runtime subject; update canonical Apps source lock"
     }
