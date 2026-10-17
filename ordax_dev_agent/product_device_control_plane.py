@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from ordax_connector.capabilities import canonical_capabilities, capability_digest
+
 from . import __version__ as DEVICE_AGENT_VERSION
 from .config import AgentConfig
 from .device_credentials import resolve_token_path
@@ -68,6 +70,8 @@ class ProductDeviceControlPlane:
         # action lets Platform persist the version that actually performed the
         # effect rather than attributing old actions to current presence later.
         self.agent_version = str(DEVICE_AGENT_VERSION)
+        self._heartbeat_capabilities: tuple[str, ...] | None = None
+        self._heartbeat_capability_digest: str | None = None
         self._jobs: dict[str, AgentJob] = {}
         self._terminal_outbox = TerminalOutbox(
             config.state_dir, "product-http-v1", self.device_id,
@@ -152,6 +156,15 @@ class ProductDeviceControlPlane:
             )
         return payload
 
+    def _capabilities_digest(self, actions: list[str]) -> str:
+        canonical = canonical_capabilities(actions)
+        if canonical != self._heartbeat_capabilities:
+            self._heartbeat_capabilities = canonical
+            self._heartbeat_capability_digest = capability_digest(canonical)
+        if self._heartbeat_capability_digest is None:
+            raise RuntimeError("connector capability digest is unavailable")
+        return self._heartbeat_capability_digest
+
     def heartbeat(self, actions: list[str], *, agent_version: str,
                   metadata: dict[str, Any] | None = None, status: str = "online",
                   last_error: str | None = None) -> None:
@@ -159,7 +172,7 @@ class ProductDeviceControlPlane:
         self._post("heartbeat", {
             "status": status,
             "agent_version": agent_version,
-            "capabilities": list(actions),
+            "capabilities_digest": self._capabilities_digest(actions),
         }, timeout=10.0)
         if status != "offline":
             try:
