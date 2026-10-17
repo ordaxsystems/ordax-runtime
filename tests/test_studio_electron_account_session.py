@@ -72,6 +72,7 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
         self.assertEqual(result["access_token"], "private.jwt.signature")
         self.assertEqual(result["subject_id"], "11111111-1111-4111-8111-111111111111")
         self.assertEqual(result["device_id"], "22222222-2222-4222-8222-222222222222")
+        self.assertEqual(result["product_mcp_url"], "https://product.example.com")
         self.assertIs(result["enrolled_now"], True)
         self.assertNotIn("password", json.dumps(result).lower())
 
@@ -106,6 +107,10 @@ class CanonicalElectronAccountSessionTests(unittest.TestCase):
         self.assertEqual(
             "https://ordax-mcp.ordaxsystems.workers.dev",
             kwargs["product_mcp_url"],
+        )
+        self.assertEqual(
+            result["product_mcp_url"],
+            "https://ordax-mcp.ordaxsystems.workers.dev",
         )
 
     def test_product_auth_failure_never_uses_transport_fallback(self):

@@ -40,9 +40,10 @@ O Runtime privado:
 4. escuta somente `127.0.0.1:8766` e somente `/oauth/callback`;
 5. exige `state` exato e código único;
 6. troca o código diretamente no token endpoint usando o `code_verifier`, sem segredo;
-7. confirma o subject com `/v3/product/session`;
-8. registra o dispositivo, quando necessário, pelo `/v3/device/setup` canônico;
-9. cria e reivindica o pairing pelo fluxo Product existente.
+7. confirma o subject com `/v3/product/session` e conserva a origem Product que respondeu ? valida??o;
+8. registra o dispositivo, quando necess?rio, pelo `/v3/device/setup` can?nico;
+9. cria e reivindica o pairing pelo fluxo Product existente;
+10. devolve ao processo principal Electron a origem Product validada junto com a identidade do dispositivo, para que chamadas Owner posteriores n?o inventem nem infiram outro host.
 
 O callback loopback devolve apenas uma página estática informando para voltar ao Studio. Possui CSP restrita e não carrega scripts ou recursos externos.
 
