@@ -187,6 +187,7 @@ def authorize_account(
         "email": session.email or "",
         "subject_id": owner_id,
         "device_id": device_id,
+        "product_mcp_url": selected_product,
         "enrolled_now": enrolled_now,
     }
 
