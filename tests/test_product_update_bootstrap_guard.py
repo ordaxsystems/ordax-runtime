@@ -67,7 +67,7 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
             },
         }
 
-    def invoke(self, *, argv_override: dict[str, str] | None = None):
+    def invoke(self, *, argv_override: dict[str, str] | None = None, expected_phase: str = "blocked"):
         (self.txroot / "transaction.json").write_text(
             json.dumps(self.journal), encoding="utf-8"
         )
@@ -97,7 +97,7 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
         )
         after = json.loads((self.txroot / "transaction.json").read_text(encoding="utf-8"))
         self.assertEqual(result.returncode, 30, result.stdout + result.stderr)
-        self.assertEqual(after["phase"], "blocked", after)
+        self.assertEqual(after["phase"], expected_phase, after)
         self.assertFalse(self.target.exists(), "target installer must never execute")
         self.assertFalse(self.rollback.exists(), "rollback installer must never execute")
         self.assertNotIn("VERIFIER_MUST_NOT_RUN", result.stdout + result.stderr)
@@ -115,6 +115,11 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
                           content.index("Write-TransactionPhase -Phase 'installing-target'")),
             content.index("Invoke-Installer -Path $TargetInstaller -LogName 'target-install.log'"),
         )
+        self.assertIn("if (-not $targetAttempted)", content)
+        self.assertLess(
+            content.index("$targetAttempted = $true"),
+            content.index("Invoke-Installer -Path $TargetInstaller -LogName 'target-install.log'"),
+        )
         self.assertLess(
             content.index("Assert-StagedInstaller -Path $RollbackInstaller -ExpectedSha256 $RollbackSha256",
                           content.index("Write-TransactionPhase -Phase 'rolling-back'")),
@@ -127,7 +132,8 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
 
     def test_terminal_transaction_cannot_be_replayed(self):
         self.journal["phase"] = "committed"
-        self.assertIn("handoff authority, journal identity or phase", self.invoke())
+        detail = self.invoke(expected_phase="committed")
+        self.assertEqual(detail, "", "Refused replay must not overwrite committed receipt")
 
     def test_forged_local_owner_authority_is_refused(self):
         self.journal["authority"] = "model-generated-owner"
