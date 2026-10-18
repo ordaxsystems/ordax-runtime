@@ -22,7 +22,12 @@
     "capability_reader_schema": "ordax.device-agent-capability-reader/1",
     "same_action_gateway_required": true,
     "surface_raw_execute_forbidden": true,
-    "parallel_runtime_forbidden": true
+    "parallel_runtime_forbidden": true,
+    "native_device_credential_provider_supported": true,
+    "native_device_credential_provider_owner": "ProductDeviceIdentityStore.read_enrolled_credential",
+    "native_provider_exact_device_id_required": true,
+    "native_provider_duplicate_token_file_allowed": false,
+    "native_provider_denial_file_fallback_allowed": false
   },
   "platform_authority": {
     "identity_owner": "ordax-os",
