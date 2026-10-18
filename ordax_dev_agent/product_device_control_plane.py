@@ -89,6 +89,9 @@ class ProductDeviceControlPlane:
                 raise RuntimeError("Native Product device credential is not canonical.")
         if not isinstance(self.device_token, str) or not 32 <= len(self.device_token) <= 512:
             raise RuntimeError("Canonical Product device token is missing or invalid.")
+        # Platform provenance is tied to the trusted credential source, never
+        # to a job payload, MCP client or Surface preference.
+        self.runtime_kind = "ordax-os" if device_credential_provider is not None else "desktop-agent"
         self.base_http_url = str(config.product_mcp_url).rstrip("/")
         self.agent_instance_id = str(uuid.uuid4())
         self.boot_id = str(uuid.uuid4())
@@ -196,11 +199,15 @@ class ProductDeviceControlPlane:
                   metadata: dict[str, Any] | None = None, status: str = "online",
                   last_error: str | None = None) -> None:
         del metadata, last_error
-        self._post("heartbeat", {
+        payload = {
             "status": status,
             "agent_version": agent_version,
             "capabilities_digest": self._capabilities_digest(actions),
-        }, timeout=10.0)
+        }
+        if self.runtime_kind == "ordax-os":
+            # Existing Windows and legacy heartbeat payloads remain unchanged.
+            payload["runtime_kind"] = self.runtime_kind
+        self._post("heartbeat", payload, timeout=10.0)
         if status != "offline":
             try:
                 self.product_central_session.tick()
