@@ -34,6 +34,8 @@ on:
       - ".github/workflows/windows-product-build.yml"
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -163,6 +165,53 @@ jobs:
       - name: Install, migrate legacy launcher, upgrade running runtime, and verify health
         shell: powershell
         run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
+
+  # Owner/Dev candidates derive only from protected main after the same
+  # canonical build and live-upgrade smoke. No independent signing service.
+  # Sigstore-backed GitHub attestation is not Authenticode and can never
+  # satisfy the public production signing/release gates below.
+  attest-owner-dev-candidate:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - build-installer
+      - install-smoke
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download exact smoke-tested installer bytes
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ordax-studio-windows-x64
+          path: artifact
+      - name: Check exact digest against canonical CI checksum manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $items = @(Get-ChildItem .\artifact -File)
+          $installers = @($items | Where-Object { $_.Name -match '^ORDAX-Studio-Setup-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-x64\.exe$' })
+          if ($items.Count -ne 2 -or $installers.Count -ne 1 -or
+              -not (Test-Path .\artifact\SHA256SUMS.txt -PathType Leaf)) {
+            throw 'Owner development candidate has an invalid artifact inventory'
+          }
+          $manifest = (Get-Content .\artifact\SHA256SUMS.txt -Raw -Encoding ASCII).Trim()
+          $expectedLine = '^([0-9a-f]{64})  ' + [regex]::Escape($installers[0].Name) + '$'
+          $match = [regex]::Match($manifest, $expectedLine, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+          if (-not $match.Success) {
+            throw 'Owner development candidate manifest is malformed'
+          }
+          $actual = (Get-FileHash -LiteralPath $installers[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $match.Groups[1].Value) {
+            throw 'Owner development candidate digest mismatch'
+          }
+          Write-Host 'ORDAX_OWNER_DEV_ARTIFACT_DIGEST=PASS'
+      - name: Attest only the exact installer verified by Windows smoke
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: artifact/ORDAX-Studio-Setup-*.exe
+          show-summary: true
 
   release-governance:
     if: startsWith(github.ref, 'refs/tags/v')
