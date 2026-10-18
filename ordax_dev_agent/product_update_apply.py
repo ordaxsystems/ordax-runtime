@@ -395,11 +395,27 @@ def _validated_transaction_material(
         if not _SHA256.fullmatch(expected_sha256):
             raise ValueError(f"transaction {role} SHA-256 is invalid")
         installer = root / role / expected_installer
+        checksum_path = root / role / expected_checksums
         expected_parent = (root / role).resolve()
-        if installer.resolve().parent != expected_parent or not installer.is_file():
+        # The initial SHA-256 verification is not a perpetual authorization:
+        # a staged transaction is revalidated immediately before every handoff.
+        if (installer.is_symlink() or installer.resolve().parent != expected_parent
+                or not installer.is_file()):
             raise ValueError(f"transaction {role} installer path is invalid")
+        if (checksum_path.is_symlink() or checksum_path.resolve().parent != expected_parent
+                or not checksum_path.is_file()
+                or checksum_path.stat().st_size > 16 * 1024):
+            raise ValueError(f"transaction {role} checksum manifest path is invalid")
         if _hash_file(installer) != expected_sha256:
             raise ValueError(f"transaction {role} installer integrity changed after staging")
+        try:
+            staged_checksum = parse_checksum_manifest(
+                checksum_path.read_text(encoding="ascii"), expected_installer
+            )
+        except (OSError, UnicodeError, ValueError) as error:
+            raise ValueError(f"transaction {role} checksum manifest changed after staging") from error
+        if staged_checksum != expected_sha256:
+            raise ValueError(f"transaction {role} checksum manifest changed after staging")
         result[role] = item
     return result["target"], result["rollback"]
 
