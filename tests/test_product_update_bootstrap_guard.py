@@ -103,6 +103,24 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
         self.assertNotIn("VERIFIER_MUST_NOT_RUN", result.stdout + result.stderr)
         return after.get("detail", "")
 
+    def test_bootstrap_rechecks_both_installer_digests_at_last_handoff(self):
+        content = BOOTSTRAP.read_text(encoding="utf-8")
+        self.assertLess(
+            content.index("Write-TransactionPhase -Phase 'installing-target'"),
+            content.index("Assert-StagedInstaller -Path $TargetInstaller -ExpectedSha256 $TargetSha256",
+                          content.index("Write-TransactionPhase -Phase 'installing-target'")),
+        )
+        self.assertLess(
+            content.index("Assert-StagedInstaller -Path $TargetInstaller -ExpectedSha256 $TargetSha256",
+                          content.index("Write-TransactionPhase -Phase 'installing-target'")),
+            content.index("Invoke-Installer -Path $TargetInstaller -LogName 'target-install.log'"),
+        )
+        self.assertLess(
+            content.index("Assert-StagedInstaller -Path $RollbackInstaller -ExpectedSha256 $RollbackSha256",
+                          content.index("Write-TransactionPhase -Phase 'rolling-back'")),
+            content.index("Invoke-Installer -Path $RollbackInstaller -LogName 'rollback-install.log'"),
+        )
+
     def test_valid_handoff_passes_binding_but_stops_on_missing_installer(self):
         detail = self.invoke()
         self.assertIn("Staged installer is missing", detail)
