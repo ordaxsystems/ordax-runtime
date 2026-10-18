@@ -150,6 +150,10 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
             self.invoke(argv_override={"TargetInstaller": str(other)}),
         )
 
+    def test_missing_staged_verifier_is_journaled_as_blocked(self):
+        self.verifier.unlink()
+        self.assertIn("Staged Authenticode verifier is missing", self.invoke())
+
     def test_changed_installed_version_is_refused(self):
         (self.install / "product-manifest.json").write_text(
             json.dumps({
