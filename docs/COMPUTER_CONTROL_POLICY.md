@@ -96,6 +96,20 @@ The editor is deliberately **not** a Product MCP action. Remote clients can read
 
 This does not convert Computer Control into an unaudited shell. If terminal/shell capabilities are supported, they remain separate typed actions with their own authorization and validation.
 
+## Terminal nativo e processos supervisionados
+
+O Runtime **já oferece** execução nativa de processos; não se deve criar outro executor/MCP para substituir `computer.type`. Estas ações atendem necessidades diferentes:
+
+- `terminal.exec`: execução pontual de `argv` diretamente no host (`shell=false` por padrão). Somente `command` com `shell=true` explícito passa pelo interpretador do sistema. O diretório de trabalho pertence a um projeto registrado, mas **isso não é sandbox**: o processo conserva as permissões do usuário Windows.
+- `process.start`, `process.status`, `process.logs`, `process.write_stdin` e `process.stop`: processos persistentes supervisionados, pertencentes ao projeto, com identidade e logs; não usar automação de teclado para executar CLI.
+- `computer.type`, `computer.click`, `computer.focus_window` e demais ações gráficas: interação legítima com aplicativos GUI, não um canal substituto para comando de terminal.
+
+**Grants distintos:** `full_access=true` no Studio remove allowlists *locais* de pastas/aplicativos, mas **não concede** `terminal.exec` nem `process.start`. É necessário grant remoto explícito dessas capacidades, ligado à Conta OrdaX, cliente, dispositivo e projeto. A implementação não deve inferir autorização de terminal a partir de `computer.type` ou `computer.access_status`.
+
+**Contrato de execução:** argumentos estruturados são preferenciais para evitar problemas de quoting e de injeção por concatenar strings; `shell` só aceita booleano real. Ambiente, diretório, tempo máximo e saída possuem limites validados. Uma falha ao iniciar o executável retorna `terminal_launch_failed`, sem republicar argumentos ou valores do ambiente. Para trabalhos duradouros, usar o supervisor `process.*`, não um `terminal.exec` de duração indefinida.
+
+**Recuperação MCP:** uma chamada remota pode ter conclusão incerta após timeout de rede. Recuperar o `request_id` por `product_action_status` / status da ação; não reenviar o mesmo comando às cegas. Quando a superfície MCP publicada não anunciar as ferramentas `terminal_exec` / `process_*`, isso é uma pendência de publicação/autoridade do gateway, **não evidência de ausência do executor nativo**. A descoberta deve diferenciar ferramenta indisponível de grant inexistente.
+
 ## Filesystem
 
 - Bounded mode restricts filesystem actions to `allowed_roots`.

@@ -568,14 +568,20 @@ class DeveloperActions:
                     or not key
                     or len(key) > 128
                     or "\x00" in key
+                    or "=" in key
                     or not isinstance(value, (str, int, float, bool))
                 ):
                     return ActionResult(False, "env contains an invalid key or value")
-                env[key] = str(value)
+                rendered_value = str(value)
+                if "\x00" in rendered_value or len(rendered_value) > 8192:
+                    return ActionResult(False, "env contains an invalid value")
+                env[key] = rendered_value
 
         argv_raw = payload.get("argv")
         command_raw = payload.get("command")
-        shell = bool(payload.get("shell", False))
+        shell = payload.get("shell", False)
+        if not isinstance(shell, bool):
+            return ActionResult(False, "shell must be a boolean")
         if argv_raw is not None and command_raw is not None:
             return ActionResult(False, "provide either argv or command, not both")
 
@@ -608,7 +614,22 @@ class DeveloperActions:
         else:
             return ActionResult(False, "argv or command is required")
 
-        result = _run(command, cwd=cwd, timeout=timeout, env=env)
+        try:
+            result = _run(command, cwd=cwd, timeout=timeout, env=env)
+        except (OSError, ValueError) as error:
+            # Missing executables and invalid OS process settings are ordinary
+            # terminal failures, not uncaught gateway errors. Never echo argv
+            # or environment values into this diagnostic receipt.
+            return ActionResult(
+                False,
+                "terminal process could not start",
+                {
+                    "error_code": "terminal_launch_failed",
+                    "error_type": type(error).__name__,
+                    "project": project.slug,
+                    "cwd": "." if not cwd_rel.parts else cwd_rel.as_posix(),
+                },
+            )
         data = dict(result.data)
         data.pop("command", None)
         data["project"] = project.slug
