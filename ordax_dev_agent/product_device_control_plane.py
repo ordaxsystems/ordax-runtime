@@ -35,6 +35,15 @@ _PROJECT_SCOPE_ACTIONS = frozenset({
     "continuity.update",
     "handoff.create",
     "handoff.get",
+    # Project terminal/process actions are never authorized by a model-supplied
+    # local slug. The canonical repository binding must be verified first.
+    "terminal.exec",
+    "process.start",
+    "process.status",
+    "process.list",
+    "process.logs",
+    "process.write_stdin",
+    "process.stop",
 })
 
 
