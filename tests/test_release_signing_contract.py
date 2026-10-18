@@ -66,6 +66,30 @@ class ReleaseSigningContractTests(unittest.TestCase):
         self.assertIn("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", windows_text)
         self.assertIn("ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756", windows_text)
 
+    def test_owner_dev_attestation_is_main_only_after_windows_smoke(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        assert "  push:\n    branches:\n      - main\n    tags:\n      - \"v*\"" in text
+        job = text.split("  attest-owner-dev-candidate:", 1)[1].split(
+            "  release-governance:", 1
+        )[0]
+        self.assertIn("github.event_name == 'push' && github.ref == 'refs/heads/main'", job)
+        self.assertIn("- build-installer", job)
+        self.assertIn("- install-smoke", job)
+        self.assertIn("runs-on: windows-latest", job)
+        self.assertIn("id-token: write", job)
+        self.assertIn("attestations: write", job)
+        self.assertIn("contents: read", job)
+        self.assertNotIn("contents: write", job)
+        self.assertIn("actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a", job)
+        self.assertIn("subject-path: artifact/ORDAX-Studio-Setup-*.exe", job)
+        self.assertIn("ORDAX_OWNER_DEV_ARTIFACT_DIGEST=PASS", job)
+        self.assertIn("SHA256SUMS.txt", job)
+        self.assertIn("artifact inventory", job)
+        self.assertNotIn("github.event_name == 'pull_request'", job)
+        self.assertNotIn("windows-production-release", job)
+        self.assertNotIn("TrustedSignerThumbprints", job)
+        self.assertNotIn("sign-release-authenticode.ps1", job)
+
     def test_hsm_runner_is_selected_only_after_hosted_release_governance(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         governance = text.split("  release-governance:", 1)[1].split("  sign-release:", 1)[0]
