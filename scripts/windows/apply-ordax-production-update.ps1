@@ -202,14 +202,21 @@ try {
     Assert-StagedInstaller -Path $RollbackInstaller -ExpectedSha256 $RollbackSha256
     Write-TransactionPhase -Phase 'bootstrap-verified'
 
+    $targetAttempted = $false
     try {
         Write-TransactionPhase -Phase 'installing-target'
         Assert-StagedInstaller -Path $TargetInstaller -ExpectedSha256 $TargetSha256
+        $targetAttempted = $true
         Invoke-Installer -Path $TargetInstaller -LogName 'target-install.log'
         $health = Start-RuntimeAndWaitHealthy -ExpectedVersion $TargetVersion
         Write-TransactionPhase -Phase 'committed' -Detail ("state={0}; actions={1}" -f $health.state, $health.actionCount)
         exit 0
     } catch {
+        if (-not $targetAttempted) {
+            # Verification failed before any installer ran; preserve the original
+            # installation instead of unnecessarily executing a rollback.
+            throw
+        }
         $targetError = $_.Exception.Message
         Write-TransactionPhase -Phase 'rolling-back' -Detail $targetError
         try {
@@ -226,7 +233,14 @@ try {
     }
 } catch {
     try {
-        Write-TransactionPhase -Phase 'blocked' -Detail $_.Exception.Message
+        # Replay attempts must not overwrite the proof of a previously
+        # committed, rolled-back or recovery-required transaction.
+        if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+            $lastPhase = (Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json).phase
+            if ($lastPhase -notin @('committed', 'rolled-back', 'recovery-required', 'blocked', 'handoff-failed')) {
+                Write-TransactionPhase -Phase 'blocked' -Detail $_.Exception.Message
+            }
+        }
     } catch {
     }
     exit 30
