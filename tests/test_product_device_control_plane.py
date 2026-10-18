@@ -7,6 +7,8 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import httpx
 
@@ -42,6 +44,61 @@ class Central:
 
 
 class ProductDeviceControlPlaneTests(unittest.TestCase):
+    def test_remote_terminal_and_process_actions_require_canonical_project_attestation(self):
+        project_id = "33333333-3333-4333-8333-333333333333"
+        repo = "ordaxsystems/demo-project"
+        plane = ProductDeviceControlPlane.__new__(ProductDeviceControlPlane)
+        plane.config = object()
+        actions = (
+            "terminal.exec", "process.start", "process.status",
+            "process.list", "process.logs", "process.write_stdin", "process.stop",
+        )
+        with patch(
+            "ordax_dev_agent.product_device_control_plane.resolve_project_for_repository",
+            return_value=SimpleNamespace(slug="real-local-project"),
+        ) as resolve:
+            for action in actions:
+                with self.subTest(action=action):
+                    bound = plane._bind_project_scope(
+                        {"capability": action, "project_id": project_id},
+                        {
+                            "project": "untrusted-model-slug",
+                            "argv": ["python", "--version"],
+                            "_ordax_project_scope": {
+                                "project_id": project_id,
+                                "repository_full_name": repo,
+                            },
+                        },
+                    )
+                    self.assertEqual(bound["project"], "real-local-project")
+                    self.assertEqual(bound["argv"], ["python", "--version"])
+                    self.assertNotIn("_ordax_project_scope", bound)
+            self.assertEqual(resolve.call_count, len(actions))
+            resolve.assert_called_with(plane.config, repo)
+
+        for action in actions:
+            with self.subTest(action=action):
+                with self.assertRaisesRegex(RuntimeError, "attestation is missing"):
+                    plane._bind_project_scope(
+                        {"capability": action, "project_id": project_id}, {"project": "untrusted"},
+                    )
+                with self.assertRaisesRegex(RuntimeError, "id mismatch"):
+                    plane._bind_project_scope(
+                        {"capability": action, "project_id": project_id},
+                        {"_ordax_project_scope": {
+                            "project_id": "44444444-4444-4444-8444-444444444444",
+                            "repository_full_name": repo,
+                        }},
+                    )
+
+        with self.assertRaisesRegex(RuntimeError, "unexpected"):
+            plane._bind_project_scope(
+                {"capability": "computer.click", "project_id": None},
+                {"x": 1, "y": 2, "_ordax_project_scope": {
+                    "project_id": project_id, "repository_full_name": repo,
+                }},
+            )
+
     def plane(self, root: Path, handler):
         token(root)
         plane = ProductDeviceControlPlane(config(root))
