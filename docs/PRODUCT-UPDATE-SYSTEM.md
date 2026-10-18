@@ -50,7 +50,7 @@ If rollback itself cannot be proven healthy, the terminal state is:
 
 Pre-execution policy or integrity failures become `blocked`; a failed handoff becomes `handoff-failed`. None of those states are reported as update success.
 
-## Current state — 2026-10-16
+## Current state — 2026-10-16 (historical record)
 
 - In-place installer upgrade: implemented and tested in CI and on the authorized Windows device.
 - Upgrade quiesce: implemented.
@@ -61,3 +61,22 @@ Pre-execution policy or integrity failures become `blocked`; a failed handoff be
 - Production signing service and approved release publication: **not operational yet**. The packaged signer allow-list remains empty, so verification/application stays fail-closed and no `v*` production release should be published yet.
 
 The remaining external gate is provisioning the production code-signing identity/service and inserting its approved Authenticode certificate thumbprint into the packaged trust root before the first stable production release.
+
+## Owner development preflight — 2026-10-18
+
+The Studio **0.15.9** source is merged in `ordaxsystems/ordax-apps` via PRs #263 and #264; Runtime PR #125 was merged as `e7a3c27252f2a9e044f32c9c7351585e03276855`, pinning the Apps commit `a297b691d5a91ea0370d80f32533931596dfe5f6`. The strict five required checks completed green on the synchronized PR head, including the Windows in-place `install-smoke` in CI. These proofs validate a test runner and are **not** evidence that the user's installed Runtime has been updated.
+
+The authorized development device `DESKTOP-COHT67R` still reports installed Studio **0.15.6** (Runtime manifest version `0.4.6`), whose installed `studio_source_commit` is `ab1ceda55abd226bc5c12b60f47c052276e19e5d`. The old CI artifact from run `38918111156` has the same canonical Studio source commit, version 0.15.6, and a build time consistent with the installed product. The target artifact is from run `39107644356`, version 0.15.9.
+
+Both Inno installers and their `SHA256SUMS.txt` were downloaded **only to a private per-user staging directory**, not to Downloads or the installed Runtime tree. Streaming SHA-256 comparison against the respective CI manifests succeeded:
+
+| Role | CI run | Installer | SHA-256 |
+| --- | --- | --- | --- |
+| Rollback candidate | `38918111156` | `ORDAX-Studio-Setup-0.15.6-x64.exe` | `8cab1ac935d70f4cce622df5217597d048495a245d071dc76f2522fe55397c85` |
+| Upgrade candidate | `39107644356` | `ORDAX-Studio-Setup-0.15.9-x64.exe` | `b28d542ba65baaf4ed5d9b46862aaa58484e88605aca157521a9fb43a5731897` |
+
+This is **artifact provenance and integrity evidence**, not a signature or an end-to-end rollback proof. Source-commit equality does not alone prove the recovered installer is byte-identical to the one originally installed. No installer has been executed. No local account, device identity, personal files or Runtime service has been changed during staging.
+
+**Promotion remains blocked:** production lacks an approved signing service and populated signer trust root, so the production updater must stay fail-closed. Do **not** pass these unsigned CI candidates through production update or quietly bypass Authenticode. To enable an Owner-only development upgrade, first implement and test an explicit authorized Dev/Owner transaction path that **reuses the canonical installer/quiesce/health/rollback primitives** rather than duplicating an updater; require immutable CI run IDs, pinned source revisions, exact staged checksums, previous-installation identity, restoration proof and durable state journaling. Until that passes, retain installed 0.15.6.
+
+Separately, the connected OrdaX MCP reports the local computer policy `full_access=true` and `full_filesystem=true`, while the remote `full-computer-control` OAuth grant has not been confirmed. Studio 0.15.9 adds the active Central Owner authorization UI, but it must first reach the installed product. Test the first MCP operation in an entirely fresh conversation after Owner consent; warm-session operations do not establish cold-start reliability.
