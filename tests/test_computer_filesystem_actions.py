@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
@@ -116,6 +119,77 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
         )
         self.assertTrue(remove.ok, remove.summary)
         self.assertFalse(moved.exists())
+
+    def test_owner_full_access_can_read_only_canonical_installed_product_manifest(self):
+        local = self.root / "Local"
+        install = local / "Programs" / "ORDAX"
+        install.mkdir(parents=True)
+        product = install / "product-manifest.json"
+        product.write_text('{"schema":"ordax.windows-product/1","version":"0.15.9"}\\n', encoding="utf-8")
+        secret = install / "runtime-secret.txt"
+        secret.write_text("private-runtime-state", encoding="utf-8")
+        (self.state / "agent-settings.json").write_text(json.dumps({
+            "computer_access": {"enabled": True, "full_access": True,
+                                "full_filesystem": True, "allowed_roots": []}
+        }), encoding="utf-8")
+        registry = ActionRegistry(replace(self.registry.config, agent_repo_path=install))
+        fixture = {"version": "0.15.9", "installLocation": str(install)}
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(local)}), patch(
+            "ordax_dev_agent.computer_filesystem_actions.installed_windows_product",
+            return_value=fixture,
+        ):
+            read = registry.execute("computer.text_read", {"path": str(product)})
+            self.assertTrue(read.ok, read.summary)
+            self.assertIn('"version":"0.15.9"', read.data["content"])
+            stat = registry.execute("computer.file_stat", {"path": str(product)})
+            self.assertTrue(stat.ok, stat.summary)
+            self.assertEqual(stat.data["kind"], "file")
+
+            # Full Access cannot read arbitrary Runtime state or modify the manifest.
+            for operation, payload in (
+                ("computer.text_read", {"path": str(secret)}),
+                ("computer.file_stat", {"path": str(secret)}),
+                ("computer.directory_list", {"path": str(install)}),
+                ("computer.text_write", {"path": str(product), "content": "tampered"}),
+                ("computer.text_patch", {"path": str(product), "expected_sha256": "a" * 64,
+                                         "replacements": []}),
+                ("computer.path_move", {"source": str(product),
+                                        "destination": str(self.allowed / "stolen.json")}),
+                ("computer.path_remove", {"path": str(product)}),
+            ):
+                with self.subTest(operation=operation):
+                    denied = registry.execute(operation, payload)
+                    self.assertFalse(denied.ok)
+                    self.assertIn("protected", denied.summary)
+            self.assertEqual(json.loads(product.read_text(encoding="utf-8"))["version"], "0.15.9")
+            denied = registry.execute("computer.text_read", {"path": str(install / "other.json")})
+            self.assertFalse(denied.ok)
+            self.assertIn("protected", denied.summary)
+            with patch(
+                "ordax_dev_agent.computer_filesystem_actions.installed_windows_product",
+                return_value={"version": "0.15.9", "installLocation": str(self.outside)},
+            ):
+                denied = registry.execute("computer.text_read", {"path": str(product)})
+                self.assertFalse(denied.ok)
+                self.assertIn("protected", denied.summary)
+
+            # A path alias is not the manifest at the expected canonical spelling.
+            alias = self.allowed / "manifest-alias.json"
+            try:
+                alias.symlink_to(product)
+            except (OSError, NotImplementedError):
+                pass
+            else:
+                denied = registry.execute("computer.text_read", {"path": str(alias)})
+                self.assertFalse(denied.ok)
+            # Removing the opt-in Full Access status closes the special read.
+            (self.state / "agent-settings.json").write_text(json.dumps({
+                "computer_access": {"enabled": True, "full_access": False,
+                                    "full_filesystem": False, "allowed_roots": [str(self.allowed)]}
+            }), encoding="utf-8")
+            denied = registry.execute("computer.text_read", {"path": str(product)})
+            self.assertFalse(denied.ok)
+            self.assertIn("protected", denied.summary)
 
     def test_existing_write_requires_matching_sha(self):
         file = self.allowed / "safe.txt"
