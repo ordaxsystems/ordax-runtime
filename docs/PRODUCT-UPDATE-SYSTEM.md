@@ -80,3 +80,18 @@ This is **artifact provenance and integrity evidence**, not a signature or an en
 **Promotion remains blocked:** production lacks an approved signing service and populated signer trust root, so the production updater must stay fail-closed. Do **not** pass these unsigned CI candidates through production update or quietly bypass Authenticode. To enable an Owner-only development upgrade, first implement and test an explicit authorized Dev/Owner transaction path that **reuses the canonical installer/quiesce/health/rollback primitives** rather than duplicating an updater; require immutable CI run IDs, pinned source revisions, exact staged checksums, previous-installation identity, restoration proof and durable state journaling. Until that passes, retain installed 0.15.6.
 
 Separately, the connected OrdaX MCP reports the local computer policy `full_access=true` and `full_filesystem=true`, while the remote `full-computer-control` OAuth grant has not been confirmed. Studio 0.15.9 adds the active Central Owner authorization UI, but it must first reach the installed product. Test the first MCP operation in an entirely fresh conversation after Owner consent; warm-session operations do not establish cold-start reliability.
+
+## Owner/Dev CI provenance — protected-main gate
+
+The canonical `.github/workflows/windows-product-build.yml` is also triggered on a protected `main` push. When, and **only when**, the `build-installer` and `install-smoke` jobs both succeed on that push, the `attest-owner-dev-candidate` job downloads the exact artifact from its workflow run, checks a one-installer / one-`SHA256SUMS.txt` inventory, verifies the installer digest, and creates the standard **GitHub Artifact Attestation** (Sigstore-backed SLSA build provenance) using a pinned upstream action and ephemeral GitHub OIDC. The job has no release signing keys and no permission to publish releases.
+
+A trusted Owner/Dev preflight must reject PR-built, branch-only or ad hoc unsigned installers that lack that attestation. After downloading the candidate from the original main run, verify the actual executable bytes with the GitHub CLI using the expected **immutable canonical main commit**:
+
+```powershell
+gh attestation verify "ORDAX-Studio-Setup-<version>-x64.exe" --repo ordaxsystems/ordax-runtime --source-digest "<exact-protected-main-commit>" --signer-repo ordaxsystems/ordax-runtime --signer-workflow "ordaxsystems/ordax-runtime/.github/workflows/windows-product-build.yml"
+```
+
+Replace the placeholders only after verifying the selected run identity and exact SHA-256 of the downloaded file. Attestation absence, mismatch, unsupported identity or a non-main commit must fail closed. The **existing** 0.15.6/0.15.9 preflight artifacts were generated before this gate existed; SHA-256 validation alone is **not** a GitHub attestation, and this workflow does not retroactively certify them.
+
+This is a provenance prerequisite, **not** an installer or a second updater. Production continues to require a publicly trusted Authenticode timestamped signature from an approved signing service, canonical immutable releases and the shared verification/transaction/rollback mechanism. Do not pass unsigned CI artifacts into `product_update_apply.py` or `apply-ordax-production-update.ps1`; no unsigned fallback or per-tool override is authorized. A future Owner/Dev apply route may use only a separately approved, independently tested trust policy that reuses the same transaction and recovery primitives and proves both the target and rollback.
+
