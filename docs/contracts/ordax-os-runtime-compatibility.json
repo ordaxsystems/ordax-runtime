@@ -27,7 +27,12 @@
     "native_device_credential_provider_owner": "ProductDeviceIdentityStore.read_enrolled_credential",
     "native_provider_exact_device_id_required": true,
     "native_provider_duplicate_token_file_allowed": false,
-    "native_provider_denial_file_fallback_allowed": false
+    "native_provider_denial_file_fallback_allowed": false,
+    "native_runtime_kind": "ordax-os",
+    "native_runtime_kind_requires_credential_provider": true,
+    "native_heartbeat_uses_product_transport": true,
+    "native_heartbeat_writes_no_action_grants": true,
+    "single_presence_owner_required": true
   },
   "platform_authority": {
     "identity_owner": "ordax-os",
