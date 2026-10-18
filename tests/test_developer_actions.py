@@ -137,6 +137,68 @@ class DeveloperActionsTests(unittest.TestCase):
         self.assertFalse(refused.ok)
         self.assertIn("shell=true", refused.summary)
 
+    def test_terminal_exec_rejects_non_boolean_shell_instead_of_coercing_it(self) -> None:
+        for invalid_shell in ("false", "true", 1, [], None):
+            with self.subTest(shell=invalid_shell):
+                result = self.registry.execute(
+                    "terminal.exec",
+                    {
+                        "project": "project",
+                        "argv": [sys.executable, "-c", "print('must-not-run')"],
+                        "shell": invalid_shell,
+                    },
+                )
+                self.assertFalse(result.ok)
+                self.assertIn("shell must be a boolean", result.summary)
+
+    def test_terminal_exec_validates_environment_before_starting(self) -> None:
+        for invalid_env in (
+            {"INVALID=NAME": "value"},
+            {"ORDAX_NATIVE_TERMINAL_TEST": "bad\\x00value".replace("\\x00", "\x00")},
+            {"ORDAX_NATIVE_TERMINAL_TEST": "x" * 8193},
+        ):
+            with self.subTest(env=list(invalid_env)):
+                result = self.registry.execute(
+                    "terminal.exec",
+                    {
+                        "project": "project",
+                        "argv": [sys.executable, "-c", "print('must-not-run')"],
+                        "env": invalid_env,
+                    },
+                )
+                self.assertFalse(result.ok)
+                self.assertIn("env contains an invalid", result.summary)
+
+        valid = self.registry.execute(
+            "terminal.exec",
+            {
+                "project": "project",
+                "argv": [
+                    sys.executable,
+                    "-c",
+                    "import os; print(os.environ['ORDAX_NATIVE_TERMINAL_TEST'])",
+                ],
+                "env": {"ORDAX_NATIVE_TERMINAL_TEST": "direct-argv-ok"},
+            },
+        )
+        self.assertTrue(valid.ok, valid.summary)
+        self.assertIn("direct-argv-ok", valid.data["stdout"])
+
+    def test_terminal_exec_missing_executable_is_a_structured_failure(self) -> None:
+        result = self.registry.execute(
+            "terminal.exec",
+            {
+                "project": "project",
+                "argv": ["ordax-executable-that-does-not-exist-20261018"],
+            },
+        )
+        self.assertFalse(result.ok)
+        self.assertEqual("terminal_launch_failed", result.data["error_code"])
+        self.assertEqual("FileNotFoundError", result.data["error_type"])
+        self.assertEqual("project", result.data["project"])
+        self.assertNotIn("argv", result.data)
+        self.assertNotIn("command", result.data)
+
     def test_git_command_blocks_provider_credential_and_config_access(self) -> None:
         for args in (
             ["credential", "fill"],
