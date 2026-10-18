@@ -122,6 +122,26 @@ class ProductCentralSessionClientTests(unittest.TestCase):
         client.tick(now=30.0)
         self.assertEqual(calls, 2)
 
+    def test_default_cadence_reuses_existing_five_second_heartbeat(self):
+        token = ["a" * 64]
+        calls = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, json={"ok": True, "pending": False})
+
+        http = httpx.Client(transport=httpx.MockTransport(handler))
+        self.addCleanup(http.close)
+        client = ProductCentralSessionClient(
+            "https://mcp.ordax.com.br", DEVICE_ID, lambda: token[0], http=http,
+        )
+        client.tick(now=10.0)
+        client.tick(now=14.9)
+        self.assertEqual(calls, 1)
+        client.tick(now=15.0)
+        self.assertEqual(calls, 2)
+
     def test_raw_credential_is_not_retained_by_client(self):
         token = ["a" * 64]
 
