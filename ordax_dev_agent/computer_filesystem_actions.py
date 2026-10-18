@@ -448,9 +448,12 @@ def _readable_installed_product_manifest(
         # No aliases, junctions, symlinks or arbitrary installation roots.
         if canonical_install != registered_install:
             return False
-        if candidate.absolute() != manifest or resolved != manifest:
+        # Windows expands an existing 8.3 alias (RUNNER~1) in resolve().
+        # Compare canonical parent and final file identities, not the raw
+        # spelling; a same-named link outside the install root still fails.
+        if candidate.parent.resolve(strict=False) != registered_install or resolved != manifest:
             return False
-        if manifest.is_symlink() or not manifest.is_file():
+        if candidate.is_symlink() or manifest.is_symlink() or not manifest.is_file():
             return False
     except (OSError, ValueError, KeyError, RuntimeError):
         return False
