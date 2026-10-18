@@ -12,6 +12,7 @@ from unittest.mock import patch
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.execution_lock import ExecutionLock
+from ordax_dev_agent.computer_filesystem_actions import load_computer_access_policy, _readable_installed_product_manifest
 
 
 class ComputerFilesystemActionsTests(unittest.TestCase):
@@ -138,6 +139,14 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
             "ordax_dev_agent.computer_filesystem_actions.installed_windows_product",
             return_value=fixture,
         ):
+            policy = load_computer_access_policy(registry.config)
+            self.assertTrue(policy.full_access and policy.full_filesystem, policy.public())
+            self.assertTrue(
+                _readable_installed_product_manifest(product, product.resolve(), policy),
+                f"candidate={str(product.absolute())!r}, resolved={str(product.resolve())!r}, "
+                f"canonical={str((local / 'Programs' / 'ORDAX').resolve())!r}, "
+                f"registered={str(install.resolve())!r}, file={product.is_file()}",
+            )
             read = registry.execute("computer.text_read", {"path": str(product)})
             self.assertTrue(read.ok, read.summary)
             self.assertIn('"version":"0.15.9"', read.data["content"])
