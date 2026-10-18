@@ -12,6 +12,10 @@ import httpx
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.computer_filesystem_actions import computer_access_management_status
+from ordax_connector.owner_grants import (
+    OwnerMcpClientSelectionError,
+    select_consented_owner_mcp_client,
+)
 
 from .blender_connection import prepare_blender_connection
 from .electron_account_session import browser_oauth_session
@@ -135,21 +139,27 @@ class StudioProductApi(StudioApi):
         authority: dict[str, Any],
         requested_client_id: str | None,
     ) -> dict[str, Any]:
-        clients = [item for item in authority.get("clients", []) if isinstance(item, dict)]
-        requested = str(requested_client_id or "").strip().lower()
-        if requested:
-            clients = [item for item in clients if str(item.get("client_id") or "").lower() == requested]
-        if not clients:
+        """Studio consumes the Connector SSOT; it is not a grant authority."""
+        try:
+            selected_id = select_consented_owner_mcp_client(
+                authority,
+                device_id=str(authority.get("device_id") or ""),
+                requested_client_id=requested_client_id,
+            )
+        except OwnerMcpClientSelectionError as error:
+            if error.code == "owner_mcp_client_ambiguous":
+                raise ProductAccountError(
+                    "product_mcp_client_required",
+                    "Há mais de um cliente MCP autorizado; selecione explicitamente o cliente correto.",
+                ) from error
             raise ProductAccountError(
                 "product_mcp_client_unavailable",
                 "Nenhum cliente MCP com consentimento ativo corresponde a esta conta.",
-            )
-        if len(clients) != 1:
-            raise ProductAccountError(
-                "product_mcp_client_required",
-                "Há mais de um cliente MCP autorizado; selecione explicitamente o cliente correto.",
-            )
-        return clients[0]
+            ) from error
+        return next(
+            item for item in authority["clients"]
+            if str(item["client_id"]).lower() == selected_id
+        )
 
     @staticmethod
     def _profile_groups(

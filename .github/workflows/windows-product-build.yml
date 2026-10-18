@@ -7,6 +7,7 @@ on:
       - "native/ordax-workbench/**"
       - "tests/test_studio_host_transport_boundary.py"
       - "ordax_core/**"
+      - "ordax_connector/**"
       - "ordax_dev_agent/**"
       - "ordax_device_agent/**"
       - "ordax_studio/**"
