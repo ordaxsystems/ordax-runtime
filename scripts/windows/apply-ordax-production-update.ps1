@@ -188,15 +188,14 @@ function Start-RuntimeAndWaitHealthy {
     throw "ORDAX Runtime did not reach an action-ready state after install"
 }
 
-$verifierFullPath = [IO.Path]::GetFullPath($VerifierScript)
-if (-not $verifierFullPath.ToLowerInvariant().StartsWith($transactionPrefix) -or
-    -not (Test-Path -LiteralPath $verifierFullPath -PathType Leaf)) {
-    throw "Staged Authenticode verifier is missing or escaped the transaction root"
-}
-$VerifierScript = $verifierFullPath
-
 try {
     Assert-TransactionHandoff
+    $verifierFullPath = [IO.Path]::GetFullPath($VerifierScript)
+    if (-not $verifierFullPath.ToLowerInvariant().StartsWith($transactionPrefix) -or
+        -not (Test-Path -LiteralPath $verifierFullPath -PathType Leaf)) {
+        throw "Staged Authenticode verifier is missing or escaped the transaction root"
+    }
+    $VerifierScript = $verifierFullPath
     Write-TransactionPhase -Phase 'bootstrap-verifying'
     Assert-StagedInstaller -Path $TargetInstaller -ExpectedSha256 $TargetSha256
     Assert-StagedInstaller -Path $RollbackInstaller -ExpectedSha256 $RollbackSha256
