@@ -157,6 +157,31 @@ function Invoke-Installer {
     }
 }
 
+function Test-InstalledRuntimeListener {
+    param($Status)
+    # An unrelated process on localhost:8765 must never attest to update
+    # health. The HTTP status PID must own the exact loopback socket and be
+    # the private Python executable shipped in this installation.
+    try {
+        $runtimeProcessId = [int]$Status.runtime.pid
+        if ($runtimeProcessId -le 0) { return $false }
+        $listeners = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort 8765 -State Listen -ErrorAction Stop)
+        if ($listeners.Count -ne 1) { return $false }
+        $listener = $listeners[0]
+        if ($listener.LocalAddress -cne '127.0.0.1' -or
+            [int]$listener.LocalPort -ne 8765 -or
+            [int]$listener.OwningProcess -ne $runtimeProcessId) {
+            return $false
+        }
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $runtimeProcessId" -ErrorAction Stop
+        if (-not $process -or -not $process.ExecutablePath) { return $false }
+        $expectedPython = [IO.Path]::GetFullPath((Join-Path $installRootPath 'runtime\python.exe'))
+        return ([IO.Path]::GetFullPath([string]$process.ExecutablePath) -ieq $expectedPython)
+    } catch {
+        return $false
+    }
+}
+
 function Start-RuntimeAndWaitHealthy {
     param([string]$ExpectedVersion)
     if ((Read-InstalledVersion) -ne $ExpectedVersion) {
@@ -178,7 +203,8 @@ function Start-RuntimeAndWaitHealthy {
             $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/status' -TimeoutSec 2
             $state = if ($status.runtime) { [string]$status.runtime.state } else { '' }
             $actions = @($status.actions).Count
-            if ($state -in @('local-ready', 'pairing', 'ready') -and $actions -gt 0) {
+            if ($state -in @('local-ready', 'pairing', 'ready') -and
+                $actions -gt 0 -and (Test-InstalledRuntimeListener -Status $status)) {
                 return @{ state = $state; actionCount = $actions }
             }
         } catch {
