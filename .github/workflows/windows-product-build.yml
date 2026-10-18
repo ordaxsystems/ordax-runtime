@@ -212,6 +212,20 @@ jobs:
         with:
           subject-path: artifact/ORDAX-Studio-Setup-*.exe
           show-summary: true
+      - name: Independently verify issued provenance against canonical main SHA
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidate = @(Get-ChildItem .\artifact -File -Filter 'ORDAX-Studio-Setup-*.exe')
+          if ($candidate.Count -ne 1 -or $env:GITHUB_REF -cne 'refs/heads/main' -or
+              $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Owner Dev verification requires one installer from an exact canonical main SHA'
+          }
+          & gh attestation verify $candidate[0].FullName --repo ordaxsystems/ordax-runtime --source-digest $env:GITHUB_SHA --signer-workflow ordaxsystems/ordax-runtime/.github/workflows/windows-product-build.yml
+          if ($LASTEXITCODE -ne 0) { throw 'Sigstore attestation verification failed' }
+          Write-Host 'ORDAX_OWNER_DEV_ATTESTATION_VERIFIED=PASS'
 
   release-governance:
     if: startsWith(github.ref, 'refs/tags/v')

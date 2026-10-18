@@ -82,6 +82,17 @@ class ReleaseSigningContractTests(unittest.TestCase):
         self.assertNotIn("contents: write", job)
         self.assertIn("actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a", job)
         self.assertIn("subject-path: artifact/ORDAX-Studio-Setup-*.exe", job)
+        self.assertIn("Independently verify issued provenance against canonical main SHA", job)
+        self.assertIn("gh attestation verify", job)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", job)
+        self.assertIn("--source-digest $env:GITHUB_SHA", job)
+        self.assertIn("--signer-workflow ordaxsystems/ordax-runtime/.github/workflows/windows-product-build.yml", job)
+        self.assertNotIn("--signer-repo", job)
+        self.assertIn("ORDAX_OWNER_DEV_ATTESTATION_VERIFIED=PASS", job)
+        self.assertLess(
+            job.index("Attest only the exact installer verified by Windows smoke"),
+            job.index("Independently verify issued provenance against canonical main SHA"),
+        )
         self.assertIn("ORDAX_OWNER_DEV_ARTIFACT_DIGEST=PASS", job)
         self.assertIn("SHA256SUMS.txt", job)
         self.assertIn("artifact inventory", job)
