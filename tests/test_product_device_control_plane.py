@@ -97,6 +97,8 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
                 {"device_id": DEVICE_ID, "device_token": ""},
                 {"device_id": DEVICE_ID, "device_token": 12},
                 {"device_id": DEVICE_ID, "device_token": "b" * 64, "extra": True},
+                {"device_id": DEVICE_ID, "device_token": "X" * 64},
+                {"device_id": DEVICE_ID, "device_token": "z" * 64},
             ):
                 with self.subTest(value=value):
                     with self.assertRaises(RuntimeError):
