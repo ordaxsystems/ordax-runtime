@@ -25,6 +25,51 @@ if ($TargetVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)
     throw 'Production update version transition is invalid'
 }
 
+function Assert-TransactionHandoff {
+    # Rebind every handoff parameter to the single durable journal, including
+    # staged file identities. A terminal transaction cannot be replayed.
+    $updatesRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'OrdaX\updates')).TrimEnd('\') + '\'
+    if (-not $transactionPrefix.StartsWith($updatesRoot.ToLowerInvariant())) {
+        throw 'Transaction root escaped canonical ORDAX update storage'
+    }
+    if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
+        throw 'Update transaction journal is missing'
+    }
+    $journal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($journal.schema -cne 'ordax.windows-update-transaction/1' -or
+        $journal.authority -cne 'local-privileged-updater' -or
+        $journal.phase -cne 'handoff-launching' -or
+        [string]$journal.transactionId -cnotmatch '^[0-9a-f]{32}$' -or
+        $journal.transactionId -cne (Split-Path -Path $transactionRootPath -Leaf)) {
+        throw 'Update handoff authority, journal identity or phase is invalid'
+    }
+    if ([string]$journal.installedVersion -cne $RollbackVersion -or
+        [string]$journal.target.version -cne $TargetVersion -or
+        [string]$journal.rollback.version -cne $RollbackVersion -or
+        [string]$journal.target.tag -cne "v$TargetVersion" -or
+        [string]$journal.rollback.tag -cne "v$RollbackVersion") {
+        throw 'Update handoff versions differ from the durable journal'
+    }
+    foreach ($role in @('target', 'rollback')) {
+        $version = if ($role -eq 'target') { $TargetVersion } else { $RollbackVersion }
+        $path = if ($role -eq 'target') { $TargetInstaller } else { $RollbackInstaller }
+        $sha = if ($role -eq 'target') { $TargetSha256 } else { $RollbackSha256 }
+        $record = if ($role -eq 'target') { $journal.target } else { $journal.rollback }
+        $filename = "ORDAX-Studio-Setup-$version-x64.exe"
+        $expectedPath = [IO.Path]::GetFullPath((Join-Path (Join-Path $transactionRootPath $role) $filename))
+        if ([IO.Path]::GetFullPath($path) -ine $expectedPath -or
+            [string]$record.installer -cne $filename -or
+            [string]$record.checksums -cne 'SHA256SUMS.txt' -or
+            [string]$record.installerSha256 -cne $sha -or
+            $sha -cnotmatch '^[0-9a-f]{64}$') {
+            throw "Update $role handoff path or SHA-256 differs from the durable journal"
+        }
+    }
+    if ((Read-InstalledVersion) -cne $RollbackVersion) {
+        throw 'Installed product changed before updater handoff'
+    }
+}
+
 function Write-TransactionPhase {
     param([string]$Phase, [string]$Detail = '')
     if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
@@ -151,6 +196,7 @@ if (-not $verifierFullPath.ToLowerInvariant().StartsWith($transactionPrefix) -or
 $VerifierScript = $verifierFullPath
 
 try {
+    Assert-TransactionHandoff
     Write-TransactionPhase -Phase 'bootstrap-verifying'
     Assert-StagedInstaller -Path $TargetInstaller -ExpectedSha256 $TargetSha256
     Assert-StagedInstaller -Path $RollbackInstaller -ExpectedSha256 $RollbackSha256
@@ -158,6 +204,7 @@ try {
 
     try {
         Write-TransactionPhase -Phase 'installing-target'
+        Assert-StagedInstaller -Path $TargetInstaller -ExpectedSha256 $TargetSha256
         Invoke-Installer -Path $TargetInstaller -LogName 'target-install.log'
         $health = Start-RuntimeAndWaitHealthy -ExpectedVersion $TargetVersion
         Write-TransactionPhase -Phase 'committed' -Detail ("state={0}; actions={1}" -f $health.state, $health.actionCount)
@@ -166,6 +213,7 @@ try {
         $targetError = $_.Exception.Message
         Write-TransactionPhase -Phase 'rolling-back' -Detail $targetError
         try {
+            Assert-StagedInstaller -Path $RollbackInstaller -ExpectedSha256 $RollbackSha256
             Invoke-Installer -Path $RollbackInstaller -LogName 'rollback-install.log'
             $health = Start-RuntimeAndWaitHealthy -ExpectedVersion $RollbackVersion
             Write-TransactionPhase -Phase 'rolled-back' -Detail ("targetFailure={0}; rollbackState={1}; actions={2}" -f $targetError, $health.state, $health.actionCount)
