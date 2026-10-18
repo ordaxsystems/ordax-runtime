@@ -62,6 +62,14 @@ Pre-execution policy or integrity failures become `blocked`; a failed handoff be
 
 The remaining external gate is provisioning the production code-signing identity/service and inserting its approved Authenticode certificate thumbprint into the packaged trust root before the first stable production release.
 
+## Transaction handoff and rollback integrity
+
+The existing `scripts/windows/apply-ordax-production-update.ps1` is the **only** Windows update executor. Its external bootstrap must rebind every argument (source installation version, canonical target and rollback filenames, versions, staging paths, SHA-256 and transaction identifier) to the durable `transaction.json` before either installer is run. Only the journal's `handoff-launching` phase under `%LOCALAPPDATA%\\OrdaX\\updates` may initiate application; terminal transactions are not replayable, and refused replays cannot overwrite committed, rolled-back or recovery-required receipts.
+
+Before a target install or rollback executable is actually launched, the same production Authenticode verifier and SHA-256 check run again against the corresponding staged file. An installer that changes after initial verification is **never executed**. A failed last-moment verification **before target execution** blocks the update without unnecessarily reinstalling the old version. On a target execution or health failure, rollback is still reported as successful **only** after the previous version is reinstalled and becomes healthy; failure to verify or restore is recorded as `recovery-required`. The executable names and trust roots remain unchanged, and this adds no unsigned test mode or second updater.
+
+Windows packaging CI includes isolated negative bootstrap tests that deliberately forge journal authority, swap rollback hashes, change installed version, alter target paths and replay a terminal transaction. They must stop before calling the verifier or any installer. Passing those tests **does not** substitute for a true on-device recovery test, nor does it authorize applying unsigned Owner/Dev artifacts.
+
 ## Owner development preflight — 2026-10-18
 
 The Studio **0.15.9** source is merged in `ordaxsystems/ordax-apps` via PRs #263 and #264; Runtime PR #125 was merged as `e7a3c27252f2a9e044f32c9c7351585e03276855`, pinning the Apps commit `a297b691d5a91ea0370d80f32533931596dfe5f6`. The strict five required checks completed green on the synchronized PR head, including the Windows in-place `install-smoke` in CI. These proofs validate a test runner and are **not** evidence that the user's installed Runtime has been updated.

@@ -51,7 +51,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
-        run: python -m unittest tests.test_windows_product_packaging tests.test_windows_runtime_provenance_packaging_gate tests.test_release_provenance tests.test_release_signer_identity tests.test_release_signing_contract tests.test_release_main_ancestry tests.test_studio_host_transport_boundary tests.test_studio_presentation_handoff_contract
+        run: python -m unittest tests.test_windows_product_packaging tests.test_windows_runtime_provenance_packaging_gate tests.test_release_provenance tests.test_release_signer_identity tests.test_release_signing_contract tests.test_release_main_ancestry tests.test_studio_host_transport_boundary tests.test_studio_presentation_handoff_contract tests.test_product_update_bootstrap_guard
       - name: Reject PowerShell syntax errors before expensive Windows packaging
         shell: pwsh
         run: |
