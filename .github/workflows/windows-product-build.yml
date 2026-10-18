@@ -30,6 +30,7 @@ on:
       - "tests/test_release_signing_contract.py"
       - "pyproject.toml"
       - "studio-source.lock.json"
+      - "docs/PRODUCT-UPDATE-SYSTEM.md"
       - ".github/workflows/windows-product-build.yml"
   workflow_dispatch:
   push:
