@@ -47,7 +47,7 @@ class ProductCentralSessionClient:
         credential_provider: Callable[[], str],
         *,
         http: httpx.Client | None = None,
-        min_poll_seconds: float = 20.0,
+        min_poll_seconds: float = 5.0,
     ):
         base = str(base_url or "").strip().rstrip("/")
         parsed = httpx.URL(base)
