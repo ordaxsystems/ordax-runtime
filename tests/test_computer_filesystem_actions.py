@@ -125,7 +125,7 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
         install = local / "Programs" / "ORDAX"
         install.mkdir(parents=True)
         product = install / "product-manifest.json"
-        product.write_text('{"schema":"ordax.windows-product/1","version":"0.15.9"}\\n', encoding="utf-8")
+        product.write_text('{"schema":"ordax.windows-product/1","version":"0.15.9"}\n', encoding="utf-8")
         secret = install / "runtime-secret.txt"
         secret.write_text("private-runtime-state", encoding="utf-8")
         (self.state / "agent-settings.json").write_text(json.dumps({
