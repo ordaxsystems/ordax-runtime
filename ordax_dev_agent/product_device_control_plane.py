@@ -3,9 +3,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -48,7 +49,12 @@ class ProductDeviceControlPlane:
     uses_long_poll = False
     runtime_kind = "desktop-agent"
 
-    def __init__(self, config: AgentConfig):
+    def __init__(
+        self,
+        config: AgentConfig,
+        *,
+        device_credential_provider: Callable[[], dict[str, str] | None] | None = None,
+    ):
         if not config.product_mcp_url:
             raise RuntimeError("ORDAX_PRODUCT_MCP_URL is required for the canonical device transport.")
         if not config.device_id:
@@ -59,8 +65,29 @@ class ProductDeviceControlPlane:
             uuid.UUID(self.device_id)
         except ValueError as error:
             raise RuntimeError("ORDAX_DEVICE_ID must be a UUID.") from error
-        self.device_token = read_secret(resolve_token_path(config.state_dir))
-        if not self.device_token or not 32 <= len(self.device_token) <= 512:
+        if device_credential_provider is None:
+            # Windows product Runtime retains the existing canonical token file.
+            self.device_token = read_secret(resolve_token_path(config.state_dir))
+        else:
+            # The Native OS already owns this same identity; do not write a
+            # second token file, and never fall back if the provider denies.
+            if not callable(device_credential_provider):
+                raise TypeError("Device credential provider must be callable")
+            credential = device_credential_provider()
+            if (
+                not isinstance(credential, dict)
+                or set(credential) != {"device_id", "device_token"}
+                or credential.get("device_id") != self.device_id
+            ):
+                raise RuntimeError("Native Product device credential identity mismatch.")
+            self.device_token = credential["device_token"]
+            if (
+                str(uuid.UUID(self.device_id)) != self.device_id
+                or not isinstance(self.device_token, str)
+                or re.fullmatch(r"[0-9a-f]{64}", self.device_token) is None
+            ):
+                raise RuntimeError("Native Product device credential is not canonical.")
+        if not isinstance(self.device_token, str) or not 32 <= len(self.device_token) <= 512:
             raise RuntimeError("Canonical Product device token is missing or invalid.")
         self.base_http_url = str(config.product_mcp_url).rstrip("/")
         self.agent_instance_id = str(uuid.uuid4())

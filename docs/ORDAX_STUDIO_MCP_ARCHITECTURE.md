@@ -89,3 +89,23 @@ transição fechada, não permissão para desenvolver features duplicadas neles.
 A fonte de produto é `ordax-apps`; `ordax-runtime` é host/executor;
 `ordax-control-plane` é transporte/autoridade remota. A separação é
 contrato de segurança, não multiplicação de produtos.
+
+## Identidade do Product Runtime no OrdaX OS (2026-10-18)
+
+O Product Device Runtime existente agora aceita a entrada opcional
+`device_credential_provider` em
+`ProductDeviceControlPlane(config, device_credential_provider=...)`.
+Somente o **Native Host autorizado** deve fornecer o objeto privado
+`{"device_id", "device_token"}` lido pelo `ProductDeviceIdentityStore`
+já existente no OrdaX OS. O Runtime verifica que o `device_id` corresponde
+exatamente ao dispositivo de `AgentConfig`; a ausência, revogação ou
+inconsistência da identidade bloqueia o Runtime sem fallback para o token
+persistido de Windows. Nenhum novo token de dispositivo precisa ser salvo
+em disco pelo OS.
+
+A inicialização Windows, sem provider, continua lendo o token atual pelo
+`resolve_token_path`, preservando instalações existentes. Esta mudança
+não inicia serviço, não instancia um segundo Control Plane e não altera
+OAuth, grants, lease, audit, Action Gateway ou execução no OS.
+O pacote assinado do Runtime, health gate e sessão atestada continuam
+pré-requisitos independentes para liberar transporte de ações.

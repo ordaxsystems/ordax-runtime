@@ -57,6 +57,77 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
         plane.product_central_session = Central()
         return plane
 
+    def test_native_os_compatibility_manifest_does_not_authorize_execution(self):
+        manifest = json.loads(
+            (Path(__file__).resolve().parents[1]
+             / "docs/contracts/ordax-os-runtime-compatibility.json").read_text(
+                 encoding="utf-8"
+             )
+        )
+        native = manifest["ordax_os"]
+        self.assertTrue(native["native_device_credential_provider_supported"])
+        self.assertEqual(
+            native["native_device_credential_provider_owner"],
+            "ProductDeviceIdentityStore.read_enrolled_credential",
+        )
+        self.assertTrue(native["native_provider_exact_device_id_required"])
+        self.assertFalse(native["native_provider_duplicate_token_file_allowed"])
+        self.assertFalse(native["native_provider_denial_file_fallback_allowed"])
+        self.assertFalse(manifest["activation"]["runtime_dispatch_enabled"])
+
+    def test_native_identity_provider_uses_only_existing_device_credential(self):
+        # The Native Host supplies the same private store as its discovery
+        # worker; no second device token file or login is created.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            called = []
+            def provider():
+                called.append(True)
+                return {"device_id": DEVICE_ID, "device_token": "b" * 64}
+            plane = ProductDeviceControlPlane(
+                config(root), device_credential_provider=provider,
+            )
+            self.assertEqual(called, [True])
+            self.assertEqual(plane.device_token, "b" * 64)
+            self.assertFalse(
+                (root / "state" / "device-token.cloudflare-v3.txt").exists()
+            )
+            self.assertEqual(
+                plane.http.headers["X-Ordax-Device-Id"], DEVICE_ID,
+            )
+            self.assertEqual(
+                plane.http.headers["X-Ordax-Device-Token"], "b" * 64,
+            )
+            self.assertEqual(
+                plane.product_central_session._credential_provider(), "b" * 64,
+            )
+            plane.product_central_session.close()
+            plane.http.close()
+
+    def test_native_provider_denial_never_falls_back_to_windows_token(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            token(root)
+            for value in (
+                None,
+                {},
+                {"device_id": str(uuid.uuid4()), "device_token": "b" * 64},
+                {"device_id": DEVICE_ID, "device_token": ""},
+                {"device_id": DEVICE_ID, "device_token": 12},
+                {"device_id": DEVICE_ID, "device_token": "b" * 64, "extra": True},
+                {"device_id": DEVICE_ID, "device_token": "X" * 64},
+                {"device_id": DEVICE_ID, "device_token": "z" * 64},
+            ):
+                with self.subTest(value=value):
+                    with self.assertRaises(RuntimeError):
+                        ProductDeviceControlPlane(
+                            config(root), device_credential_provider=lambda: value,
+                        )
+            with self.assertRaises(TypeError):
+                ProductDeviceControlPlane(
+                    config(root), device_credential_provider="not a callback",
+                )
+
     def test_heartbeat_uses_product_transport_only(self):
         seen = []
         def handler(request):
