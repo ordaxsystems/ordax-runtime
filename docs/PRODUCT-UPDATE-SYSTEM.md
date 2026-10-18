@@ -83,13 +83,15 @@ Separately, the connected OrdaX MCP reports the local computer policy `full_acce
 
 ## Owner/Dev CI provenance — protected-main gate
 
-The canonical `.github/workflows/windows-product-build.yml` is also triggered on a protected `main` push. When, and **only when**, the `build-installer` and `install-smoke` jobs both succeed on that push, the `attest-owner-dev-candidate` job downloads the exact artifact from its workflow run, checks a one-installer / one-`SHA256SUMS.txt` inventory, verifies the installer digest, and creates the standard **GitHub Artifact Attestation** (Sigstore-backed SLSA build provenance) using a pinned upstream action and ephemeral GitHub OIDC. The job has no release signing keys and no permission to publish releases.
+The canonical `.github/workflows/windows-product-build.yml` is also triggered on a protected `main` push. When, and **only when**, the `build-installer` and `install-smoke` jobs both succeed on that push, the `attest-owner-dev-candidate` job downloads the exact artifact from its workflow run, checks a one-installer / one-`SHA256SUMS.txt` inventory, verifies the installer digest, and creates the standard **GitHub Artifact Attestation** (Sigstore-backed SLSA build provenance) using a pinned upstream action and ephemeral GitHub OIDC. The job has no release signing keys and no permission to publish releases. After creating the attestation, **the same job independently invokes `gh attestation verify`** against the exact candidate bytes, the canonical GitHub workflow and `GITHUB_SHA`, failing closed on any mismatch.
 
 A trusted Owner/Dev preflight must reject PR-built, branch-only or ad hoc unsigned installers that lack that attestation. After downloading the candidate from the original main run, verify the actual executable bytes with the GitHub CLI using the expected **immutable canonical main commit**:
 
 ```powershell
-gh attestation verify "ORDAX-Studio-Setup-<version>-x64.exe" --repo ordaxsystems/ordax-runtime --source-digest "<exact-protected-main-commit>" --signer-repo ordaxsystems/ordax-runtime --signer-workflow "ordaxsystems/ordax-runtime/.github/workflows/windows-product-build.yml"
+gh attestation verify "ORDAX-Studio-Setup-<version>-x64.exe" --repo ordaxsystems/ordax-runtime --source-digest "<exact-protected-main-commit>" --signer-workflow "ordaxsystems/ordax-runtime/.github/workflows/windows-product-build.yml"
 ```
+
+The GitHub CLI treats `--signer-repo` and `--signer-workflow` as mutually exclusive issuer selectors; use **only** the more specific workflow selector shown above, together with `--repo` and `--source-digest`.
 
 Replace the placeholders only after verifying the selected run identity and exact SHA-256 of the downloaded file. Attestation absence, mismatch, unsupported identity or a non-main commit must fail closed. The **existing** 0.15.6/0.15.9 preflight artifacts were generated before this gate existed; SHA-256 validation alone is **not** a GitHub attestation, and this workflow does not retroactively certify them.
 
