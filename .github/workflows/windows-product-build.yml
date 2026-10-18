@@ -612,11 +612,12 @@ jobs:
           gh release create $tag $installer.FullName $checksums.FullName --verify-tag --title "ORDAX Studio $tag" --generate-notes --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) { throw "GitHub Release publication failed" }
 
-          if ($manifest -cnotmatch $expectedLine) {
+          $match = [regex]::Match($manifest, $expectedLine, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+          if (-not $match.Success) {
             throw 'Owner development candidate manifest is malformed'
           }
           $actual = (Get-FileHash -LiteralPath $installers[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -cne $Matches[1]) {
+          if ($actual -cne $match.Groups[1].Value) {
             throw 'Owner development candidate digest mismatch'
           }
           Write-Host 'ORDAX_OWNER_DEV_ARTIFACT_DIGEST=PASS'
