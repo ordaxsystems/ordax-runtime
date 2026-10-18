@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import time
 import uuid
 from typing import Any, Callable
@@ -80,6 +81,12 @@ class ProductDeviceControlPlane:
             ):
                 raise RuntimeError("Native Product device credential identity mismatch.")
             self.device_token = credential["device_token"]
+            if (
+                str(uuid.UUID(self.device_id)) != self.device_id
+                or not isinstance(self.device_token, str)
+                or re.fullmatch(r"[0-9a-f]{64}", self.device_token) is None
+            ):
+                raise RuntimeError("Native Product device credential is not canonical.")
         if not isinstance(self.device_token, str) or not 32 <= len(self.device_token) <= 512:
             raise RuntimeError("Canonical Product device token is missing or invalid.")
         self.base_http_url = str(config.product_mcp_url).rstrip("/")
