@@ -74,6 +74,11 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
         self.assertFalse(native["native_provider_duplicate_token_file_allowed"])
         self.assertFalse(native["native_provider_denial_file_fallback_allowed"])
         self.assertFalse(manifest["activation"]["runtime_dispatch_enabled"])
+        self.assertEqual(native["native_runtime_kind"], "ordax-os")
+        self.assertTrue(native["native_runtime_kind_requires_credential_provider"])
+        self.assertTrue(native["native_heartbeat_uses_product_transport"])
+        self.assertTrue(native["native_heartbeat_writes_no_action_grants"])
+        self.assertTrue(native["single_presence_owner_required"])
 
     def test_native_identity_provider_uses_only_existing_device_credential(self):
         # The Native Host supplies the same private store as its discovery
