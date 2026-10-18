@@ -89,6 +89,7 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             )
             self.assertEqual(called, [True])
             self.assertEqual(plane.device_token, "b" * 64)
+            self.assertEqual(plane.runtime_kind, "ordax-os")
             self.assertFalse(
                 (root / "state" / "device-token.cloudflare-v3.txt").exists()
             )
@@ -128,6 +129,41 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
                     config(root), device_credential_provider="not a callback",
                 )
 
+    def test_native_heartbeat_declares_actual_os_kind_without_extra_identity(self):
+        seen = []
+        def handler(request):
+            seen.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(200, json={"ok": True, "recorded": True})
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            plane = ProductDeviceControlPlane(
+                config(root),
+                device_credential_provider=lambda: {
+                    "device_id": DEVICE_ID, "device_token": "b" * 64,
+                },
+            )
+            plane.http.close()
+            plane.http = httpx.Client(
+                transport=httpx.MockTransport(handler),
+                base_url="https://product.example",
+                headers={
+                    "X-Ordax-Device-Id": DEVICE_ID,
+                    "X-Ordax-Device-Token": "b" * 64,
+                },
+            )
+            plane.product_central_session = Central()
+            plane.heartbeat(["agent.status"], agent_version="0.4.7")
+            self.assertEqual(seen[0][0], "/v3/device/transport/heartbeat")
+            self.assertEqual(seen[0][1]["runtime_kind"], "ordax-os")
+            self.assertEqual(seen[0][1]["capabilities_digest"],
+                             hashlib.sha256(b'["agent.status"]').hexdigest())
+            self.assertNotIn("capabilities", seen[0][1])
+            self.assertEqual(plane._runtime_provenance()["runtime_kind"], "ordax-os")
+            self.assertFalse(
+                (root / "state" / "device-token.cloudflare-v3.txt").exists()
+            )
+            plane.http.close()
+
     def test_heartbeat_uses_product_transport_only(self):
         seen = []
         def handler(request):
@@ -140,6 +176,8 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             expected = hashlib.sha256(b'["agent.status"]').hexdigest()
             self.assertEqual(seen[0][1]["capabilities_digest"], expected)
             self.assertNotIn("capabilities", seen[0][1])
+            self.assertNotIn("runtime_kind", seen[0][1])
+            self.assertEqual(plane.runtime_kind, "desktop-agent")
             self.assertEqual(plane.product_central_session.ticks, 1)
             self.assertNotIn("legacy-control.invalid", str(seen))
             plane.http.close()
