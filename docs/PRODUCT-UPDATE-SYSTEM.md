@@ -70,6 +70,12 @@ Before a target install or rollback executable is actually launched, the same pr
 
 Windows packaging CI includes isolated negative bootstrap tests that deliberately forge journal authority, swap rollback hashes, change installed version, alter target paths and replay a terminal transaction. They must stop before calling the verifier or any installer. Passing those tests **does not** substitute for a true on-device recovery test, nor does it authorize applying unsigned Owner/Dev artifacts.
 
+## Post-install Runtime identity verification
+
+The canonical Windows bootstrap must not accept a generic HTTP response as proof of update or recovery health. The Runtime status at `127.0.0.1:8765/status` includes the private Python process PID. Before either a target transaction becomes `committed` or a rollback becomes `rolled-back`, the bootstrap requires the status PID to equal the actual owning PID of the **single** loopback TCP listener on port 8765 and its Windows process executable path to match `{installRoot}\\runtime\\python.exe`. It also checks the installed product version, runtime-ready state and nonempty action inventory.
+
+An unrelated application, stale foreign listener or misleading JSON response therefore cannot approve an update. The same health verification function is used after target and rollback installations, with no alternate endpoint or independent health subsystem. The Windows packaging gate executes the production identity function against positive and adversarial OS observations; it must reject a mismatched PID, foreign executable path, wildcard/nonloopback address, absent listener and multiple listeners. This does not certify the deployment of the new code on the Owner PC until its Runtime is upgraded.
+
 ## Owner development preflight — 2026-10-18
 
 The Studio **0.15.9** source is merged in `ordaxsystems/ordax-apps` via PRs #263 and #264; Runtime PR #125 was merged as `e7a3c27252f2a9e044f32c9c7351585e03276855`, pinning the Apps commit `a297b691d5a91ea0370d80f32533931596dfe5f6`. The strict five required checks completed green on the synchronized PR head, including the Windows in-place `install-smoke` in CI. These proofs validate a test runner and are **not** evidence that the user's installed Runtime has been updated.
