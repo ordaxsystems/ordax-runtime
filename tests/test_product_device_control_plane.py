@@ -57,6 +57,24 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
         plane.product_central_session = Central()
         return plane
 
+    def test_native_os_compatibility_manifest_does_not_authorize_execution(self):
+        manifest = json.loads(
+            (Path(__file__).resolve().parents[1]
+             / "docs/contracts/ordax-os-runtime-compatibility.json").read_text(
+                 encoding="utf-8"
+             )
+        )
+        native = manifest["ordax_os"]
+        self.assertTrue(native["native_device_credential_provider_supported"])
+        self.assertEqual(
+            native["native_device_credential_provider_owner"],
+            "ProductDeviceIdentityStore.read_enrolled_credential",
+        )
+        self.assertTrue(native["native_provider_exact_device_id_required"])
+        self.assertFalse(native["native_provider_duplicate_token_file_allowed"])
+        self.assertFalse(native["native_provider_denial_file_fallback_allowed"])
+        self.assertFalse(manifest["activation"]["runtime_dispatch_enabled"])
+
     def test_native_identity_provider_uses_only_existing_device_credential(self):
         # The Native Host supplies the same private store as its discovery
         # worker; no second device token file or login is created.
