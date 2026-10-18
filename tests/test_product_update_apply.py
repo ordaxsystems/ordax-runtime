@@ -184,6 +184,69 @@ class ProductUpdateApplyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "release identity"):
                 _validated_transaction_material(root, journal)
 
+    def test_staged_target_and_rollback_are_revalidated_after_staging(self):
+        versions = ("0.15.1", "0.15.2")
+        payloads = {"0.15.1": b"legacy-rollback", "0.15.2": b"current-candidate"}
+        for role in ("target", "rollback"):
+            for tamper in ("installer", "checksum", "missing-checksum", "descriptor-sha"):
+                with self.subTest(role=role, tamper=tamper):
+                    with tempfile.TemporaryDirectory() as tmp, self.client(payloads) as client:
+                        staged = prepare_update_transaction(
+                            versions[0],
+                            self.release(versions[1], payloads[versions[1]]),
+                            self.release(versions[0], payloads[versions[0]]),
+                            staging_root=tmp, client=client,
+                        )
+                        root = Path(staged["root"])
+                        journal = json.loads((root / "transaction.json").read_text(encoding="utf-8"))
+                        _validated_transaction_material(root, journal)
+                        asset = journal[role]
+                        path = root / role / asset["installer"]
+                        manifest = root / role / asset["checksums"]
+                        if tamper == "installer":
+                            path.write_bytes(b"attacker-replaced")
+                            error = "installer integrity changed"
+                        elif tamper == "checksum":
+                            manifest.write_text("0" * 64 + "  " + asset["installer"] + "\n", encoding="ascii")
+                            error = "checksum manifest changed"
+                        elif tamper == "missing-checksum":
+                            manifest.unlink()
+                            error = "checksum manifest path is invalid"
+                        else:
+                            asset["installerSha256"] = "a" * 64
+                            error = "installer integrity changed"
+                        with self.assertRaisesRegex(ValueError, error):
+                            _validated_transaction_material(root, journal)
+
+    def test_staged_manifest_rejects_symlink_and_extra_lines(self):
+        payloads = {"0.15.1": b"rollback", "0.15.2": b"target"}
+        with tempfile.TemporaryDirectory() as tmp, self.client(payloads) as client:
+            staged = prepare_update_transaction(
+                "0.15.1", self.release("0.15.2", payloads["0.15.2"]),
+                self.release("0.15.1", payloads["0.15.1"]),
+                staging_root=tmp, client=client,
+            )
+            root = Path(staged["root"])
+            journal = json.loads((root / "transaction.json").read_text(encoding="utf-8"))
+            manifest = root / "rollback" / "SHA256SUMS.txt"
+            original = manifest.read_text(encoding="ascii")
+            manifest.write_text(original + original, encoding="ascii")
+            with self.assertRaisesRegex(ValueError, "checksum manifest changed"):
+                _validated_transaction_material(root, journal)
+
+            # A staged manifest cannot be replaced with an alias even when
+            # that alias contains identical bytes and remains inside staging.
+            manifest.write_text(original, encoding="ascii")
+            alternate = root / "rollback" / "copied-checksums.txt"
+            alternate.write_text(original, encoding="ascii")
+            manifest.unlink()
+            try:
+                manifest.symlink_to(alternate)
+            except (OSError, NotImplementedError):
+                self.skipTest("OS does not permit symlinks in this test session")
+            with self.assertRaisesRegex(ValueError, "checksum manifest path is invalid"):
+                _validated_transaction_material(root, journal)
+
     def test_rollback_release_must_match_installed_version(self):
         target = self.release("0.15.2", b"target")
         wrong_rollback = self.release("0.14.9", b"rollback")
