@@ -46,7 +46,7 @@ jobs:
         run: python -m unittest tests.test_public_product_auth_owner_parity -v
 
       - name: Compile Runtime packages
-        run: python -m compileall -q ordax_dev_agent ordax_device_agent ordax_studio mcp_blender_unity
+        run: python -m compileall -q ordax_connector ordax_dev_agent ordax_device_agent ordax_studio mcp_blender_unity
 
       - name: Validate managed runtime, updater, and publication governance PowerShell syntax
         shell: pwsh
@@ -78,6 +78,7 @@ jobs:
           tests.test_application_intelligence_actions
           tests.test_product_mcp
           tests.test_product_remote_client
+          tests.test_connector_owner_grants
           tests.test_product_action_recovery
           tests.test_product_central_session
           tests.test_product_device_control_plane
