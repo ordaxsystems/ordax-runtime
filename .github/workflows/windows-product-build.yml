@@ -79,6 +79,10 @@ jobs:
             }
           }
 
+      - name: Prove updater accepts only the installed ORDAX runtime listener
+        shell: pwsh
+        run: .\\scripts\\windows\\test-ordax-update-runtime-health.ps1
+
   build-installer:
     needs: packaging-contracts
     runs-on: windows-latest
