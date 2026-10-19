@@ -1,4 +1,4 @@
-"""Read-only Owner/Dev provenance preflight for the canonical Windows updater.
+"""Nonexecuting Owner/Dev provenance staging for the canonical Windows updater.
 
 Production Authenticode policy and the sole installation/rollback executor are
 unchanged. A successful result is *not* permission to install unsigned code.
