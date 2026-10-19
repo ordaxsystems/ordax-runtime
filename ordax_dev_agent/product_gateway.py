@@ -388,6 +388,11 @@ PRODUCT_TYPED_ACTIONS: dict[str, ProductActionSpec] = {
         frozenset({"project", "session_id"}),
         effect="write",
     ),
+    "computer.terminal_exec": ProductActionSpec(
+        "computer.terminal_exec", "computer.terminal_exec",
+        frozenset({"cwd", "argv", "command", "shell", "timeout_seconds", "env"}),
+        project_required=False, effect="execute",
+    ),
     "computer.terminate_process": ProductActionSpec(
         "computer.terminate_process",
         "computer.terminate_process",

@@ -80,6 +80,7 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(name="workspace_path_move", action="workspace.path_move", effect="write", description="Move or rename a path inside a granted project."),
     ProductMcpToolSpec(name="git_command", action="git.command", effect="execute", description="Run an approved Git subcommand against a granted project without exposing provider credentials."),
     ProductMcpToolSpec(name="terminal_exec", action="terminal.exec", effect="execute", description="Run a foreground terminal command with the local OS user's permissions."),
+    ProductMcpToolSpec(name="computer_terminal_exec", action="computer.terminal_exec", effect="execute", description="Execute a bounded device-scoped command without a GitHub project, under an explicit Owner grant."),
     ProductMcpToolSpec(name="process_status", action="process.status", description="Inspect one ORDAX-owned persistent project process."),
     ProductMcpToolSpec(name="process_list", action="process.list", description="List ORDAX-owned persistent processes for a granted project."),
     ProductMcpToolSpec(name="process_logs", action="process.logs", description="Read bounded tail logs from an ORDAX-owned persistent process."),

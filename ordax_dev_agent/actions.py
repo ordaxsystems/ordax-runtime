@@ -167,6 +167,7 @@ class ActionRegistry(
             "workspace.path_remove": self.workspace_path_remove,
             "workspace.path_move": self.workspace_path_move,
             "terminal.exec": self.terminal_exec,
+            "computer.terminal_exec": self.computer_terminal_exec,
             "git.command": self.git_command,
             "process.start": self.process_start,
             "process.status": self.process_status,
