@@ -88,7 +88,7 @@ def perform(args: argparse.Namespace, token: str, remote: ProductRemoteClient,
         return {"device_id": args.device, "clients": authority["clients"], "grant_groups": authority["grant_groups"]}
     client = select_client(authority, args.client)
     if args.operation == "authorize":
-        if args.profile in {"full-computer-control", "device-native-terminal"}:
+        if args.profile in {"full-computer-control", "device-native-terminal", "device-native-process"}:
             policy = policy_checker(config if config is not None else AgentConfig.from_env())
             if not policy.get("enabled") or not policy.get("full_access"):
                 raise ValueError("local_full_access_required")
