@@ -13,6 +13,7 @@ from ordax_core.owner_oauth import (
     OwnerOAuthError, browser_authorization_code, exchange_owner_code,
 )
 from ordax_dev_agent.owner_grants_cli import parse_args, perform, select_client, diagnose_owner_mcp_readiness, _DIAGNOSTIC_ACTIONS
+from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 
 DEVICE = "24630b00-e9c0-4d93-b38a-2367048cd9d1"
 CLIENT = "202fd3e1-b058-4531-8750-82c57e4b6ca0"
@@ -36,6 +37,14 @@ class FakeOwner:
     def revoke_owner_remote_grant_group(self, token, **kwargs):
         self.calls.append(("revoke", token, kwargs))
         return {"ok": True}
+
+
+def canonical_diag_grants():
+    return [
+        {"capability": name,
+         "access_mode": "read" if PRODUCT_ACTIONS[name].effect == "read" else "write"}
+        for name in _DIAGNOSTIC_ACTIONS
+    ]
 
 
 class OwnerGrantsCliTests(unittest.TestCase):
@@ -154,7 +163,7 @@ class OwnerGrantsCliTests(unittest.TestCase):
         remote.authority["grant_groups"] = [{
             "client_id": CLIENT, "space_id": None, "project_id": None,
             "valid_until": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
-            "capabilities": [{"capability": name} for name in _DIAGNOSTIC_ACTIONS],
+            "capabilities": canonical_diag_grants(),
         }]
         args = parse_args(["diagnose", "--device", DEVICE, "--client", CLIENT])
         result = perform(args, "token", remote, config=object(),
@@ -169,10 +178,10 @@ class OwnerGrantsCliTests(unittest.TestCase):
         past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
         authority = {
             "grant_groups": [
-                {"client_id": CLIENT, "project_id": DEVICE, "capabilities": list(_DIAGNOSTIC_ACTIONS)},
-                {"client_id": CLIENT, "valid_until": past, "capabilities": list(_DIAGNOSTIC_ACTIONS)},
-                {"client_id": DEVICE, "capabilities": list(_DIAGNOSTIC_ACTIONS)},
-                {"client_id": CLIENT, "valid_until": "bad-date", "capabilities": list(_DIAGNOSTIC_ACTIONS)},
+                {"client_id": CLIENT, "project_id": DEVICE, "capabilities": canonical_diag_grants()},
+                {"client_id": CLIENT, "valid_until": past, "capabilities": canonical_diag_grants()},
+                {"client_id": DEVICE, "capabilities": canonical_diag_grants()},
+                {"client_id": CLIENT, "valid_until": "bad-date", "capabilities": canonical_diag_grants()},
             ],
         }
         result = diagnose_owner_mcp_readiness(authority, CLIENT,
@@ -193,9 +202,21 @@ class OwnerGrantsCliTests(unittest.TestCase):
         self.assertFalse(result["endToEndProven"])
         self.assertEqual(len(remote.calls), 1)
 
+    def test_diagnose_rejects_wrong_grant_access_mode(self):
+        capabilities = canonical_diag_grants()
+        for item in capabilities:
+            if item["capability"] == "computer.click":
+                item["access_mode"] = "read"
+        result = diagnose_owner_mcp_readiness(
+            {"grant_groups": [{"client_id": CLIENT, "capabilities": capabilities}]},
+            CLIENT, {"enabled": True, "full_access": True},
+        )
+        self.assertEqual(result["state"], "blocked")
+        self.assertIn("computer.click", result["missingClientGrants"])
+
     def test_diagnose_denies_disabled_local_policy_even_with_grants(self):
         authority = {"grant_groups": [{
-            "client_id": CLIENT, "capabilities": list(_DIAGNOSTIC_ACTIONS),
+            "client_id": CLIENT, "capabilities": canonical_diag_grants(),
         }]}
         result = diagnose_owner_mcp_readiness(
             authority, CLIENT, {"enabled": False, "full_access": True},
