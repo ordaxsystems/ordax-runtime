@@ -62,6 +62,17 @@ class ProductMcpServerTests(unittest.TestCase):
         self.client.stop()
         self.env.stop()
 
+    def test_device_process_start_routes_without_project(self):
+        response = server.computer_process_start("dev-1", ["node", "--version"], cwd="C:/project", wait_seconds=1)
+        self.assertEqual(response["status"], "succeeded")
+        calls = [call for item in FakeClient.instances for call in item.calls if call[0] == "submit"]
+        self.assertEqual(len(calls), 1)
+        info = calls[0][2]
+        self.assertEqual(info["action"], "computer.process_start")
+        self.assertIsNone(info["project"])
+        self.assertIsNone(info["space_id"])
+        self.assertEqual(info["arguments"]["argv"], ["node", "--version"])
+
     def test_session_and_targets_use_environment_token(self):
         self.assertEqual(server.product_session()["subject_id"], "user:1")
         targets = server.product_targets("space-1")
