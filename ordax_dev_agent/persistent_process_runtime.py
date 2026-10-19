@@ -13,6 +13,10 @@ import time
 from pathlib import Path
 
 
+# The parent action must wait longer than this child-tree termination window.
+WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS = 15
+
+
 def atomic_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
@@ -103,7 +107,7 @@ class ProcessRuntime:
                     ["taskkill", "/PID", str(child.pid), "/T", "/F"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=15,
+                    timeout=WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS,
                     shell=False,
                 )
             else:
