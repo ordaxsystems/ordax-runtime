@@ -42,6 +42,52 @@ if ProductDeviceControlPlane.runtime_kind != "desktop-agent":
     raise SystemExit("Product device control-plane runtime kind is not canonical")
 if not callable(getattr(ProductDeviceControlPlane, "_runtime_provenance", None)):
     raise SystemExit("Product device control-plane runtime provenance sender is missing")
+from tempfile import TemporaryDirectory
+
+from ordax_dev_agent.actions import ActionRegistry
+from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
+from ordax_dev_agent.product_mcp import PRODUCT_MCP_TOOLS
+
+# The actual shipped registry, transport-independent MCP catalog and Product
+# gateway must all agree about device actions. A cloud-only catalog does not
+# prove this installed executable can execute a capability.
+required_device_actions = (
+    "computer.terminal_exec",
+    "computer.process_start",
+    "computer.process_status",
+    "computer.process_list",
+    "computer.process_logs",
+    "computer.process_write_stdin",
+    "computer.process_stop",
+)
+with TemporaryDirectory(prefix="ordax-package-capability-") as scratch:
+    root = Path(scratch)
+    config = AgentConfig(
+        agent_name="packaged-runtime-probe",
+        poll_seconds=0.25,
+        state_dir=root / "state",
+        agent_repo_path=root / "agent",
+        hordax_path=root / "hordax",
+        bridge_path=root / "bridge",
+        workspace_root=root / "workspace",
+        projects={},
+        default_project="none",
+    )
+    installed_registry = ActionRegistry(config)
+    installed_names = set(installed_registry.names)
+    exported_tools = {item.action: item for item in PRODUCT_MCP_TOOLS}
+    for action in required_device_actions:
+        spec = PRODUCT_ACTIONS.get(action)
+        tool = exported_tools.get(action)
+        if action not in installed_names or spec is None or tool is None:
+            raise SystemExit(f"Packaged Runtime/MCP device capability is incomplete: {action}")
+        if spec.project_required or spec.local_action != action or tool.name != action.replace(".", "_"):
+            raise SystemExit(f"Packaged Runtime project-free capability contract mismatches: {action}")
+        if spec.effect != tool.effect:
+            raise SystemExit(f"Packaged Runtime/MCP effect contract mismatches: {action}")
+print("ORDAX_PACKAGED_DEVICE_CAPABILITIES=PASS")
+
 if transport.DEVICE_AGENT_VERSION != ordax_dev_agent.__version__:
     raise SystemExit("Product device control-plane agent version authority is inconsistent")
 if not isinstance(ordax_dev_agent.__version__, str) or not ordax_dev_agent.__version__.strip():
