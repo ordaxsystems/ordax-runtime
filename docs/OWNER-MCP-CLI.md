@@ -54,8 +54,10 @@ revoga grants.
 
 O resultado identifica `missingInstalledCode` e `missingClientGrants`
 para ações representativas de janelas, screenshot, clique, terminal genérico,
-processos e arquivos. Grupos expirados, de outro cliente e com escopo de
-Project/Space não contam como grants genéricos do dispositivo. A escolha de
+processos e arquivos. Grupos expirados, de outro cliente, de outro dispositivo, com
+`client_consent_active` diferente de `true` ou com `scope_kind` diferente de
+`device` não contam como grants genéricos do dispositivo. Grupos vinculados
+a Project/Space tampouco contam. A escolha de
 perfis/ações autorizadas continua pertencendo exclusivamente à Platform:
 esse diagnóstico **não** é um catálogo de perfis nem uma autoridade paralela.
 
