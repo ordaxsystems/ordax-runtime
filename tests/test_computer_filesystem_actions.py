@@ -121,6 +121,78 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
         self.assertTrue(remove.ok, remove.summary)
         self.assertFalse(moved.exists())
 
+    def test_patch_preserves_crlf_when_fragment_uses_lf(self):
+        target = self.allowed / "windows.py"
+        before = b"def hello():\r\n    return 'old'\r\n"
+        target.write_bytes(before)
+        result = self.registry.execute("computer.text_patch", {
+            "path": str(target),
+            "expected_sha256": hashlib.sha256(before).hexdigest(),
+            "replacements": [{"old": "def hello():\n    return 'old'",
+                              "new": "def hello():\n    return 'new'"}],
+        })
+        self.assertTrue(result.ok, result.summary)
+        expected = b"def hello():\r\n    return 'new'\r\n"
+        self.assertEqual(target.read_bytes(), expected)
+        self.assertEqual(result.data["sha256"], hashlib.sha256(expected).hexdigest())
+
+    def test_patch_preserves_utf8_bom_and_crlf(self):
+        target = self.allowed / "bom.txt"
+        before = b"\xef\xbb\xbf" + "Olá\r\nMundo\r\n".encode("utf-8")
+        target.write_bytes(before)
+        result = self.registry.execute("computer.text_patch", {
+            "path": str(target),
+            "expected_sha256": hashlib.sha256(before).hexdigest(),
+            "replacements": [{"old": "Olá\nMundo", "new": "Olá\nOrdaX"}],
+        })
+        self.assertTrue(result.ok, result.summary)
+        expected = b"\xef\xbb\xbf" + "Olá\r\nOrdaX\r\n".encode("utf-8")
+        self.assertEqual(target.read_bytes(), expected)
+        self.assertEqual(result.data["size_bytes"], len(expected))
+        self.assertEqual(result.data["sha256"], hashlib.sha256(expected).hexdigest())
+
+    def test_patch_accepts_crlf_fragment_against_lf_file(self):
+        target = self.allowed / "posix.txt"
+        before = b"alpha\nbeta\n"
+        target.write_bytes(before)
+        result = self.registry.execute("computer.text_patch", {
+            "path": str(target),
+            "expected_sha256": hashlib.sha256(before).hexdigest(),
+            "replacements": [{"old": "alpha\r\nbeta", "new": "alpha\r\ngamma"}],
+        })
+        self.assertTrue(result.ok, result.summary)
+        self.assertEqual(target.read_bytes(), b"alpha\ngamma\n")
+
+    def test_patch_mixed_newlines_remain_exact(self):
+        target = self.allowed / "mixed.txt"
+        before = b"alpha\r\nbeta\ngamma\r\n"
+        target.write_bytes(before)
+        rejected = self.registry.execute("computer.text_patch", {
+            "path": str(target),
+            "expected_sha256": hashlib.sha256(before).hexdigest(),
+            "replacements": [{"old": "alpha\nbeta", "new": "changed"}],
+        })
+        self.assertFalse(rejected.ok)
+        self.assertEqual(target.read_bytes(), before)
+        accepted = self.registry.execute("computer.text_patch", {
+            "path": str(target),
+            "expected_sha256": hashlib.sha256(before).hexdigest(),
+            "replacements": [{"old": "alpha\r\nbeta\n", "new": "x\r\ny\n"}],
+        })
+        self.assertTrue(accepted.ok, accepted.summary)
+        self.assertEqual(target.read_bytes(), b"x\r\ny\ngamma\r\n")
+
+    def test_patch_sha_precondition_rejects_stale_files(self):
+        target = self.allowed / "conflict.txt"
+        target.write_bytes(b"current\r\n")
+        result = self.registry.execute("computer.text_patch", {
+            "path": str(target),
+            "expected_sha256": hashlib.sha256(b"stale\r\n").hexdigest(),
+            "replacements": [{"old": "current", "new": "bad"}],
+        })
+        self.assertFalse(result.ok)
+        self.assertEqual(target.read_bytes(), b"current\r\n")
+
     def test_owner_full_access_can_read_only_canonical_installed_product_manifest(self):
         local = self.root / "Local"
         install = local / "Programs" / "ORDAX"
