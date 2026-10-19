@@ -13,7 +13,7 @@ import (
 // execution lifecycle. The legacy WebSocket run loop must never call this:
 // crossing authorities would allow a D1 job to be reported to PostgreSQL.
 func replayCanonicalPendingReports(stateDir string, transport canonicalDeviceTransport) error {
- dir:=filepath.Join(stateDir,"outbox")
+ dir:=filepath.Join(stateDir,"postgres-outbox")
  entries,err:=os.ReadDir(dir)
  if errors.Is(err,os.ErrNotExist){return nil}
  if err!=nil{return err}
