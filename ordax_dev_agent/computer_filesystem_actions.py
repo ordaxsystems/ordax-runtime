@@ -764,7 +764,12 @@ class ComputerFilesystemActions:
         ):
             return ActionResult(False, "replacements must contain 1..100 entries")
 
-        updated = content
+        # Normalize only files with a uniform LF/CRLF style. Mixed EOL is
+        # kept literal, so no unrelated lines silently change.
+        without_crlf = content.replace("\r\n", "")
+        crlf_only = "\r\n" in content and "\r" not in without_crlf and "\n" not in without_crlf
+        newline = "\r\n" if crlf_only else ("\n" if "\r" not in content else None)
+        updated = content.replace("\r\n", "\n") if crlf_only else content
         counts: list[int] = []
         for item in replacements:
             if not isinstance(item, dict):
@@ -776,6 +781,9 @@ class ComputerFilesystemActions:
                 return ActionResult(False, "replacement old must be a non-empty string")
             if not isinstance(new, str):
                 return ActionResult(False, "replacement new must be a string")
+            if newline is not None:
+                old = old.replace("\r\n", "\n")
+                new = new.replace("\r\n", "\n")
             count = updated.count(old)
             if not isinstance(expected_count, int) or expected_count < 1 or expected_count > 10000:
                 return ActionResult(False, "expected_count must be an integer between 1 and 10000")
@@ -788,7 +796,10 @@ class ComputerFilesystemActions:
             updated = updated.replace(old, new)
             counts.append(count)
 
-        encoded = updated.encode("utf-8")
+        if newline == "\r\n":
+            updated = updated.replace("\n", "\r\n")
+        # A BOM is metadata of the existing UTF-8 file, not patch content.
+        encoded = (b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b"") + updated.encode("utf-8")
         if len(encoded) > _MAX_WRITE_BYTES:
             return ActionResult(False, f"patched content exceeds {_MAX_WRITE_BYTES} bytes")
         temp = path.with_name(f".{path.name}.ordax-{uuid.uuid4().hex}.tmp")

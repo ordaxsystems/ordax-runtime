@@ -65,6 +65,54 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
         self.assertFalse(blocked.ok)
         self.assertIn("outside local ORDAX computer access roots", blocked.summary)
 
+    def test_crlf_patch_matches_lf_and_preserves_file_bytes(self):
+        path = self.allowed / "crlf.txt"
+        path.write_bytes(b"alpha\r\nbeta\r\nlast\r\n")
+        original_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        result = self.registry.execute("computer.text_patch", {
+            "path": str(path), "expected_sha256": original_sha,
+            "replacements": [{"old": "alpha\nbeta", "new": "alpha\nupdated"}],
+        })
+        self.assertTrue(result.ok, result.summary)
+        expected_bytes = b"alpha\r\nupdated\r\nlast\r\n"
+        self.assertEqual(path.read_bytes(), expected_bytes)
+        self.assertEqual(result.data["sha256"], hashlib.sha256(expected_bytes).hexdigest())
+        stale = self.registry.execute("computer.text_patch", {
+            "path": str(path), "expected_sha256": original_sha,
+            "replacements": [{"old": "updated", "new": "changed"}],
+        })
+        self.assertFalse(stale.ok)
+        self.assertEqual(path.read_bytes(), expected_bytes)
+
+    def test_utf8_bom_patch_does_not_strip_bom(self):
+        path = self.allowed / "bom.txt"
+        prefix = b"\xef\xbb\xbf"
+        path.write_bytes(prefix + b"one\r\ntwo\r\n")
+        source_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        result = self.registry.execute("computer.text_patch", {
+            "path": str(path), "expected_sha256": source_sha,
+            "replacements": [{"old": "one\ntwo", "new": "one\nthree"}],
+        })
+        self.assertTrue(result.ok, result.summary)
+        self.assertEqual(path.read_bytes(), prefix + b"one\r\nthree\r\n")
+
+    def test_mixed_line_endings_are_not_reformatted(self):
+        path = self.allowed / "mixed.txt"
+        path.write_bytes(b"a\r\nb\nc\r\nd\n")
+        source_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        unmatched = self.registry.execute("computer.text_patch", {
+            "path": str(path), "expected_sha256": source_sha,
+            "replacements": [{"old": "a\nb", "new": "a\nchanged"}],
+        })
+        self.assertFalse(unmatched.ok)
+        self.assertEqual(path.read_bytes(), b"a\r\nb\nc\r\nd\n")
+        matching = self.registry.execute("computer.text_patch", {
+            "path": str(path), "expected_sha256": source_sha,
+            "replacements": [{"old": "a\r\nb", "new": "a\r\nchanged"}],
+        })
+        self.assertTrue(matching.ok, matching.summary)
+        self.assertEqual(path.read_bytes(), b"a\r\nchanged\nc\r\nd\n")
+
     def test_read_write_patch_move_search_and_remove(self):
         file = self.allowed / "notes.txt"
         created = self.registry.execute(
