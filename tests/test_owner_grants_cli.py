@@ -21,7 +21,7 @@ CLIENT = "202fd3e1-b058-4531-8750-82c57e4b6ca0"
 
 class FakeOwner:
     def __init__(self):
-        self.authority = {"clients": [{"client_id": CLIENT}], "grant_groups": [
+        self.authority = {"device_id": DEVICE, "clients": [{"client_id": CLIENT}], "grant_groups": [
             {"grant_group_id": DEVICE, "client_id": CLIENT}
         ]}
         self.calls = []
@@ -161,7 +161,9 @@ class OwnerGrantsCliTests(unittest.TestCase):
     def test_diagnose_is_read_only_and_distinguishes_grants_from_e2e(self):
         remote = FakeOwner()
         remote.authority["grant_groups"] = [{
-            "client_id": CLIENT, "space_id": None, "project_id": None,
+            "client_id": CLIENT, "client_consent_active": True,
+            "scope_kind": "device", "device_id": DEVICE,
+            "space_id": None, "project_id": None,
             "valid_until": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
             "capabilities": canonical_diag_grants(),
         }]
@@ -177,11 +179,19 @@ class OwnerGrantsCliTests(unittest.TestCase):
     def test_diagnose_skips_scoped_expired_and_other_client_grants(self):
         past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
         authority = {
+            "device_id": DEVICE,
             "grant_groups": [
-                {"client_id": CLIENT, "project_id": DEVICE, "capabilities": canonical_diag_grants()},
-                {"client_id": CLIENT, "valid_until": past, "capabilities": canonical_diag_grants()},
-                {"client_id": DEVICE, "capabilities": canonical_diag_grants()},
-                {"client_id": CLIENT, "valid_until": "bad-date", "capabilities": canonical_diag_grants()},
+                {"client_id": CLIENT, "client_consent_active": True,
+                 "scope_kind": "project", "device_id": DEVICE,
+                 "project_id": DEVICE, "capabilities": canonical_diag_grants()},
+                {"client_id": CLIENT, "client_consent_active": True,
+                 "scope_kind": "device", "device_id": DEVICE,
+                 "valid_until": past, "capabilities": canonical_diag_grants()},
+                {"client_id": DEVICE, "client_consent_active": True,
+                 "scope_kind": "device", "device_id": DEVICE, "capabilities": canonical_diag_grants()},
+                {"client_id": CLIENT, "client_consent_active": True,
+                 "scope_kind": "device", "device_id": DEVICE,
+                 "valid_until": "bad-date", "capabilities": canonical_diag_grants()},
             ],
         }
         result = diagnose_owner_mcp_readiness(authority, CLIENT,
@@ -208,15 +218,48 @@ class OwnerGrantsCliTests(unittest.TestCase):
             if item["capability"] == "computer.click":
                 item["access_mode"] = "read"
         result = diagnose_owner_mcp_readiness(
-            {"grant_groups": [{"client_id": CLIENT, "capabilities": capabilities}]},
+            {"device_id": DEVICE, "grant_groups": [{
+                "client_id": CLIENT, "client_consent_active": True, "scope_kind": "device",
+                "device_id": DEVICE, "capabilities": capabilities,
+            }]},
             CLIENT, {"enabled": True, "full_access": True},
         )
         self.assertEqual(result["state"], "blocked")
         self.assertIn("computer.click", result["missingClientGrants"])
 
+    def test_diagnose_never_inherits_revoked_or_other_device_grants(self):
+        valid_group = {
+            "client_id": CLIENT, "client_consent_active": True,
+            "scope_kind": "device", "device_id": DEVICE,
+            "space_id": None, "project_id": None,
+            "capabilities": canonical_diag_grants(),
+        }
+        for tamper in (
+            {"client_consent_active": False},
+            {"client_consent_active": None},
+            {"device_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+            {"scope_kind": "project"},
+            {"space_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+        ):
+            with self.subTest(tamper=tamper):
+                group = {**valid_group, **tamper}
+                result = diagnose_owner_mcp_readiness(
+                    {"device_id": DEVICE, "grant_groups": [group]},
+                    CLIENT, {"enabled": True, "full_access": True},
+                )
+                self.assertEqual(result["state"], "blocked")
+                self.assertEqual(set(result["missingClientGrants"]), set(_DIAGNOSTIC_ACTIONS))
+
+    def test_diagnose_fails_closed_without_owner_device_identity(self):
+        with self.assertRaisesRegex(ValueError, "owner_authority_device_invalid"):
+            diagnose_owner_mcp_readiness(
+                {"grant_groups": []}, CLIENT, {"enabled": True, "full_access": True},
+            )
+
     def test_diagnose_denies_disabled_local_policy_even_with_grants(self):
-        authority = {"grant_groups": [{
-            "client_id": CLIENT, "capabilities": canonical_diag_grants(),
+        authority = {"device_id": DEVICE, "grant_groups": [{
+            "client_id": CLIENT, "client_consent_active": True, "scope_kind": "device",
+            "device_id": DEVICE, "capabilities": canonical_diag_grants(),
         }]}
         result = diagnose_owner_mcp_readiness(
             authority, CLIENT, {"enabled": False, "full_access": True},
