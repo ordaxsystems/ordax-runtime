@@ -15,6 +15,7 @@ from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code, 
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.computer_filesystem_actions import computer_access_management_status
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
+from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z", re.I)
 # The Control Plane owns the profile catalog and validates each scope.
@@ -47,7 +48,7 @@ def _days(value: str) -> int:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="ordax-owner-grants", description="Manage authorized OrdaX MCP grants without the Studio UI")
     commands = parser.add_subparsers(dest="operation", required=True)
-    for name in ("list", "authorize", "revoke"):
+    for name in ("list", "authorize", "revoke", "diagnose"):
         sub = commands.add_parser(name)
         sub.add_argument("--device", required=True, type=_uuid)
         if name != "list":
@@ -81,12 +82,87 @@ def select_client(authority: dict[str, Any], requested: str | None) -> str:
     return matching[0]
 
 
+# This diagnostic inventory is not a second profile catalog: it selects the
+# end-to-end actions required for basic Remote Desktop Commander parity.
+# Valid grant capabilities still come solely from the authenticated Control Plane.
+_DIAGNOSTIC_ACTIONS = (
+    "computer.windows",
+    "computer.screenshot",
+    "computer.click",
+    "computer.terminal_exec",
+    "computer.process_start",
+    "computer.process_list",
+    "computer.text_read",
+    "computer.text_write",
+)
+
+
+def diagnose_owner_mcp_readiness(
+    authority: dict[str, Any], client_id: str, policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Explain device MCP gaps without granting access or asserting E2E success."""
+    if not isinstance(policy, dict):
+        raise ValueError("invalid_local_computer_policy")
+    local_enabled = policy.get("enabled") is True
+    full_access = policy.get("full_access") is True
+    now = datetime.now(timezone.utc)
+    allowed: set[str] = set()
+    for group in authority.get("grant_groups", []):
+        if not isinstance(group, dict) or str(group.get("client_id", "")).lower() != client_id:
+            continue
+        # Generic computer operations are device-scoped, never inherited from
+        # an unrelated Project / Space grant.
+        if group.get("space_id") or group.get("project_id"):
+            continue
+        until = group.get("valid_until")
+        if until is not None:
+            if not isinstance(until, str):
+                continue
+            try:
+                expiry = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if expiry.tzinfo is None or expiry <= now:
+                continue
+        for item in group.get("capabilities", []):
+            capability = item.get("capability") if isinstance(item, dict) else item
+            if isinstance(capability, str):
+                allowed.add(capability)
+    checks = [
+        {
+            "capability": name,
+            "declaredByInstalledCode": name in PRODUCT_ACTIONS,
+            "clientGranted": name in allowed,
+        }
+        for name in _DIAGNOSTIC_ACTIONS
+    ]
+    missing_code = [c["capability"] for c in checks if not c["declaredByInstalledCode"]]
+    missing_grants = [c["capability"] for c in checks if not c["clientGranted"]]
+    ready = local_enabled and full_access and not missing_code and not missing_grants
+    return {
+        "schema": "ordax.owner-mcp-readiness/1",
+        "state": "preflight-ready-unproven" if ready else "blocked",
+        "client_id": client_id,
+        "localPolicyEnabled": local_enabled,
+        "localFullAccess": full_access,
+        "capabilities": checks,
+        "missingInstalledCode": missing_code,
+        "missingClientGrants": missing_grants,
+        "endToEndProven": False,
+        "grantMutationPerformed": False,
+        "note": "Only actual authorized MCP actions on the installed device establish end-to-end readiness.",
+    }
+
+
 def perform(args: argparse.Namespace, token: str, remote: ProductRemoteClient,
             *, policy_checker=computer_access_management_status, config: AgentConfig | None = None) -> dict[str, Any]:
     authority = remote.owner_remote_authority(token, device_id=args.device)
     if args.operation == "list":
         return {"device_id": args.device, "clients": authority["clients"], "grant_groups": authority["grant_groups"]}
     client = select_client(authority, args.client)
+    if args.operation == "diagnose":
+        return diagnose_owner_mcp_readiness(authority, client, policy_checker(
+            config if config is not None else AgentConfig.from_env()))
     if args.operation == "authorize":
         if args.profile in {"full-computer-control", "device-native-terminal", "device-native-process"}:
             policy = policy_checker(config if config is not None else AgentConfig.from_env())
