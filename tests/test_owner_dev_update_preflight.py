@@ -181,7 +181,7 @@ class OwnerDevProvenanceTests(unittest.TestCase):
         root, installer, digest, source = self._legacy_fixture()
         with self.assertRaisesRegex(ValueError, "Studio source commit"):
             self._audit(root, digest, "wrong")
-        with self.assertRaisesRegex(ValueError, "source"):
+        with self.assertRaisesRegex(ValueError, "identity is inconsistent"):
             self._audit(root, digest, "a" * 40)
         manifest_path = self.install / "product-manifest.json"
         data = json.loads(manifest_path.read_text())
