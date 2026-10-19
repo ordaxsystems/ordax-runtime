@@ -106,13 +106,22 @@ def diagnose_owner_mcp_readiness(
     local_enabled = policy.get("enabled") is True
     full_access = policy.get("full_access") is True
     now = datetime.now(timezone.utc)
+    device_id = authority.get("device_id")
+    if not isinstance(device_id, str) or not _UUID.fullmatch(device_id):
+        raise ValueError("owner_authority_device_invalid")
     allowed: set[tuple[str, str]] = set()
     for group in authority.get("grant_groups", []):
         if not isinstance(group, dict) or str(group.get("client_id", "")).lower() != client_id:
             continue
-        # Generic computer operations are device-scoped, never inherited from
-        # an unrelated Project / Space grant.
-        if group.get("space_id") or group.get("project_id"):
+        # The canonical Owner RPC includes consent, device and scope evidence.
+        # A revoked OAuth consent or an unrelated device/Project is not a grant.
+        if (
+            group.get("client_consent_active") is not True
+            or group.get("scope_kind") != "device"
+            or str(group.get("device_id", "")).lower() != device_id.lower()
+            or group.get("space_id") is not None
+            or group.get("project_id") is not None
+        ):
             continue
         until = group.get("valid_until")
         if until is not None:
