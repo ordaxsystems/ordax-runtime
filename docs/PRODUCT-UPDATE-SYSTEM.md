@@ -151,3 +151,21 @@ Staging downloads only the `ordax-studio-windows-x64` artifact for each immutabl
 
 **Important:** successful verification reports `applyAllowed=false`. The production executor still requires approved Authenticode for both installers. The original installed 0.15.6 artifact predates the attestation gate: it is **not** an eligible rollback merely because its SHA-256 matches. Until there is a separately authorized and fully tested Owner/Dev apply policy with rollback evidence, these commands must not execute an installer; no fallback to unsigned or ad hoc manual replacement is permitted.
 
+
+
+## Auditoria do rollback legado — integridade sem autoridade de instalação
+
+O instalador `ORDAX-Studio-Setup-0.15.6-x64.exe` antecede as atestações GitHub.
+O CLI `ordax_dev_agent.owner_dev_update_preflight --audit-legacy-rollback` permite verificar a integridade dessa evidência histórica, **sem instalar, assinar, autorizar ou modificar o produto**.
+
+O auditor requer um SHA-256 e commit do Studio de um registro independente. Verifica a instalação atual pelo registro HKCU e manifesto canônico, o diretório privado sob `%LOCALAPPDATA%/OrdaX/updates`, a ausência de symlinks, o inventário completo, o manifesto SHA256SUMS e o hash dos bytes com o helper Python compartilhado. Não depende de `Get-FileHash` do PowerShell.
+
+Exemplo em um Runtime que já contenha o módulo atualizado:
+
+```powershell
+& '.\runtime\python.exe' -m ordax_dev_agent.owner_dev_update_preflight --audit-legacy-rollback '<CAMINHO_PRIVADO_DO_ROLLBACK>' --expected-installer-sha256 '<SHA256_DE_REGISTRO_INDEPENDENTE>' --expected-studio-source-commit '<COMMIT_DE_REGISTRO_INDEPENDENTE>'
+```
+
+O resultado positivo `legacy-integrity-verified` **não** comprova que o instalador original é byte a byte equivalente à instalação histórica. As propriedades `originalInstallationEquivalenceProven`, `rollbackReady` e `applyAllowed` são sempre `false`, mesmo com todos os hashes corretos. Nenhum journal de atualização é modificado.
+
+Essa auditoria não concede uma exceção para instalador sem assinatura nem cria um segundo executor. O atualizador de produção continua exigindo Authenticode e rollback verificado. Uma futura política Owner/Dev exigirá aprovação, recuperação e testes de instalação independentes.
