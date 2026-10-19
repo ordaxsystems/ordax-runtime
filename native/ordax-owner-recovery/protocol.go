@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -418,9 +419,20 @@ func (c *client) recoverPendingReports() error {
 		if err != nil {
 			return err
 		}
-		_ = response.Body.Close()
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			_ = response.Body.Close()
 			return fmt.Errorf("pending report recovery rejected: HTTP %d", response.StatusCode)
+		}
+		// HTTP success is not an acknowledgement. Do not discard the durable
+		// outbox report unless the server explicitly confirms persistence.
+		var acknowledgement struct {
+			OK bool `json:"ok"`
+		}
+		decoder := json.NewDecoder(io.LimitReader(response.Body, 4096))
+		decodeErr := decoder.Decode(&acknowledgement)
+		closeErr := response.Body.Close()
+		if decodeErr != nil || closeErr != nil || !acknowledgement.OK {
+			return errors.New("pending report recovery was not acknowledged")
 		}
 		if err := os.Remove(path); err != nil {
 			return err
