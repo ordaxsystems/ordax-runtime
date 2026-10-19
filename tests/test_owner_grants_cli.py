@@ -59,6 +59,24 @@ class OwnerGrantsCliTests(unittest.TestCase):
                 config=object())
         self.assertEqual(remote.calls[-1][0], "grant")
 
+    def test_device_terminal_grant_requires_local_full_access(self):
+        args = parse_args(["authorize", "--device", DEVICE, "--profile", "device-native-terminal"])
+        self.assertIsNone(args.project)
+        self.assertIsNone(args.space)
+        remote = FakeOwner()
+        for policy in ({"enabled": False, "full_access": True},
+                       {"enabled": True, "full_access": False}):
+            with self.assertRaisesRegex(ValueError, "local_full_access_required"):
+                perform(args, "token", remote, policy_checker=lambda _: policy, config=object())
+            self.assertFalse(any(call[0] == "grant" for call in remote.calls))
+        result = perform(args, "token", remote,
+                         policy_checker=lambda _: {"enabled": True, "full_access": True},
+                         config=object())
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["group"]["profile_key"], "device-native-terminal")
+        self.assertIsNone(result["group"]["space_id"])
+        self.assertIsNone(result["group"]["project_id"])
+
     def test_project_grants_require_exact_project_scope(self):
         # The CLI validates paired identifiers, while the Control Plane
         # alone decides which named profiles require a project.
