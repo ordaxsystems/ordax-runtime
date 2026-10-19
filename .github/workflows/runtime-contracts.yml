@@ -85,6 +85,7 @@ jobs:
           tests.test_product_device_control_plane
           tests.test_product_update
           tests.test_product_update_apply
+          tests.test_owner_dev_update_preflight
           tests.test_versioning
           tests.test_studio_managed_browser_contract
           tests.test_product_action_scope_parity
