@@ -94,7 +94,8 @@ class OwnerDevProvenanceTests(unittest.TestCase):
 
     def verify(self, **kwargs):
         return verify_owner_dev_preflight(
-            self.root, target=TARGET, rollback=ROLLBACK,
+            self.root, target=kwargs.pop("target", TARGET),
+            rollback=kwargs.pop("rollback", ROLLBACK),
             run=kwargs.pop("run", self.gh),
             installed_product=kwargs.pop(
                 "installed_product",
