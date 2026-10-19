@@ -394,20 +394,20 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--stage", action="store_true", help="download and verify CI artifacts only")
     mode.add_argument("--transaction-root", help="verify a previously staged transaction")
     mode.add_argument("--audit-legacy-rollback", help="inspect pre-attestation rollback without applying")
-    parser.add_argument("--expected-installer-sha256")
-    parser.add_argument("--expected-studio-source-commit")
     parser.add_argument("--target-version", help="required for staging, e.g. 0.15.9")
     parser.add_argument("--target-run")
     parser.add_argument("--target-commit")
     parser.add_argument("--rollback-run")
     parser.add_argument("--rollback-commit")
+    parser.add_argument("--expected-installer-sha256")
+    parser.add_argument("--expected-studio-source-commit")
     args = parser.parse_args(argv)
     try:
         if args.audit_legacy_rollback:
             if not args.expected_installer_sha256 or not args.expected_studio_source_commit:
                 parser.error("legacy audit requires --expected-installer-sha256 and --expected-studio-source-commit")
-            if any((args.target_run, args.target_commit, args.rollback_run, args.rollback_commit,
-                    args.target_version)):
+            if any((args.target_run, args.target_commit, args.rollback_run,
+                    args.rollback_commit, args.target_version)):
                 parser.error("legacy audit does not accept update candidate arguments")
             result = audit_legacy_rollback(
                 args.audit_legacy_rollback,
@@ -422,17 +422,17 @@ def main(argv: list[str] | None = None) -> int:
             target = MainCandidate(args.target_run, args.target_commit)
             rollback = MainCandidate(args.rollback_run, args.rollback_commit)
             if args.stage:
-            if not args.target_version:
-                parser.error("--target-version is required with --stage")
-            result = stage_owner_dev_candidates(
-                target=target, target_version=args.target_version, rollback=rollback,
-            )
-        else:
-            if args.target_version:
-                parser.error("--target-version is only accepted with --stage")
-            result = verify_owner_dev_preflight(
-                args.transaction_root, target=target, rollback=rollback,
-            )
+                if not args.target_version:
+                    parser.error("--target-version is required with --stage")
+                result = stage_owner_dev_candidates(
+                    target=target, target_version=args.target_version, rollback=rollback,
+                )
+            else:
+                if args.target_version:
+                    parser.error("--target-version is only accepted with --stage")
+                result = verify_owner_dev_preflight(
+                    args.transaction_root, target=target, rollback=rollback,
+                )
     except (ValueError, RuntimeError, OSError, TypeError, json.JSONDecodeError) as error:
         print(json.dumps({"schema": PREFLIGHT_SCHEMA, "state": "blocked",
                           "reason": type(error).__name__, "applyAllowed": False}))
