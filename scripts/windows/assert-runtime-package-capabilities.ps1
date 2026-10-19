@@ -29,6 +29,7 @@ import ordax_dev_agent
 import ordax_dev_agent.product_device_control_plane as transport
 from ordax_dev_agent.control_plane import build_control_plane
 from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
+from ordax_dev_agent.owner_dev_update_preflight import stage_owner_dev_candidates, verify_owner_dev_preflight
 
 expected = Path(sys.argv[1]).resolve()
 actual = Path(transport.__file__).resolve()
@@ -88,6 +89,9 @@ with TemporaryDirectory(prefix="ordax-package-capability-") as scratch:
             raise SystemExit(f"Packaged Runtime/MCP effect contract mismatches: {action}")
 print("ORDAX_PACKAGED_DEVICE_CAPABILITIES=PASS")
 
+if not callable(stage_owner_dev_candidates) or not callable(verify_owner_dev_preflight):
+    raise SystemExit("Packaged Owner/Dev provenance preflight is missing")
+print("ORDAX_OWNER_DEV_PREFLIGHT_PACKAGED=PASS")
 if transport.DEVICE_AGENT_VERSION != ordax_dev_agent.__version__:
     raise SystemExit("Product device control-plane agent version authority is inconsistent")
 if not isinstance(ordax_dev_agent.__version__, str) or not ordax_dev_agent.__version__.strip():
