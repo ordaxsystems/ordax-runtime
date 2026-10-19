@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+from datetime import datetime, timedelta, timezone
 import threading
 import unittest
 from urllib.parse import parse_qs, urlparse
@@ -11,7 +12,7 @@ import httpx
 from ordax_core.owner_oauth import (
     OwnerOAuthError, browser_authorization_code, exchange_owner_code,
 )
-from ordax_dev_agent.owner_grants_cli import parse_args, perform, select_client
+from ordax_dev_agent.owner_grants_cli import parse_args, perform, select_client, diagnose_owner_mcp_readiness, _DIAGNOSTIC_ACTIONS
 
 DEVICE = "24630b00-e9c0-4d93-b38a-2367048cd9d1"
 CLIENT = "202fd3e1-b058-4531-8750-82c57e4b6ca0"
@@ -147,6 +148,61 @@ class OwnerGrantsCliTests(unittest.TestCase):
         result = perform(parse_args(["list", "--device", DEVICE]), "token", remote)
         self.assertEqual(result["clients"][0]["client_id"], CLIENT)
         self.assertEqual(len(remote.calls), 1)
+
+    def test_diagnose_is_read_only_and_distinguishes_grants_from_e2e(self):
+        remote = FakeOwner()
+        remote.authority["grant_groups"] = [{
+            "client_id": CLIENT, "space_id": None, "project_id": None,
+            "valid_until": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "capabilities": [{"capability": name} for name in _DIAGNOSTIC_ACTIONS],
+        }]
+        args = parse_args(["diagnose", "--device", DEVICE, "--client", CLIENT])
+        result = perform(args, "token", remote, config=object(),
+                         policy_checker=lambda _: {"enabled": True, "full_access": True})
+        self.assertEqual(result["state"], "preflight-ready-unproven")
+        self.assertFalse(result["endToEndProven"])
+        self.assertFalse(result["grantMutationPerformed"])
+        self.assertEqual(result["missingClientGrants"], [])
+        self.assertEqual([call[0] for call in remote.calls], ["authority"])
+
+    def test_diagnose_skips_scoped_expired_and_other_client_grants(self):
+        past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        authority = {
+            "grant_groups": [
+                {"client_id": CLIENT, "project_id": DEVICE, "capabilities": list(_DIAGNOSTIC_ACTIONS)},
+                {"client_id": CLIENT, "valid_until": past, "capabilities": list(_DIAGNOSTIC_ACTIONS)},
+                {"client_id": DEVICE, "capabilities": list(_DIAGNOSTIC_ACTIONS)},
+                {"client_id": CLIENT, "valid_until": "bad-date", "capabilities": list(_DIAGNOSTIC_ACTIONS)},
+            ],
+        }
+        result = diagnose_owner_mcp_readiness(authority, CLIENT,
+                                             {"enabled": True, "full_access": True})
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(set(result["missingClientGrants"]), set(_DIAGNOSTIC_ACTIONS))
+
+    def test_diagnose_does_not_mistake_full_access_for_oauth_consent(self):
+        remote = FakeOwner()
+        remote.authority["grant_groups"] = []
+        result = perform(parse_args(["diagnose", "--device", DEVICE]), "token", remote,
+                         config=object(), policy_checker=lambda _: {
+                             "enabled": True, "full_access": True,
+                         })
+        self.assertEqual(result["state"], "blocked")
+        self.assertTrue(result["localFullAccess"])
+        self.assertIn("computer.terminal_exec", result["missingClientGrants"])
+        self.assertFalse(result["endToEndProven"])
+        self.assertEqual(len(remote.calls), 1)
+
+    def test_diagnose_denies_disabled_local_policy_even_with_grants(self):
+        authority = {"grant_groups": [{
+            "client_id": CLIENT, "capabilities": list(_DIAGNOSTIC_ACTIONS),
+        }]}
+        result = diagnose_owner_mcp_readiness(
+            authority, CLIENT, {"enabled": False, "full_access": True},
+        )
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(result["missingClientGrants"], [])
+        self.assertFalse(result["localPolicyEnabled"])
 
     def test_owner_oauth_pkce_exact_loopback_and_state(self):
         def open_browser(url, **kwargs):
