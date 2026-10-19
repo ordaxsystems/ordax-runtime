@@ -1,4 +1,4 @@
-"""Persistent project process manager for ORDAX Dev."""
+"""Canonical persistent process supervisor for both project and device scopes."""
 from __future__ import annotations
 
 import json
@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .models import ActionResult
+from .persistent_process_runtime import WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -435,7 +436,7 @@ class PersistentProcessActions:
                         ["taskkill", "/PID", str(manager.pid), "/T", "/F"],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
-                        timeout=15,
+                        timeout=WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS,
                         shell=False,
                     )
                 else:
@@ -608,7 +609,7 @@ class PersistentProcessActions:
         # 15 seconds for taskkill. Killing its manager after only three seconds
         # races that cleanup and can leave an orphaned child or stale journal.
         # Retain the shorter grace on POSIX.
-        graceful_deadline = time.monotonic() + (18.0 if os.name == "nt" else 3.0)
+        graceful_deadline = time.monotonic() + (WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS + 3.0 if os.name == "nt" else 3.0)
         while time.monotonic() < graceful_deadline:
             manager_running = self._pid_running(pid)
             root_running = bool(
@@ -632,7 +633,7 @@ class PersistentProcessActions:
                         ["taskkill", "/PID", str(termination_pid), "/T", "/F"],
                         capture_output=True,
                         text=True,
-                        timeout=15,
+                        timeout=WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS,
                         shell=False,
                     )
                     # A nonzero taskkill exit can race the manager's own
@@ -666,7 +667,8 @@ class PersistentProcessActions:
                     try:
                         subprocess.run(
                             ["taskkill", "/PID", str(pid), "/T", "/F"],
-                            capture_output=True, text=True, timeout=15, shell=False,
+                            capture_output=True, text=True,
+                            timeout=WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS, shell=False,
                         )
                     except (OSError, subprocess.TimeoutExpired):
                         pass
