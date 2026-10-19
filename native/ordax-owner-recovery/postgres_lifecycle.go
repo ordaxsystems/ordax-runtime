@@ -31,6 +31,10 @@ func runCanonicalOwnerRecovery(cfg config) error {
 }
 
 func canonicalOwnerIteration(c *client,transport canonicalDeviceTransport) error {
+ return canonicalOwnerIterationWithExecutor(c,transport,executeCapability)
+}
+
+func canonicalOwnerIterationWithExecutor(c *client,transport canonicalDeviceTransport, execute func(config,string,string) actionResult) error {
  // Recover exact committed receipts before claiming any new action.
  if err:=replayCanonicalPendingReports(c.cfg.StateDir,transport);err!=nil{return err}
  capabilities:=allowedCapabilities()
@@ -50,7 +54,7 @@ func canonicalOwnerIteration(c *client,transport canonicalDeviceTransport) error
  // A completed local mutation must be reported even if lease renewal fails.
  // The server will reject a superseded epoch instead of replaying the action.
  resultCh:=make(chan actionResult,1)
- go func(){resultCh<-executeCapability(c.cfg,job.Capability,job.EffectID)}()
+ go func(){resultCh<-execute(c.cfg,job.Capability,job.EffectID)}()
  renew:=time.NewTicker(30*time.Second);defer renew.Stop()
  var result actionResult
  for {
