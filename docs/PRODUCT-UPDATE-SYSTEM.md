@@ -62,6 +62,28 @@ Pre-execution policy or integrity failures become `blocked`; a failed handoff be
 
 The remaining external gate is provisioning the production code-signing identity/service and inserting its approved Authenticode certificate thumbprint into the packaged trust root before the first stable production release.
 
+## Exclusive Windows update handoff and interruption semantics
+
+The sole `scripts/windows/apply-ordax-production-update.ps1` executor takes a
+Windows **per-user, cross-session named mutex** before accepting an update
+handoff. A concurrent launcher must stop without editing the active transaction
+journal or invoking an installer. The OS releases ownership if the updater
+process terminates, without implying that installation or recovery succeeded.
+
+A refused replay of `installing-target` or `rolling-back` must **preserve**
+the existing journal phase, because installation or restoration may have already
+started. It must never silently downgrade that evidence to pre-install
+`blocked`. A failure in the **accepted** executor after either phase begins
+records `recovery-required` if its recovery path cannot complete. Pre-execution
+validation failures may be `blocked`. Terminal outcomes are not replayable.
+
+An abandoned mutex or an interrupted phase is **not** permission to resume,
+reinstall or declare rollback complete. Recovery of the legacy Owner/Dev
+installation remains a separate proof obligation tracked by issue #149; no
+unsigned installation mode, second executor, or production trust exception is
+introduced. The Windows bootstrap guard regression suite covers competing
+handoffs and preservation of interrupted journals.
+
 ## Transaction handoff and rollback integrity
 
 The existing `scripts/windows/apply-ordax-production-update.ps1` is the **only** Windows update executor. Its external bootstrap must rebind every argument (source installation version, canonical target and rollback filenames, versions, staging paths, SHA-256 and transaction identifier) to the durable `transaction.json` before either installer is run. Only the journal's `handoff-launching` phase under `%LOCALAPPDATA%\\OrdaX\\updates` may initiate application; terminal transactions are not replayable, and refused replays cannot overwrite committed, rolled-back or recovery-required receipts.
