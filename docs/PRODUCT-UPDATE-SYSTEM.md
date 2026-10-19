@@ -111,3 +111,21 @@ Replace the placeholders only after verifying the selected run identity and exac
 
 This is a provenance prerequisite, **not** an installer or a second updater. Production continues to require a publicly trusted Authenticode timestamped signature from an approved signing service, canonical immutable releases and the shared verification/transaction/rollback mechanism. Do not pass unsigned CI artifacts into `product_update_apply.py` or `apply-ordax-production-update.ps1`; no unsigned fallback or per-tool override is authorized. A future Owner/Dev apply route may use only a separately approved, independently tested trust policy that reuses the same transaction and recovery primitives and proves both the target and rollback.
 
+
+## Owner/Dev provenance staging and preflight
+
+The packaged CLI `python -m ordax_dev_agent.owner_dev_update_preflight` is an **Owner-only, non-executing** CI artifact staging/provenance verifier. It does not install, quiesce, modify the Runtime, grant OAuth permissions, alter signer trust roots or enable an unsigned updater. It reuses the existing private transaction directory (`%LOCALAPPDATA%\\OrdaX\\updates`), SHA-256 manifest parser, atomic transaction journal and validator from `product_update_apply.py`.
+
+**Requirements:** a logged-in GitHub CLI (`gh`), the exact protected-`main` SHA and GitHub Actions run ID for the **target and rollback**, and both candidates having successful `build-installer`, `install-smoke` and `attest-owner-dev-candidate` jobs. The installed product must be at the canonical root `%LOCALAPPDATA%\\Programs\\ORDAX`, with its version matching the rollback candidate.
+
+The commands have no Studio dependency:
+
+```powershell
+& '.\\runtime\\python.exe' -m ordax_dev_agent.owner_dev_update_preflight --stage --target-version <TARGET_VERSION> --target-run <TARGET_RUN_ID> --target-commit <TARGET_MAIN_SHA> --rollback-run <ROLLBACK_RUN_ID> --rollback-commit <ROLLBACK_MAIN_SHA>
+& '.\\runtime\\python.exe' -m ordax_dev_agent.owner_dev_update_preflight --transaction-root <STAGED_ROOT> --target-run <TARGET_RUN_ID> --target-commit <TARGET_MAIN_SHA> --rollback-run <ROLLBACK_RUN_ID> --rollback-commit <ROLLBACK_MAIN_SHA>
+```
+
+Staging downloads only the `ordax-studio-windows-x64` artifact for each immutable run into the normal private update tree; its exact installer and `SHA256SUMS.txt` are checked before GitHub attestation verification. The immutable run, source SHA and both candidate identities are pinned into the durable canonical transaction journal. Every preflight validates both runs, the locally installed version/root, staged hashes and exact issuer again. No file under the installed product is modified.
+
+**Important:** successful verification reports `applyAllowed=false`. The production executor still requires approved Authenticode for both installers. The original installed 0.15.6 artifact predates the attestation gate: it is **not** an eligible rollback merely because its SHA-256 matches. Until there is a separately authorized and fully tested Owner/Dev apply policy with rollback evidence, these commands must not execute an installer; no fallback to unsigned or ad hoc manual replacement is permitted.
+
