@@ -79,6 +79,7 @@ jobs:
           tests.test_product_mcp
           tests.test_product_remote_client
           tests.test_connector_owner_grants
+          tests.test_owner_grants_cli
           tests.test_product_action_recovery
           tests.test_product_central_session
           tests.test_product_device_control_plane
