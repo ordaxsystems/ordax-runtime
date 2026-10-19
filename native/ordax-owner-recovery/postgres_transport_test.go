@@ -3,6 +3,7 @@ package main
 import (
  "net/http"
  "net/http/httptest"
+ "fmt"
  "strings"
  "testing"
 )
@@ -40,4 +41,15 @@ func TestCanonicalPostgresTransportRejectsUnsafeTargets(t *testing.T) {
  }
  client:=canonicalDeviceTransport{baseURL:"https://example.com",deviceID:"test",deviceToken:strings.Repeat("x",32),httpClient:http.DefaultClient}
  if _,err:=client.post("legacy-job",map[string]any{});err==nil {t.Fatal("unknown operation accepted")}
+}
+
+func TestClaimAcceptsBoundedCanonicalJobEnvelope(t *testing.T) {
+ server:=httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  _,_=fmt.Fprintf(w,`{"ok":true,"job":{"payload":"%s"}}`,strings.Repeat("a",32*1024))
+ }))
+ defer server.Close()
+ client:=canonicalDeviceTransport{baseURL:server.URL,deviceID:"device-test",deviceToken:strings.Repeat("x",32),httpClient:server.Client()}
+ ack,err:=client.post("claim",map[string]any{})
+ if err!=nil {t.Fatal(err)}
+ if ack["job"]==nil {t.Fatal("job was discarded")}
 }
