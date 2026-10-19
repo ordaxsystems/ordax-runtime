@@ -254,6 +254,8 @@ def verify_owner_dev_preflight(
     ):
         raise ValueError("transaction journal is not an unconsumed canonical staging record")
     target_record, rollback_record = _validated_transaction_material(root, journal)
+    if target == rollback or target.run_id == rollback.run_id:
+        raise ValueError("target and rollback must be separately attested candidates")
     expected_source = {
         "target": {"runId": target.run_id, "commit": target.commit_sha},
         "rollback": {"runId": rollback.run_id, "commit": rollback.commit_sha},
@@ -270,8 +272,6 @@ def verify_owner_dev_preflight(
     expected_install = (Path(local) / "Programs" / "ORDAX").resolve()
     if Path(current.get("installLocation", "")).resolve() != expected_install:
         raise ValueError("installed product location is not canonical")
-    if target == rollback or target.run_id == rollback.run_id:
-        raise ValueError("target and rollback must be separately attested candidates")
 
     # Validate both source runs and *both* executable byte streams. An old
     # un-attested rollback is deliberately rejected, even if its hash matches.
