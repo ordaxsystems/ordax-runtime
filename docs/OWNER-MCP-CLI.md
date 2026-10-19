@@ -17,6 +17,7 @@ Não requer um serviço MCP adicional.
 ```powershell
 & '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli list --device <DEVICE_UUID>
 & '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli authorize --device <DEVICE_UUID> --profile interactive-computer-control --days 30
+& '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli authorize --device <DEVICE_UUID> --profile device-native-terminal --days 30
 & '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli authorize --device <DEVICE_UUID> --profile full-computer-control --days 30
 & '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli revoke --device <DEVICE_UUID> --group <GRANT_GROUP_UUID>
 ```
@@ -39,7 +40,7 @@ O `ProductRemoteClient` do Runtime é o único cliente HTTP, usando:
 `POST /v3/owner/remote-grant-groups`,
 `DELETE /v3/owner/remote-grant-groups/{id}`.
 PostgreSQL/Platform permanece autoridade final, inclusive revogação.
-`full-computer-control` exige Full Access ativado na política local.
+`device-native-terminal` e `full-computer-control` exigem Full Access ativado na política local. Ambos passam pela autoridade canônica PostgreSQL/Platform, com OAuth Owner explícito. O primeiro concede somente execução de terminal no dispositivo, sem GitHub/Space, e não habilita outras famílias de ações.
 
 ## Validação
 
