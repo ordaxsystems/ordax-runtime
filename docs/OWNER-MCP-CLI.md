@@ -6,18 +6,19 @@ iniciar o aplicativo Studio, sem Node.js e sem manter uma autoridade paralela.
 ## Instalação
 
 O ponto de entrada `ordax-owner-grants` é publicado por `pyproject.toml`.
-No Windows instalado, o próprio Python privado do Runtime fornece
-`runtime\\Scripts\\ordax-owner-grants.exe`. Em ambientes Python normais,
-o comando também está disponível após instalar o pacote `ordax-runtime`.
+No instalador Windows, o Runtime embarca Python isolado e o comando canônico é
+`runtime\\python.exe -m ordax_dev_agent.owner_grants_cli`.
+O build Windows testa essa chamada diretamente no Python privado. Em uma instalação
+Python padrão, `ordax-owner-grants` também fica disponível via console script.
 Não requer um serviço MCP adicional.
 
 ## Comandos
 
 ```powershell
-ordax-owner-grants list --device <DEVICE_UUID>
-ordax-owner-grants authorize --device <DEVICE_UUID> --profile interactive-computer-control --days 30
-ordax-owner-grants authorize --device <DEVICE_UUID> --profile full-computer-control --days 30
-ordax-owner-grants revoke --device <DEVICE_UUID> --group <GRANT_GROUP_UUID>
+& '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli list --device <DEVICE_UUID>
+& '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli authorize --device <DEVICE_UUID> --profile interactive-computer-control --days 30
+& '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli authorize --device <DEVICE_UUID> --profile full-computer-control --days 30
+& '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli revoke --device <DEVICE_UUID> --group <GRANT_GROUP_UUID>
 ```
 
 Se a conta possuir mais de um cliente OAuth ativo, especifique

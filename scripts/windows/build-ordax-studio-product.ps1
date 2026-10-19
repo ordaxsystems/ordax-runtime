@@ -277,6 +277,18 @@ if ($LASTEXITCODE -ne 0) {
     throw "Packaged App Intelligence registry validation failed"
 }
 
+# Verify the Owner MCP administration entry point is usable by the private
+# packaged Python, rather than assuming pip --target installs Scripts/*.exe.
+& $privatePython -m ordax_dev_agent.owner_grants_cli --help | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged Owner grant CLI is unavailable"
+}
+& $privatePython -c "import importlib.metadata as md; e=[x for x in md.entry_points(group='console_scripts') if x.name=='ordax-owner-grants']; assert len(e)==1 and e[0].value=='ordax_dev_agent.owner_grants_cli:main'; print('ORDAX_OWNER_GRANT_ENTRYPOINT_OK')"
+if ($LASTEXITCODE -ne 0) {
+    throw "Canonical Owner grant console entry point is missing"
+}
+Write-Output "ORDAX_OWNER_GRANT_CLI=PASS"
+
 $runtimeVersion = (& $privatePython -I -c "import importlib.metadata as metadata; print(metadata.version('ordax-runtime'))").Trim()
 if ($LASTEXITCODE -ne 0 -or $runtimeVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
     throw "Packaged ORDAX Runtime version is missing or invalid: $runtimeVersion"
