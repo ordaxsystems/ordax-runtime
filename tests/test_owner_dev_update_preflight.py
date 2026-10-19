@@ -11,6 +11,7 @@ from unittest.mock import patch
 from ordax_dev_agent.owner_dev_update_preflight import (
     MainCandidate, _run_gh, verify_owner_dev_preflight,
     stage_owner_dev_candidates,
+    audit_legacy_rollback,
 )
 
 REPO = "ordaxsystems/ordax-runtime"
@@ -119,6 +120,97 @@ class OwnerDevProvenanceTests(unittest.TestCase):
             ),
             **kwargs,
         )
+
+    def _legacy_fixture(self):
+        version = "0.15.6"
+        source = "ab1ceda55abd226bc5c12b60f47c052276e19e5d"
+        manifest = {
+            "schema": "ordax.windows-product/1",
+            "product": "ORDAX Studio",
+            "version": version,
+            "runtime_version": "0.4.6",
+            "studio_source_commit": source,
+        }
+        (self.install / "product-manifest.json").write_text(
+            json.dumps(manifest), encoding="utf-8",
+        )
+        root = self.base / "OrdaX" / "updates" / "historical-evidence" / "rollback"
+        root.mkdir(parents=True)
+        name = f"ORDAX-Studio-Setup-{version}-x64.exe"
+        installer = root / name
+        installer.write_bytes(b"opaque historic installer test bytes")
+        digest = hashlib.sha256(installer.read_bytes()).hexdigest()
+        (root / "SHA256SUMS.txt").write_text(f"{digest}  {name}\\n", encoding="ascii")
+        return root, installer, digest, source
+
+    def _audit(self, root, digest, source):
+        return audit_legacy_rollback(
+            root, expected_installer_sha256=digest,
+            expected_studio_source_commit=source,
+            installed_product=lambda: {
+                "version": "0.15.6", "installLocation": str(self.install),
+            },
+        )
+
+    def test_legacy_audit_verifies_bytes_but_never_authorizes_rollback(self):
+        root, installer, digest, source = self._legacy_fixture()
+        original = {p.name: p.read_bytes() for p in root.iterdir()}
+        result = self._audit(root, digest, source)
+        self.assertEqual(result["state"], "legacy-integrity-verified")
+        self.assertEqual(result["installerSha256"], digest)
+        self.assertEqual(result["studioSourceCommit"], source)
+        self.assertEqual(result["artifactSizeBytes"], installer.stat().st_size)
+        self.assertFalse(result["rollbackReady"])
+        self.assertFalse(result["applyAllowed"])
+        self.assertFalse(result["originalInstallationEquivalenceProven"])
+        self.assertEqual({p.name: p.read_bytes() for p in root.iterdir()}, original)
+        self.assertEqual(self.gh.calls, [])
+
+    def test_legacy_audit_rejects_tampered_installer_and_checksum(self):
+        root, installer, digest, source = self._legacy_fixture()
+        installer.write_bytes(b"altered")
+        with self.assertRaisesRegex(ValueError, "installer bytes"):
+            self._audit(root, digest, source)
+        installer.write_bytes(b"opaque historic installer test bytes")
+        checksum = root / "SHA256SUMS.txt"
+        checksum.write_text(f"{'0' * 64}  {installer.name}\\n")
+        with self.assertRaisesRegex(ValueError, "independent CI digest"):
+            self._audit(root, digest, source)
+
+    def test_legacy_audit_rejects_unpinned_or_wrong_product_identity(self):
+        root, installer, digest, source = self._legacy_fixture()
+        with self.assertRaisesRegex(ValueError, "Studio source commit"):
+            self._audit(root, digest, "wrong")
+        with self.assertRaisesRegex(ValueError, "source"):
+            self._audit(root, digest, "a" * 40)
+        manifest_path = self.install / "product-manifest.json"
+        data = json.loads(manifest_path.read_text())
+        data["version"] = "0.15.5"
+        manifest_path.write_text(json.dumps(data))
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self._audit(root, digest, source)
+
+    def test_legacy_audit_rejects_wrong_root_and_extra_artifacts(self):
+        root, installer, digest, source = self._legacy_fixture()
+        with self.assertRaisesRegex(ValueError, "canonical private"):
+            self._audit(self.base, digest, source)
+        (root / "unexpected.bin").write_bytes(b"bad")
+        with self.assertRaisesRegex(ValueError, "unexpected artifacts"):
+            self._audit(root, digest, source)
+
+    def test_legacy_audit_rejects_symlink_alias(self):
+        root, installer, digest, source = self._legacy_fixture()
+        checksum = root / "SHA256SUMS.txt"
+        original = checksum.read_bytes()
+        checksum.unlink()
+        sibling = root.parent / "other-checksums.txt"
+        sibling.write_bytes(original)
+        try:
+            checksum.symlink_to(sibling)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink privilege not available on Windows")
+        with self.assertRaisesRegex(ValueError, "unsafe"):
+            self._audit(root, digest, source)
 
     def test_both_candidates_proven_and_staged_journal_unchanged(self):
         before = self.journal_path.read_bytes()
