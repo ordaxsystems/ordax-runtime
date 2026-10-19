@@ -46,6 +46,20 @@ class PersistentProcessActionsTests(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_windows_supervisor_grace_covers_child_shutdown_contract(self):
+        from ordax_dev_agent.persistent_process_runtime import (
+            WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS,
+        )
+        from ordax_dev_agent import persistent_process_actions
+
+        self.assertEqual(WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS, 15)
+        source = Path(persistent_process_actions.__file__).read_text(encoding="utf-8")
+        self.assertIn(
+            'WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS + 3.0 if os.name == "nt"',
+            source,
+        )
+        self.assertNotIn('return ActionResult(False, "persistent process stop failed", {', source)
+
     def test_atomic_json_retries_transient_replace_error(self):
         path = self.root / "atomic-state.json"
         original_replace = os.replace
