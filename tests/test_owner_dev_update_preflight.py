@@ -140,7 +140,7 @@ class OwnerDevProvenanceTests(unittest.TestCase):
         installer = root / name
         installer.write_bytes(b"opaque historic installer test bytes")
         digest = hashlib.sha256(installer.read_bytes()).hexdigest()
-        (root / "SHA256SUMS.txt").write_text(f"{digest}  {name}\\n", encoding="ascii")
+        (root / "SHA256SUMS.txt").write_text(f"{digest}  {name}\n", encoding="ascii")
         return root, installer, digest, source
 
     def _audit(self, root, digest, source):
@@ -173,7 +173,7 @@ class OwnerDevProvenanceTests(unittest.TestCase):
             self._audit(root, digest, source)
         installer.write_bytes(b"opaque historic installer test bytes")
         checksum = root / "SHA256SUMS.txt"
-        checksum.write_text(f"{'0' * 64}  {installer.name}\\n")
+        checksum.write_text(f"{'0' * 64}  {installer.name}\n")
         with self.assertRaisesRegex(ValueError, "independent CI digest"):
             self._audit(root, digest, source)
 
