@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+from datetime import datetime, timedelta, timezone
 import threading
 import unittest
 from urllib.parse import parse_qs, urlparse
@@ -11,7 +12,8 @@ import httpx
 from ordax_core.owner_oauth import (
     OwnerOAuthError, browser_authorization_code, exchange_owner_code,
 )
-from ordax_dev_agent.owner_grants_cli import parse_args, perform, select_client
+from ordax_dev_agent.owner_grants_cli import parse_args, perform, select_client, diagnose_owner_mcp_readiness, _DIAGNOSTIC_ACTIONS
+from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 
 DEVICE = "24630b00-e9c0-4d93-b38a-2367048cd9d1"
 CLIENT = "202fd3e1-b058-4531-8750-82c57e4b6ca0"
@@ -19,7 +21,7 @@ CLIENT = "202fd3e1-b058-4531-8750-82c57e4b6ca0"
 
 class FakeOwner:
     def __init__(self):
-        self.authority = {"clients": [{"client_id": CLIENT}], "grant_groups": [
+        self.authority = {"device_id": DEVICE, "clients": [{"client_id": CLIENT}], "grant_groups": [
             {"grant_group_id": DEVICE, "client_id": CLIENT}
         ]}
         self.calls = []
@@ -35,6 +37,14 @@ class FakeOwner:
     def revoke_owner_remote_grant_group(self, token, **kwargs):
         self.calls.append(("revoke", token, kwargs))
         return {"ok": True}
+
+
+def canonical_diag_grants():
+    return [
+        {"capability": name,
+         "access_mode": "read" if PRODUCT_ACTIONS[name].effect == "read" else "write"}
+        for name in _DIAGNOSTIC_ACTIONS
+    ]
 
 
 class OwnerGrantsCliTests(unittest.TestCase):
@@ -147,6 +157,116 @@ class OwnerGrantsCliTests(unittest.TestCase):
         result = perform(parse_args(["list", "--device", DEVICE]), "token", remote)
         self.assertEqual(result["clients"][0]["client_id"], CLIENT)
         self.assertEqual(len(remote.calls), 1)
+
+    def test_diagnose_is_read_only_and_distinguishes_grants_from_e2e(self):
+        remote = FakeOwner()
+        remote.authority["grant_groups"] = [{
+            "client_id": CLIENT, "client_consent_active": True,
+            "scope_kind": "device", "device_id": DEVICE,
+            "space_id": None, "project_id": None,
+            "valid_until": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "capabilities": canonical_diag_grants(),
+        }]
+        args = parse_args(["diagnose", "--device", DEVICE, "--client", CLIENT])
+        result = perform(args, "token", remote, config=object(),
+                         policy_checker=lambda _: {"enabled": True, "full_access": True})
+        self.assertEqual(result["state"], "preflight-ready-unproven")
+        self.assertFalse(result["endToEndProven"])
+        self.assertFalse(result["grantMutationPerformed"])
+        self.assertEqual(result["missingClientGrants"], [])
+        self.assertEqual([call[0] for call in remote.calls], ["authority"])
+
+    def test_diagnose_skips_scoped_expired_and_other_client_grants(self):
+        past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        authority = {
+            "device_id": DEVICE,
+            "grant_groups": [
+                {"client_id": CLIENT, "client_consent_active": True,
+                 "scope_kind": "project", "device_id": DEVICE,
+                 "project_id": DEVICE, "capabilities": canonical_diag_grants()},
+                {"client_id": CLIENT, "client_consent_active": True,
+                 "scope_kind": "device", "device_id": DEVICE,
+                 "valid_until": past, "capabilities": canonical_diag_grants()},
+                {"client_id": DEVICE, "client_consent_active": True,
+                 "scope_kind": "device", "device_id": DEVICE, "capabilities": canonical_diag_grants()},
+                {"client_id": CLIENT, "client_consent_active": True,
+                 "scope_kind": "device", "device_id": DEVICE,
+                 "valid_until": "bad-date", "capabilities": canonical_diag_grants()},
+            ],
+        }
+        result = diagnose_owner_mcp_readiness(authority, CLIENT,
+                                             {"enabled": True, "full_access": True})
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(set(result["missingClientGrants"]), set(_DIAGNOSTIC_ACTIONS))
+
+    def test_diagnose_does_not_mistake_full_access_for_oauth_consent(self):
+        remote = FakeOwner()
+        remote.authority["grant_groups"] = []
+        result = perform(parse_args(["diagnose", "--device", DEVICE]), "token", remote,
+                         config=object(), policy_checker=lambda _: {
+                             "enabled": True, "full_access": True,
+                         })
+        self.assertEqual(result["state"], "blocked")
+        self.assertTrue(result["localFullAccess"])
+        self.assertIn("computer.terminal_exec", result["missingClientGrants"])
+        self.assertFalse(result["endToEndProven"])
+        self.assertEqual(len(remote.calls), 1)
+
+    def test_diagnose_rejects_wrong_grant_access_mode(self):
+        capabilities = canonical_diag_grants()
+        for item in capabilities:
+            if item["capability"] == "computer.click":
+                item["access_mode"] = "read"
+        result = diagnose_owner_mcp_readiness(
+            {"device_id": DEVICE, "grant_groups": [{
+                "client_id": CLIENT, "client_consent_active": True, "scope_kind": "device",
+                "device_id": DEVICE, "capabilities": capabilities,
+            }]},
+            CLIENT, {"enabled": True, "full_access": True},
+        )
+        self.assertEqual(result["state"], "blocked")
+        self.assertIn("computer.click", result["missingClientGrants"])
+
+    def test_diagnose_never_inherits_revoked_or_other_device_grants(self):
+        valid_group = {
+            "client_id": CLIENT, "client_consent_active": True,
+            "scope_kind": "device", "device_id": DEVICE,
+            "space_id": None, "project_id": None,
+            "capabilities": canonical_diag_grants(),
+        }
+        for tamper in (
+            {"client_consent_active": False},
+            {"client_consent_active": None},
+            {"device_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+            {"scope_kind": "project"},
+            {"space_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+        ):
+            with self.subTest(tamper=tamper):
+                group = {**valid_group, **tamper}
+                result = diagnose_owner_mcp_readiness(
+                    {"device_id": DEVICE, "grant_groups": [group]},
+                    CLIENT, {"enabled": True, "full_access": True},
+                )
+                self.assertEqual(result["state"], "blocked")
+                self.assertEqual(set(result["missingClientGrants"]), set(_DIAGNOSTIC_ACTIONS))
+
+    def test_diagnose_fails_closed_without_owner_device_identity(self):
+        with self.assertRaisesRegex(ValueError, "owner_authority_device_invalid"):
+            diagnose_owner_mcp_readiness(
+                {"grant_groups": []}, CLIENT, {"enabled": True, "full_access": True},
+            )
+
+    def test_diagnose_denies_disabled_local_policy_even_with_grants(self):
+        authority = {"device_id": DEVICE, "grant_groups": [{
+            "client_id": CLIENT, "client_consent_active": True, "scope_kind": "device",
+            "device_id": DEVICE, "capabilities": canonical_diag_grants(),
+        }]}
+        result = diagnose_owner_mcp_readiness(
+            authority, CLIENT, {"enabled": False, "full_access": True},
+        )
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(result["missingClientGrants"], [])
+        self.assertFalse(result["localPolicyEnabled"])
 
     def test_owner_oauth_pkce_exact_loopback_and_state(self):
         def open_browser(url, **kwargs):
