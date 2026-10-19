@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from ordax_dev_agent.owner_dev_update_preflight import (
     MainCandidate, _run_gh, verify_owner_dev_preflight,
+    stage_owner_dev_candidates,
 )
 
 REPO = "ordaxsystems/ordax-runtime"
@@ -23,6 +24,7 @@ class FakeGitHub:
         self.calls = []
         self.overrides = {}
         self.unattested_run = None
+        self.corrupt_download = False
 
     def __call__(self, argv):
         argv = list(argv)
@@ -31,6 +33,16 @@ class FakeGitHub:
             if self.unattested_run and self.unattested_run in argv:
                 raise RuntimeError("GitHub provenance verification was rejected")
             return "verified"
+        if argv[0] == "run" and argv[1] == "download":
+            identity = TARGET if argv[2] == TARGET.run_id else ROLLBACK
+            version = "0.15.9" if identity == TARGET else "0.15.6"
+            folder = Path(argv[argv.index("--dir") + 1])
+            filename = f"ORDAX-Studio-Setup-{version}-x64.exe"
+            payload = ("downloaded" + version).encode("ascii")
+            digest = hashlib.sha256(payload).hexdigest()
+            (folder / filename).write_bytes(payload if not self.corrupt_download else b"forged")
+            (folder / "SHA256SUMS.txt").write_text(f"{digest}  {filename}\\n")
+            return ""
         if argv[0] != "api":
             raise AssertionError("unexpected GitHub command")
         url = argv[1]
@@ -73,6 +85,10 @@ class OwnerDevProvenanceTests(unittest.TestCase):
             "transactionId": self.root.name,
             "phase": "sha256-verified",
             "installedVersion": "0.15.6",
+            "ownerDevSource": {
+                "target": {"runId": TARGET.run_id, "commit": TARGET.commit_sha},
+                "rollback": {"runId": ROLLBACK.run_id, "commit": ROLLBACK.commit_sha},
+            },
         }
         for role, version in (("target", "0.15.9"), ("rollback", "0.15.6")):
             folder = self.root / role
@@ -117,6 +133,68 @@ class OwnerDevProvenanceTests(unittest.TestCase):
         self.assertIn(TARGET.commit_sha, attest[0])
         self.assertIn(ROLLBACK.commit_sha, attest[1])
         self.assertTrue(all("--signer-workflow" in cmd for cmd in attest))
+
+    def stage(self):
+        return stage_owner_dev_candidates(
+            target=TARGET, target_version="0.15.9", rollback=ROLLBACK,
+            run=self.gh,
+            installed_product=lambda: {
+                "version": "0.15.6", "installLocation": str(self.install),
+            },
+        )
+
+    def test_stage_downloads_exact_ci_artifacts_and_pins_journal(self):
+        result = self.stage()
+        self.assertFalse(result["applyAllowed"])
+        root = Path(result["root"])
+        self.assertTrue(root.is_dir())
+        journal = json.loads((root / "transaction.json").read_text())
+        self.assertEqual(journal["ownerDevSource"]["target"]["runId"], TARGET.run_id)
+        self.assertEqual(journal["ownerDevSource"]["rollback"]["commit"], ROLLBACK.commit_sha)
+        self.assertEqual(journal["phase"], "sha256-verified")
+        downloads = [x for x in self.gh.calls if x[:2] == ["run", "download"]]
+        self.assertEqual(len(downloads), 2)
+        for item in downloads:
+            self.assertEqual(item[item.index("--name") + 1], "ordax-studio-windows-x64")
+        proof = verify_owner_dev_preflight(
+            root, target=TARGET, rollback=ROLLBACK, run=self.gh,
+            installed_product=lambda: {
+                "version": "0.15.6", "installLocation": str(self.install),
+            },
+        )
+        self.assertEqual(proof["state"], "provenance-verified")
+        self.assertFalse(proof["applyAllowed"])
+
+    def test_corrupt_download_cleans_partial_staging(self):
+        self.gh.corrupt_download = True
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            self.stage()
+        children = list((self.base / "OrdaX" / "updates" / "0.15.6-to-0.15.9").iterdir())
+        self.assertEqual(children, [self.root])
+        self.assertFalse(any(x[0] == "attestation" for x in self.gh.calls))
+
+    def test_stage_fails_without_protected_main_or_rollback_attestation(self):
+        self.gh.overrides["run"] = {"head_branch": "feature"}
+        with self.assertRaisesRegex(ValueError, "canonical main"):
+            self.stage()
+        self.assertFalse(any(x[0] == "run" for x in self.gh.calls))
+        self.gh.overrides.clear()
+        self.gh.calls.clear()
+        self.gh.unattested_run = ROLLBACK.commit_sha
+        with self.assertRaisesRegex(RuntimeError, "provenance"):
+            self.stage()
+        self.assertFalse(any(x[0] == "attestation" and ROLLBACK.commit_sha in x
+                             and x[-1] == "ignored" for x in self.gh.calls))
+        self.assertEqual(list((self.base / "OrdaX" / "updates" / "0.15.6-to-0.15.9").iterdir()),
+                         [self.root])
+
+    def test_journal_must_pin_both_main_run_identities(self):
+        value = json.loads(self.journal_path.read_text())
+        value["ownerDevSource"]["rollback"]["runId"] = "9999999"
+        self.journal_path.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, "provenance differs"):
+            self.verify()
+        self.assertEqual(self.gh.calls, [])
 
     def test_untrusted_branch_or_pull_request_is_blocked(self):
         for k, value in (("head_branch", "dev"), ("event", "pull_request"),
