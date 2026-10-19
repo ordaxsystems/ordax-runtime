@@ -764,7 +764,19 @@ class ComputerFilesystemActions:
         ):
             return ActionResult(False, "replacements must contain 1..100 entries")
 
-        updated = content
+        # A Windows CRLF checkout is semantically identical to the LF fragments
+        # produced by text tools. Normalize only homogeneous files, keeping
+        # mixed-EOL files on strict exact-match semantics.
+        without_crlf = content.replace("\r\n", "")
+        if "\r\n" in content and "\n" not in without_crlf and "\r" not in without_crlf:
+            newline = "\r\n"
+            updated = content.replace("\r\n", "\n")
+        elif "\r" not in content:
+            newline = "\n"
+            updated = content
+        else:
+            newline = None
+            updated = content
         counts: list[int] = []
         for item in replacements:
             if not isinstance(item, dict):
@@ -776,6 +788,9 @@ class ComputerFilesystemActions:
                 return ActionResult(False, "replacement old must be a non-empty string")
             if not isinstance(new, str):
                 return ActionResult(False, "replacement new must be a string")
+            if newline is not None:
+                old = old.replace("\r\n", "\n")
+                new = new.replace("\r\n", "\n")
             count = updated.count(old)
             if not isinstance(expected_count, int) or expected_count < 1 or expected_count > 10000:
                 return ActionResult(False, "expected_count must be an integer between 1 and 10000")
@@ -788,12 +803,20 @@ class ComputerFilesystemActions:
             updated = updated.replace(old, new)
             counts.append(count)
 
-        encoded = updated.encode("utf-8")
+        if newline == "\r\n":
+            updated = updated.replace("\n", "\r\n")
+        # decode("utf-8-sig") strips a BOM. Reapply it explicitly so the patch
+        # preserves the on-disk encoding signature and SHA-256 semantics.
+        bom = b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b""
+        encoded = bom + updated.encode("utf-8")
         if len(encoded) > _MAX_WRITE_BYTES:
             return ActionResult(False, f"patched content exceeds {_MAX_WRITE_BYTES} bytes")
         temp = path.with_name(f".{path.name}.ordax-{uuid.uuid4().hex}.tmp")
         try:
-            temp.write_bytes(encoded)
+            with temp.open("wb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(temp, path)
         finally:
             try:
