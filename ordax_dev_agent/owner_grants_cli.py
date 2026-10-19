@@ -106,7 +106,7 @@ def diagnose_owner_mcp_readiness(
     local_enabled = policy.get("enabled") is True
     full_access = policy.get("full_access") is True
     now = datetime.now(timezone.utc)
-    allowed: set[str] = set()
+    allowed: set[tuple[str, str]] = set()
     for group in authority.get("grant_groups", []):
         if not isinstance(group, dict) or str(group.get("client_id", "")).lower() != client_id:
             continue
@@ -124,15 +124,25 @@ def diagnose_owner_mcp_readiness(
                 continue
             if expiry.tzinfo is None or expiry <= now:
                 continue
-        for item in group.get("capabilities", []):
-            capability = item.get("capability") if isinstance(item, dict) else item
-            if isinstance(capability, str):
-                allowed.add(capability)
+        capabilities = group.get("capabilities")
+        if not isinstance(capabilities, list):
+            continue
+        for item in capabilities:
+            if not isinstance(item, dict):
+                continue
+            capability = item.get("capability")
+            access_mode = item.get("access_mode", item.get("accessMode"))
+            if isinstance(capability, str) and access_mode in ("read", "write"):
+                allowed.add((capability, access_mode))
     checks = [
         {
             "capability": name,
+            "requiredAccessMode": "read" if PRODUCT_ACTIONS[name].effect == "read" else "write",
             "declaredByInstalledCode": name in PRODUCT_ACTIONS,
-            "clientGranted": name in allowed,
+            "clientGranted": (
+                name in PRODUCT_ACTIONS
+                and (name, "read" if PRODUCT_ACTIONS[name].effect == "read" else "write") in allowed
+            ),
         }
         for name in _DIAGNOSTIC_ACTIONS
     ]
