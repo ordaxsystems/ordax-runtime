@@ -163,6 +163,23 @@ class ProductMcpServerTests(unittest.TestCase):
         self.assertEqual(desktop[2]["arguments"]["x"], 100)
         self.assertEqual(desktop[2]["arguments"]["y"], 200)
 
+    def test_device_terminal_routes_without_project_or_space(self):
+        result = server.computer_terminal_exec(
+            "dev-1", argv=["node", "--version"], timeout_seconds=10,
+            cwd="C:/Users/example",
+        )
+        self.assertEqual(result["status"], "succeeded")
+        calls = [call for item in FakeClient.instances for call in item.calls if call[0] == "submit"]
+        self.assertEqual(len(calls), 1)
+        request = calls[0][2]
+        self.assertEqual(request["action"], "computer.terminal_exec")
+        self.assertEqual(request["device_id"], "dev-1")
+        self.assertIsNone(request["project"])
+        self.assertIsNone(request["space_id"])
+        self.assertEqual(request["arguments"]["argv"], ["node", "--version"])
+        self.assertEqual(request["arguments"]["cwd"], "C:/Users/example")
+        self.assertEqual(request["arguments"]["timeout_seconds"], 10)
+
     def test_computer_filesystem_tools_route_without_project_scope(self):
         read = server.computer_text_read(
             "dev-1", "C:/Users/example/notes.txt", 1, 20, "space-1"

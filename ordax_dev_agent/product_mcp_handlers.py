@@ -757,6 +757,29 @@ def computer_clipboard_write(device_id: str, project: str, text: str, space_id: 
 
 
 @mcp.tool()
+def computer_terminal_exec(
+    device_id: str,
+    argv: list[str] | None = None,
+    command: str | None = None,
+    shell: bool = False,
+    cwd: str | None = None,
+    timeout_seconds: int = 900,
+    env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Device-scoped terminal using the canonical bounded Runtime executor."""
+    args: dict[str, Any] = {"shell": shell, "timeout_seconds": timeout_seconds}
+    if cwd is not None:
+        args["cwd"] = cwd
+    if argv is not None:
+        args["argv"] = argv
+    if command is not None:
+        args["command"] = command
+    if env is not None:
+        args["env"] = env
+    return _invoke(device_id=device_id, action="computer.terminal_exec", arguments=args)
+
+
+@mcp.tool()
 def computer_launch_app(device_id: str, project: str, application: str, args: list[str] | None = None, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.launch_app", project=project, space_id=space_id, arguments={"project": project, "application": application, "args": args or []})
 

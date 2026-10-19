@@ -549,6 +549,42 @@ class DeveloperActions:
         if not cwd.is_dir():
             return ActionResult(False, "cwd is not a directory")
 
+        return self._run_terminal_payload(payload, cwd=cwd,
+                                          cwd_label="." if not cwd_rel.parts else cwd_rel.as_posix(),
+                                          project_name=project.slug)
+
+    def computer_terminal_exec(self, payload: dict[str, Any]) -> ActionResult:
+        """Device-scoped native terminal; never invent a project or GitHub grant.
+
+        Requires the local Owner Full Access switch and the *separate* remote
+        computer.terminal_exec grant. Execution reuses the same bounded process
+        runner, argument validator and audit trail as project terminal.exec.
+        """
+        from .computer_filesystem_actions import load_computer_access_policy
+
+        policy = load_computer_access_policy(self.config)
+        if not (policy.enabled and policy.full_access):
+            return ActionResult(False, "device terminal requires local Owner Full Access",
+                                {"error_code": "local_full_access_required"})
+        cwd_raw = payload.get("cwd")
+        if cwd_raw is None:
+            cwd = Path.home().resolve()
+        elif isinstance(cwd_raw, str) and cwd_raw.strip() and len(cwd_raw) <= 4096 and "\x00" not in cwd_raw:
+            chosen = Path(cwd_raw).expanduser()
+            if not chosen.is_absolute():
+                return ActionResult(False, "device terminal cwd must be absolute")
+            cwd = chosen.resolve()
+        else:
+            return ActionResult(False, "invalid device terminal cwd")
+        if not cwd.is_dir():
+            return ActionResult(False, "cwd is not a directory")
+        return self._run_terminal_payload(payload, cwd=cwd, cwd_label=str(cwd), project_name=None)
+
+    def _run_terminal_payload(
+        self, payload: dict[str, Any], *, cwd: Path, cwd_label: str,
+        project_name: str | None,
+    ) -> ActionResult:
+        """One validated foreground executor shared by project and device scopes."""
         timeout = _bounded_int(
             payload.get("timeout_seconds"),
             default=900,
@@ -626,14 +662,15 @@ class DeveloperActions:
                 {
                     "error_code": "terminal_launch_failed",
                     "error_type": type(error).__name__,
-                    "project": project.slug,
-                    "cwd": "." if not cwd_rel.parts else cwd_rel.as_posix(),
+                    **({"project": project_name} if project_name is not None else {}),
+                    "cwd": cwd_label,
                 },
             )
         data = dict(result.data)
         data.pop("command", None)
-        data["project"] = project.slug
-        data["cwd"] = "." if not cwd_rel.parts else cwd_rel.as_posix()
+        if project_name is not None:
+            data["project"] = project_name
+        data["cwd"] = cwd_label
         data["shell"] = shell
         return ActionResult(result.ok, result.summary, data)
 
