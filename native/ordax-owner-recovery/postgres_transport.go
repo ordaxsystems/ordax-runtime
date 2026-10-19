@@ -45,8 +45,11 @@ func (t canonicalDeviceTransport) post(kind string, payload map[string]any) (map
  response,err:=t.httpClient.Do(request)
  if err!=nil{return nil,err}
  defer response.Body.Close()
+ // Claimed jobs carry a bounded canonical payload; other responses are short.
+ responseLimit:=int64(8192)
+ if kind=="claim" {responseLimit=128*1024}
  var ack map[string]any
- if err:=json.NewDecoder(io.LimitReader(response.Body,8192)).Decode(&ack);err!=nil{
+ if err:=json.NewDecoder(io.LimitReader(response.Body,responseLimit)).Decode(&ack);err!=nil{
   return nil,errors.New("canonical device transport acknowledgement invalid")
  }
  if response.StatusCode < 200 || response.StatusCode >= 300 || ack["ok"] != true {
