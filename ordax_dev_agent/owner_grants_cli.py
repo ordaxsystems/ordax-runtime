@@ -137,7 +137,10 @@ def diagnose_owner_mcp_readiness(
     checks = [
         {
             "capability": name,
-            "requiredAccessMode": "read" if PRODUCT_ACTIONS[name].effect == "read" else "write",
+            "requiredAccessMode": (
+                None if name not in PRODUCT_ACTIONS
+                else "read" if PRODUCT_ACTIONS[name].effect == "read" else "write"
+            ),
             "declaredByInstalledCode": name in PRODUCT_ACTIONS,
             "clientGranted": (
                 name in PRODUCT_ACTIONS
