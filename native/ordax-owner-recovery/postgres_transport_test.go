@@ -53,3 +53,18 @@ func TestClaimAcceptsBoundedCanonicalJobEnvelope(t *testing.T) {
  if err!=nil {t.Fatal(err)}
  if ack["job"]==nil {t.Fatal("job was discarded")}
 }
+
+func TestCanonicalTransportDoesNotFollowRedirects(t *testing.T) {
+ forwarded:=false
+ receiver:=httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  forwarded=true
+ }))
+ defer receiver.Close()
+ redirector:=httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  http.Redirect(w,r,receiver.URL+"/capture",http.StatusTemporaryRedirect)
+ }))
+ defer redirector.Close()
+ client:=canonicalDeviceTransport{baseURL:redirector.URL,deviceID:"device-test",deviceToken:strings.Repeat("x",32),httpClient:redirector.Client()}
+ if _,err:=client.post("claim",map[string]any{});err==nil {t.Fatal("redirect accepted")}
+ if forwarded {t.Fatal("device token was forwarded to redirected endpoint")}
+}
