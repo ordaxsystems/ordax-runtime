@@ -41,7 +41,7 @@ class FakeGitHub:
             payload = ("downloaded" + version).encode("ascii")
             digest = hashlib.sha256(payload).hexdigest()
             (folder / filename).write_bytes(payload if not self.corrupt_download else b"forged")
-            (folder / "SHA256SUMS.txt").write_text(f"{digest}  {filename}\\n")
+            (folder / "SHA256SUMS.txt").write_text(f"{digest}  {filename}\n")
             return ""
         if argv[0] != "api":
             raise AssertionError("unexpected GitHub command")
