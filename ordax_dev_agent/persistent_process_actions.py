@@ -604,7 +604,11 @@ class PersistentProcessActions:
         except OSError as error:
             control_error = str(error)
 
-        graceful_deadline = time.monotonic() + 3.0
+        # On Windows the supervisor's child-tree shutdown may itself wait up to
+        # 15 seconds for taskkill. Killing its manager after only three seconds
+        # races that cleanup and can leave an orphaned child or stale journal.
+        # Retain the shorter grace on POSIX.
+        graceful_deadline = time.monotonic() + (18.0 if os.name == "nt" else 3.0)
         while time.monotonic() < graceful_deadline:
             manager_running = self._pid_running(pid)
             root_running = bool(
@@ -631,16 +635,12 @@ class PersistentProcessActions:
                         timeout=15,
                         shell=False,
                     )
-                    if (
-                        completed.returncode != 0
-                        and self._pid_running(termination_pid)
-                        and self._pid_running(pid)
-                    ):
-                        return ActionResult(False, "persistent process stop failed", {
-                            **state,
-                            "control_error": control_error,
-                            "stderr": (completed.stderr or "")[-2000:],
-                        })
+                    # A nonzero taskkill exit can race the manager's own
+                    # successful cooperative exit (Windows launcher handoff).
+                    # Wait for actual observed termination before returning a
+                    # failure; the command's exit code is not ownership proof.
+                    if completed.returncode != 0:
+                        control_error = control_error or "windows_process_tree_fallback_unconfirmed"
                 else:
                     os.kill(pid, signal.SIGTERM)
             except (OSError, subprocess.TimeoutExpired) as error:
@@ -653,6 +653,26 @@ class PersistentProcessActions:
                 if not root_running and not manager_running:
                     break
                 time.sleep(0.05)
+
+            # A venv python launcher may no longer own the real supervisor
+            # process. Only target that manager PID if a fresh command-line
+            # probe still proves the exact launch token and script identity.
+            # Without that proof, fail closed rather than killing a reused PID.
+            if os.name == "nt" and self._pid_running(pid) and pid != termination_pid:
+                fresh = self._load_process_state(project, process_id)
+                token = str(fresh.get("token") or "")
+                commandline = self._commandline(pid)
+                if token and "persistent_process_runtime.py" in commandline and token in commandline:
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/PID", str(pid), "/T", "/F"],
+                            capture_output=True, text=True, timeout=15, shell=False,
+                        )
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                    retry_deadline = time.monotonic() + 5.0
+                    while time.monotonic() < retry_deadline and self._pid_running(pid):
+                        time.sleep(0.05)
 
         handle = handles.pop(process_id, None)
         getattr(self, "_persistent_process_launch_tokens", {}).pop(process_id, None)
