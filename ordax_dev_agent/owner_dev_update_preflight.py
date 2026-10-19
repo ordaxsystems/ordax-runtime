@@ -144,6 +144,96 @@ def _canonical_transaction_root(root: Path) -> Path:
 
 
 
+def audit_legacy_rollback(
+    legacy_rollback_dir: str | Path,
+    *,
+    expected_installer_sha256: str,
+    expected_studio_source_commit: str,
+    installed_product: Callable[[], dict[str, str]] = installed_windows_product,
+) -> dict[str, Any]:
+    """Read-only inventory of a pre-attestation rollback, NEVER apply authority.
+
+    This deliberately does not infer the original installer identity from a
+    currently installed tree. The expected hashes must come from independent
+    historical CI evidence, not from the untrusted staged manifest.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_installer_sha256):
+        raise ValueError("expected legacy installer SHA-256 is invalid")
+    if not _SHA.fullmatch(expected_studio_source_commit):
+        raise ValueError("expected Studio source commit is invalid")
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        raise RuntimeError("legacy rollback audit requires a Windows user profile")
+
+    updates = (Path(local) / "OrdaX" / "updates").resolve()
+    requested = Path(legacy_rollback_dir)
+    if requested.is_symlink() or requested.parent.is_symlink():
+        raise ValueError("legacy rollback staging cannot be a symlink")
+    role_dir = requested.resolve(strict=True)
+    if (
+        role_dir.name != "rollback"
+        or role_dir.parent.parent != updates
+        or not role_dir.is_dir()
+    ):
+        raise ValueError("legacy rollback path is outside canonical private update storage")
+
+    product = installed_product()
+    version = str(product.get("version", ""))
+    parse_version(version)
+    canonical_install = (Path(local) / "Programs" / "ORDAX").resolve()
+    if Path(product.get("installLocation", "")).resolve() != canonical_install:
+        raise ValueError("installed product root is not canonical")
+    manifest_file = canonical_install / "product-manifest.json"
+    if (manifest_file.is_symlink() or not manifest_file.is_file()
+            or manifest_file.stat().st_size > 64 * 1024):
+        raise ValueError("installed product manifest is missing or unsafe")
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8-sig"))
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema") != "ordax.windows-product/1"
+        or manifest.get("product") != "ORDAX Studio"
+        or manifest.get("version") != version
+        or manifest.get("studio_source_commit") != expected_studio_source_commit
+    ):
+        raise ValueError("installed product identity is inconsistent with pinned legacy evidence")
+
+    installer_name, checksum_name = _required_asset_names(version)
+    installer = role_dir / installer_name
+    checksum_file = role_dir / checksum_name
+    if {item.name for item in role_dir.iterdir()} != {installer_name, checksum_name}:
+        raise ValueError("legacy rollback directory contains unexpected artifacts")
+    if (
+        installer.is_symlink() or checksum_file.is_symlink()
+        or not installer.is_file() or not checksum_file.is_file()
+        or installer.stat().st_size > 1024 * 1024 * 1024
+        or checksum_file.stat().st_size > 16 * 1024
+    ):
+        raise ValueError("legacy rollback artifact is missing or unsafe")
+    manifest_digest = parse_checksum_manifest(
+        checksum_file.read_text(encoding="ascii"), installer_name,
+    )
+    if manifest_digest != expected_installer_sha256:
+        raise ValueError("legacy rollback manifest differs from independent CI digest")
+    if _hash_file(installer) != expected_installer_sha256:
+        raise ValueError("legacy rollback installer bytes differ from pinned digest")
+
+    # Integrity and installed-source parity cannot create retroactive CI
+    # attestations or prove exact installer-to-installed-file equivalence.
+    return {
+        "schema": "ordax.owner-legacy-rollback-audit/1",
+        "state": "legacy-integrity-verified",
+        "installedVersion": version,
+        "studioSourceCommit": expected_studio_source_commit,
+        "installerSha256": expected_installer_sha256,
+        "artifactSizeBytes": installer.stat().st_size,
+        "attestationState": "unavailable-pre-attestation-gate",
+        "originalInstallationEquivalenceProven": False,
+        "rollbackReady": False,
+        "applyAllowed": False,
+        "journalUnchanged": True,
+    }
+
+
 def stage_owner_dev_candidates(
     *,
     target: MainCandidate,
@@ -303,27 +393,46 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--stage", action="store_true", help="download and verify CI artifacts only")
     mode.add_argument("--transaction-root", help="verify a previously staged transaction")
+    mode.add_argument("--audit-legacy-rollback", help="inspect pre-attestation rollback without applying")
     parser.add_argument("--target-version", help="required for staging, e.g. 0.15.9")
-    parser.add_argument("--target-run", required=True)
-    parser.add_argument("--target-commit", required=True)
-    parser.add_argument("--rollback-run", required=True)
-    parser.add_argument("--rollback-commit", required=True)
+    parser.add_argument("--target-run")
+    parser.add_argument("--target-commit")
+    parser.add_argument("--rollback-run")
+    parser.add_argument("--rollback-commit")
+    parser.add_argument("--expected-installer-sha256")
+    parser.add_argument("--expected-studio-source-commit")
     args = parser.parse_args(argv)
     try:
-        target = MainCandidate(args.target_run, args.target_commit)
-        rollback = MainCandidate(args.rollback_run, args.rollback_commit)
-        if args.stage:
-            if not args.target_version:
-                parser.error("--target-version is required with --stage")
-            result = stage_owner_dev_candidates(
-                target=target, target_version=args.target_version, rollback=rollback,
+        if args.audit_legacy_rollback:
+            if not args.expected_installer_sha256 or not args.expected_studio_source_commit:
+                parser.error("legacy audit requires --expected-installer-sha256 and --expected-studio-source-commit")
+            if any((args.target_run, args.target_commit, args.rollback_run,
+                    args.rollback_commit, args.target_version)):
+                parser.error("legacy audit does not accept update candidate arguments")
+            result = audit_legacy_rollback(
+                args.audit_legacy_rollback,
+                expected_installer_sha256=args.expected_installer_sha256,
+                expected_studio_source_commit=args.expected_studio_source_commit,
             )
         else:
-            if args.target_version:
-                parser.error("--target-version is only accepted with --stage")
-            result = verify_owner_dev_preflight(
-                args.transaction_root, target=target, rollback=rollback,
-            )
+            if args.expected_installer_sha256 or args.expected_studio_source_commit:
+                parser.error("legacy evidence arguments are only valid with --audit-legacy-rollback")
+            if not all((args.target_run, args.target_commit, args.rollback_run, args.rollback_commit)):
+                parser.error("stage/verify requires both immutable candidate run IDs and commits")
+            target = MainCandidate(args.target_run, args.target_commit)
+            rollback = MainCandidate(args.rollback_run, args.rollback_commit)
+            if args.stage:
+                if not args.target_version:
+                    parser.error("--target-version is required with --stage")
+                result = stage_owner_dev_candidates(
+                    target=target, target_version=args.target_version, rollback=rollback,
+                )
+            else:
+                if args.target_version:
+                    parser.error("--target-version is only accepted with --stage")
+                result = verify_owner_dev_preflight(
+                    args.transaction_root, target=target, rollback=rollback,
+                )
     except (ValueError, RuntimeError, OSError, TypeError, json.JSONDecodeError) as error:
         print(json.dumps({"schema": PREFLIGHT_SCHEMA, "state": "blocked",
                           "reason": type(error).__name__, "applyAllowed": False}))

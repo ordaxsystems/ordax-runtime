@@ -214,8 +214,24 @@ function Start-RuntimeAndWaitHealthy {
     throw "ORDAX Runtime did not reach an action-ready state after install"
 }
 
+# Per-user, cross-session lock for the sole canonical updater. The OS releases a
+# named mutex on process termination; no stale lockfile or second executor.
+$ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$updateMutex = [System.Threading.Mutex]::new($false, "Global\ORDAX_WindowsProductUpdate_$ownerSid")
+$mutexOwned = $false
+$handoffAccepted = $false
 try {
+    try {
+        $mutexOwned = $updateMutex.WaitOne(0)
+    } catch [System.Threading.AbandonedMutexException] {
+        # A terminated prior owner cannot be interpreted as a successful update.
+        $mutexOwned = $true
+    }
+    if (-not $mutexOwned) {
+        throw 'Another ORDAX product update is active'
+    }
     Assert-TransactionHandoff
+    $handoffAccepted = $true
     $verifierFullPath = [IO.Path]::GetFullPath($VerifierScript)
     if (-not $verifierFullPath.ToLowerInvariant().StartsWith($transactionPrefix) -or
         -not (Test-Path -LiteralPath $verifierFullPath -PathType Leaf)) {
@@ -258,15 +274,24 @@ try {
     }
 } catch {
     try {
-        # Replay attempts must not overwrite the proof of a previously
-        # committed, rolled-back or recovery-required transaction.
-        if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+        # A refused concurrent launch cannot mutate the active owner's journal.
+        # An interrupted install/rollback is NOT a pre-install "blocked" state.
+        if ($mutexOwned -and (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
             $lastPhase = (Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json).phase
-            if ($lastPhase -notin @('committed', 'rolled-back', 'recovery-required', 'blocked', 'handoff-failed')) {
+            if ($lastPhase -in @('handoff-launching', 'bootstrap-verifying', 'bootstrap-verified')) {
                 Write-TransactionPhase -Phase 'blocked' -Detail $_.Exception.Message
+            } elseif ($handoffAccepted -and $lastPhase -in @('installing-target', 'rolling-back')) {
+                # A failure in THIS accepted execution after installation started
+                # requires recovery, never a misleading pre-install "blocked".
+                Write-TransactionPhase -Phase 'recovery-required' -Detail $_.Exception.Message
             }
+            # Refused replays of interrupted/terminal transactions preserve
+            # the durable evidence for read-only inspection and manual recovery.
         }
     } catch {
     }
     exit 30
+} finally {
+    if ($mutexOwned) { $updateMutex.ReleaseMutex() }
+    $updateMutex.Dispose()
 }

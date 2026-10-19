@@ -62,6 +62,28 @@ Pre-execution policy or integrity failures become `blocked`; a failed handoff be
 
 The remaining external gate is provisioning the production code-signing identity/service and inserting its approved Authenticode certificate thumbprint into the packaged trust root before the first stable production release.
 
+## Exclusive Windows update handoff and interruption semantics
+
+The sole `scripts/windows/apply-ordax-production-update.ps1` executor takes a
+Windows **per-user, cross-session named mutex** before accepting an update
+handoff. A concurrent launcher must stop without editing the active transaction
+journal or invoking an installer. The OS releases ownership if the updater
+process terminates, without implying that installation or recovery succeeded.
+
+A refused replay of `installing-target` or `rolling-back` must **preserve**
+the existing journal phase, because installation or restoration may have already
+started. It must never silently downgrade that evidence to pre-install
+`blocked`. A failure in the **accepted** executor after either phase begins
+records `recovery-required` if its recovery path cannot complete. Pre-execution
+validation failures may be `blocked`. Terminal outcomes are not replayable.
+
+An abandoned mutex or an interrupted phase is **not** permission to resume,
+reinstall or declare rollback complete. Recovery of the legacy Owner/Dev
+installation remains a separate proof obligation tracked by issue #149; no
+unsigned installation mode, second executor, or production trust exception is
+introduced. The Windows bootstrap guard regression suite covers competing
+handoffs and preservation of interrupted journals.
+
 ## Transaction handoff and rollback integrity
 
 The existing `scripts/windows/apply-ordax-production-update.ps1` is the **only** Windows update executor. Its external bootstrap must rebind every argument (source installation version, canonical target and rollback filenames, versions, staging paths, SHA-256 and transaction identifier) to the durable `transaction.json` before either installer is run. Only the journal's `handoff-launching` phase under `%LOCALAPPDATA%\\OrdaX\\updates` may initiate application; terminal transactions are not replayable, and refused replays cannot overwrite committed, rolled-back or recovery-required receipts.
@@ -129,3 +151,21 @@ Staging downloads only the `ordax-studio-windows-x64` artifact for each immutabl
 
 **Important:** successful verification reports `applyAllowed=false`. The production executor still requires approved Authenticode for both installers. The original installed 0.15.6 artifact predates the attestation gate: it is **not** an eligible rollback merely because its SHA-256 matches. Until there is a separately authorized and fully tested Owner/Dev apply policy with rollback evidence, these commands must not execute an installer; no fallback to unsigned or ad hoc manual replacement is permitted.
 
+
+
+## Auditoria do rollback legado — integridade sem autoridade de instalação
+
+O instalador `ORDAX-Studio-Setup-0.15.6-x64.exe` antecede as atestações GitHub.
+O CLI `ordax_dev_agent.owner_dev_update_preflight --audit-legacy-rollback` permite verificar a integridade dessa evidência histórica, **sem instalar, assinar, autorizar ou modificar o produto**.
+
+O auditor requer um SHA-256 e commit do Studio de um registro independente. Verifica a instalação atual pelo registro HKCU e manifesto canônico, o diretório privado sob `%LOCALAPPDATA%/OrdaX/updates`, a ausência de symlinks, o inventário completo, o manifesto SHA256SUMS e o hash dos bytes com o helper Python compartilhado. Não depende de `Get-FileHash` do PowerShell.
+
+Exemplo em um Runtime que já contenha o módulo atualizado:
+
+```powershell
+& '.\runtime\python.exe' -m ordax_dev_agent.owner_dev_update_preflight --audit-legacy-rollback '<CAMINHO_PRIVADO_DO_ROLLBACK>' --expected-installer-sha256 '<SHA256_DE_REGISTRO_INDEPENDENTE>' --expected-studio-source-commit '<COMMIT_DE_REGISTRO_INDEPENDENTE>'
+```
+
+O resultado positivo `legacy-integrity-verified` **não** comprova que o instalador original é byte a byte equivalente à instalação histórica. As propriedades `originalInstallationEquivalenceProven`, `rollbackReady` e `applyAllowed` são sempre `false`, mesmo com todos os hashes corretos. Nenhum journal de atualização é modificado.
+
+Essa auditoria não concede uma exceção para instalador sem assinatura nem cria um segundo executor. O atualizador de produção continua exigindo Authenticode e rollback verificado. Uma futura política Owner/Dev exigirá aprovação, recuperação e testes de instalação independentes.

@@ -6,6 +6,7 @@ journal binding before any installation can begin.
 """
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import subprocess
@@ -134,6 +135,41 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
         self.journal["phase"] = "committed"
         detail = self.invoke(expected_phase="committed")
         self.assertEqual(detail, "", "Refused replay must not overwrite committed receipt")
+
+    def test_interrupted_installer_and_rollback_replays_preserve_evidence(self):
+        # After a power loss or abandoned handoff, "blocked" would misleadingly
+        # claim that no installer had been started. Refusal must not rewrite it.
+        for phase in ("installing-target", "rolling-back"):
+            with self.subTest(phase=phase):
+                self.journal["phase"] = phase
+                self.assertEqual(self.invoke(expected_phase=phase), "")
+
+    def test_parallel_bootstrap_cannot_mutate_active_journal(self):
+        sid = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+             "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"],
+            capture_output=True, text=True, check=True, timeout=15,
+        ).stdout.strip()
+        self.assertTrue(sid.startswith("S-1-"), sid)
+        # Hold exactly the OS mutex used by the canonical bootstrap, from
+        # a different process/thread. This does not simulate an installer.
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create = kernel32.CreateMutexW
+        create.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        create.restype = ctypes.c_void_p
+        release = kernel32.ReleaseMutex
+        release.argtypes = [ctypes.c_void_p]
+        release.restype = ctypes.c_int
+        close = kernel32.CloseHandle
+        close.argtypes = [ctypes.c_void_p]
+        close.restype = ctypes.c_int
+        handle = create(None, True, "Global\\ORDAX_WindowsProductUpdate_" + sid)
+        self.assertTrue(handle, f"CreateMutexW error {ctypes.get_last_error()}")
+        try:
+            self.assertEqual(self.invoke(expected_phase="handoff-launching"), "")
+        finally:
+            self.assertTrue(release(handle))
+            self.assertTrue(close(handle))
 
     def test_forged_local_owner_authority_is_refused(self):
         self.journal["authority"] = "model-generated-owner"
