@@ -36,3 +36,31 @@ existente `terminal_exec`, que continua restrita a projetos versionados.
 5. Em produção, só habilitar após atualizar Runtime e publicar Platform,
    obter consentimento Owner e provar execução pelo próprio MCP.
 6. Não modificar o instalador nem o computador por cópia manual.
+
+## Processos persistentes de dispositivo
+
+O Runtime reutiliza o supervisor persistente canônico (`PersistentProcessActions`)
+para os seis comandos `computer_process_{start,status,list,logs,write_stdin,stop}`.
+O estado reside em `state_dir/device-processes/<device_id>`, **nunca** no
+diretório `processes/<project>`, e cada recibo mantém a identidade do
+dispositivo, verificada na leitura. Nenhum projeto GitHub é criado.
+
+- Perfil Owner específico: `device-native-process`, diferente de
+  `device-native-terminal` e de `project-native-process`.
+- Política local obrigatória: `enabled && full_access`.
+- O Control Plane atestado exige UUID, cliente/Owner vinculados, grant atual,
+  `project=null` e operações limitadas antes da fila canônica.
+- O supervisor continua responsável pelo processo filho, token de propriedade,
+  handshake, logs persistentes, stdin limitado, parada cooperativa e retomada
+  após reinício. Processos arbitrários do sistema ficam fora deste namespace.
+- `process.*` continua usando o estado antigo por projeto sem migração
+  implícita e sem herdar grants de dispositivo.
+- CWD omitido usa a home do usuário Runtime. Um CWD explícito não-padrão deve
+  ser absoluto e existente. A raiz de estado e a identidade do Runtime nunca
+  são inferidas do argumento enviado pelo cliente.
+- O CLI Owner faz o pré-voo do Full Access; somente a Platform pode efetivar
+  grants mediante OAuth e consentimento humano.
+
+A disponibilização ao usuário final requer CI das duas PRs, Runtime instalado
+pelo mecanismo oficial, atualização do catálogo MCP no cliente e prova E2E
+na própria conexão OrdaX. Nenhuma PR ativa grants por conta própria.

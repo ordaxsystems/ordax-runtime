@@ -629,6 +629,46 @@ def terminal_exec(
 
 
 @mcp.tool()
+def computer_process_status(device_id: str, process_id: str) -> dict[str, Any]:
+    return _invoke(device_id=device_id, action="computer.process_status", arguments={"process_id": process_id})
+
+
+@mcp.tool()
+def computer_process_list(device_id: str) -> dict[str, Any]:
+    return _invoke(device_id=device_id, action="computer.process_list", arguments={})
+
+
+@mcp.tool()
+def computer_process_logs(device_id: str, process_id: str, max_bytes: int = 65536) -> dict[str, Any]:
+    return _invoke(device_id=device_id, action="computer.process_logs", arguments={"process_id": process_id, "max_bytes": max_bytes})
+
+
+@mcp.tool()
+def computer_process_start(
+    device_id: str, argv: list[str], cwd: str | None = None,
+    env: dict[str, str] | None = None, wait_seconds: float = 0.5,
+) -> dict[str, Any]:
+    args: dict[str, Any] = {"argv": argv, "wait_seconds": wait_seconds}
+    if cwd is not None:
+        args["cwd"] = cwd
+    if env is not None:
+        args["env"] = env
+    return _invoke(device_id=device_id, action="computer.process_start", arguments=args)
+
+
+@mcp.tool()
+def computer_process_write_stdin(
+    device_id: str, process_id: str, text: str, newline: bool = True,
+) -> dict[str, Any]:
+    return _invoke(device_id=device_id, action="computer.process_write_stdin", arguments={"process_id": process_id, "text": text, "newline": newline})
+
+
+@mcp.tool()
+def computer_process_stop(device_id: str, process_id: str) -> dict[str, Any]:
+    return _invoke(device_id=device_id, action="computer.process_stop", arguments={"process_id": process_id})
+
+
+@mcp.tool()
 def process_status(device_id: str, project: str, process_id: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="process.status", project=project, space_id=space_id, arguments={"project": project, "process_id": process_id})
 

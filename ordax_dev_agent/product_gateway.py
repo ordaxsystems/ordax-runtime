@@ -274,6 +274,9 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
         allowed_fields=frozenset({"query", "max_items"}),
         project_required=False,
     ),
+    "computer.process_status": ProductActionSpec("computer.process_status", "computer.process_status", frozenset({"process_id"}), project_required=False),
+    "computer.process_list": ProductActionSpec("computer.process_list", "computer.process_list", frozenset(), project_required=False),
+    "computer.process_logs": ProductActionSpec("computer.process_logs", "computer.process_logs", frozenset({"process_id", "max_bytes"}), project_required=False),
     "process.status": ProductActionSpec("process.status", "process.status", frozenset({"project", "process_id"})),
     "process.list": ProductActionSpec("process.list", "process.list", frozenset({"project"})),
     "process.logs": ProductActionSpec("process.logs", "process.logs", frozenset({"project", "process_id", "max_bytes"})),
@@ -348,6 +351,18 @@ PRODUCT_TYPED_ACTIONS: dict[str, ProductActionSpec] = {
         "terminal.exec",
         frozenset({"project", "cwd", "argv", "command", "shell", "timeout_seconds", "env"}),
         effect="execute",
+    ),
+    "computer.process_start": ProductActionSpec(
+        "computer.process_start", "computer.process_start",
+        frozenset({"argv", "cwd", "env", "wait_seconds"}), project_required=False, effect="execute",
+    ),
+    "computer.process_write_stdin": ProductActionSpec(
+        "computer.process_write_stdin", "computer.process_write_stdin",
+        frozenset({"process_id", "text", "newline"}), project_required=False, effect="execute",
+    ),
+    "computer.process_stop": ProductActionSpec(
+        "computer.process_stop", "computer.process_stop",
+        frozenset({"process_id"}), project_required=False, effect="write",
     ),
     "process.start": ProductActionSpec(
         "process.start", "process.start", frozenset({"project", "argv", "cwd", "env", "wait_seconds"}), effect="execute",
@@ -559,7 +574,7 @@ def _sanitize_product_result(
         return {
             key: item[key]
             for key in (
-                "process_id", "project", "state", "cwd", "started_at_unix",
+                "process_id", "project", "device_id", "scope_kind", "state", "cwd", "started_at_unix",
                 "manager_ready_at_unix", "running_at_unix", "stopping_at_unix",
                 "ended_at_unix", "returncode", "running", "ownership_valid", "child_pid",
             )
@@ -705,15 +720,15 @@ def _sanitize_product_result(
         data.pop("command", None)
     elif action == "artifact.preview":
         data.pop("path", None)
-    elif action in {"process.start", "process.status", "process.stop"}:
+    elif action in {"process.start", "process.status", "process.stop", "computer.process_start", "computer.process_status", "computer.process_stop"}:
         data = public_process(data)
-    elif action == "process.list":
+    elif action in {"process.list", "computer.process_list"}:
         items = data.get("processes")
-        data = {"project": data.get("project"), "processes": [public_process(item) for item in items if isinstance(item, dict)] if isinstance(items, list) else []}
-    elif action == "process.logs":
+        data = {**({"device_id": data.get("device_id")} if action == "computer.process_list" else {"project": data.get("project")}), "processes": [public_process(item) for item in items if isinstance(item, dict)] if isinstance(items, list) else []}
+    elif action in {"process.logs", "computer.process_logs"}:
         process = data.get("process")
         data = {"process": public_process(process) if isinstance(process, dict) else {}, "tail": str(data.get("tail") or ""), "size_bytes": int(data.get("size_bytes") or 0), "truncated": bool(data.get("truncated"))}
-    elif action == "process.write_stdin":
+    elif action in {"process.write_stdin", "computer.process_write_stdin"}:
         data = {key: data[key] for key in ("process_id", "queued_bytes", "newline") if key in data}
     elif action == "computer.processes":
         processes = data.get("processes")
