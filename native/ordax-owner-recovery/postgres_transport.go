@@ -42,7 +42,11 @@ func (t canonicalDeviceTransport) post(kind string, payload map[string]any) (map
  request.Header.Set("Content-Type","application/json")
  request.Header.Set("X-Ordax-Device-Id",t.deviceID)
  request.Header.Set("X-Ordax-Device-Token",t.deviceToken)
- response,err:=t.httpClient.Do(request)
+ // Never forward device bearer material across redirects, including redirects
+ // emitted by the same origin after a proxy or routing change.
+ client:=*t.httpClient
+ client.CheckRedirect=func(*http.Request,[]*http.Request) error {return http.ErrUseLastResponse}
+ response,err:=client.Do(request)
  if err!=nil{return nil,err}
  defer response.Body.Close()
  // Claimed jobs carry a bounded canonical payload; other responses are short.
