@@ -1,37 +1,8 @@
 name: Windows Product Build
 
 on:
+  # Required Windows checks must appear for every PR, including documentation-only.
   pull_request:
-    paths:
-      - "packaging/windows/**"
-      - "native/ordax-workbench/**"
-      - "tests/test_studio_host_transport_boundary.py"
-      - "ordax_core/**"
-      - "ordax_connector/**"
-      - "ordax_dev_agent/**"
-      - "ordax_device_agent/**"
-      - "ordax_studio/**"
-      - "native/ordax-workbench/**"
-      - "scripts/windows/build-ordax-studio-product.ps1"
-      - "scripts/windows/ordax-studio-start.ps1"
-      - "scripts/windows/ordax-upgrade-quiesce.ps1"
-      - "scripts/windows/assert-runtime-package-capabilities.ps1"
-      - "scripts/windows/sign-release-authenticode.ps1"
-      - "scripts/windows/assert-release-authenticode.ps1"
-      - "scripts/windows/assert-release-provenance.ps1"
-      - "scripts/windows/assert-release-main-ancestry.ps1"
-      - "scripts/windows/assert-github-main-governance.ps1"
-      - "tests/test_release_main_ancestry.py"
-      - "scripts/windows/test-ordax-studio-install-smoke.ps1"
-      - "tests/test_release_provenance.py"
-      - "tests/test_windows_product_packaging.py"
-      - "tests/test_windows_runtime_provenance_packaging_gate.py"
-      - "tests/test_release_signer_identity.py"
-      - "tests/test_release_signing_contract.py"
-      - "pyproject.toml"
-      - "studio-source.lock.json"
-      - "docs/PRODUCT-UPDATE-SYSTEM.md"
-      - ".github/workflows/windows-product-build.yml"
   workflow_dispatch:
   push:
     branches:
