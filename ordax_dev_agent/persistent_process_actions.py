@@ -29,7 +29,7 @@ class _DeviceProcessScope:
             candidate = Path(value).expanduser()
             if not candidate.is_absolute():
                 raise ValueError("device process cwd must be absolute")
-            if "\\x00" in value or len(value) > 4096:
+            if "\x00" in value or len(value) > 4096:
                 raise ValueError("invalid device process cwd")
             target = candidate.resolve()
         if must_exist and not target.exists():
