@@ -17,6 +17,7 @@ func main() {
 }
 
 func run() error {
+	if err := validateOwnerTransportSelection(); err != nil { return err }
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
@@ -24,6 +25,7 @@ func run() error {
 	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
 		return err
 	}
+	if canonicalTransportSelected() { return runCanonicalOwnerRecovery(cfg) }
 	client, err := newClient(cfg)
 	if err != nil {
 		return err
