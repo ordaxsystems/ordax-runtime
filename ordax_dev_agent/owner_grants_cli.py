@@ -17,21 +17,21 @@ from ordax_dev_agent.computer_filesystem_actions import computer_access_manageme
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z", re.I)
-_DEVICE_PROFILES = frozenset({
-    "computer-observe", "computer-filesystem", "computer-clipboard",
-    "computer-process-control", "interactive-computer-control",
-    "full-computer-control", "app-intelligence-read", "computer-text-edit",
-})
-_PROJECT_PROFILES = frozenset({
-    "project-browser-automation", "project-continuity",
-    "project-native-terminal", "project-native-process",
-})
+# The Control Plane owns the profile catalog and validates each scope.
+# Do not duplicate that catalog in a per-client allowlist.
+_PROFILE_KEY = re.compile(r"[a-z][a-z0-9._-]{1,79}\Z")
 
 
 def _uuid(value: str) -> str:
     if not _UUID.fullmatch(value):
         raise argparse.ArgumentTypeError("expected canonical UUID")
     return value.lower()
+
+
+def _profile(value: str) -> str:
+    if not _PROFILE_KEY.fullmatch(value):
+        raise argparse.ArgumentTypeError("invalid grant profile key")
+    return value
 
 
 def _days(value: str) -> int:
@@ -53,7 +53,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         if name != "list":
             sub.add_argument("--client", type=_uuid)
         if name == "authorize":
-            sub.add_argument("--profile", required=True, choices=sorted(_DEVICE_PROFILES | _PROJECT_PROFILES))
+            sub.add_argument("--profile", required=True, type=_profile)
             sub.add_argument("--space", type=_uuid)
             sub.add_argument("--project", type=_uuid)
             sub.add_argument("--days", type=_days, default=30)
@@ -61,11 +61,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             sub.add_argument("--group", type=_uuid, required=True)
     args = parser.parse_args(argv)
     if args.operation == "authorize":
-        project_scope = args.profile in _PROJECT_PROFILES
-        if project_scope != bool(args.space or args.project):
-            parser.error("the selected profile and project scope do not match")
-        if project_scope and (not args.space or not args.project):
+        if bool(args.space) != bool(args.project):
             parser.error("project grants require both --space and --project")
+        # Profile scope and supported profile names are validated by the
+        # authenticated Control Plane, the sole profile catalog authority.
     return args
 
 

@@ -60,16 +60,32 @@ class OwnerGrantsCliTests(unittest.TestCase):
         self.assertEqual(remote.calls[-1][0], "grant")
 
     def test_project_grants_require_exact_project_scope(self):
+        # The CLI validates paired identifiers, while the Control Plane
+        # alone decides which named profiles require a project.
         with self.assertRaises(SystemExit):
-            parse_args(["authorize", "--device", DEVICE, "--profile", "project-native-terminal"])
+            parse_args(["authorize", "--device", DEVICE, "--profile", "project-native-terminal", "--space", DEVICE])
         with self.assertRaises(SystemExit):
-            parse_args(["authorize", "--device", DEVICE, "--profile", "computer-filesystem", "--space", DEVICE])
+            parse_args(["authorize", "--device", DEVICE, "--profile", "computer-filesystem", "--project", DEVICE])
         args = parse_args(["authorize", "--device", DEVICE, "--profile", "project-native-terminal",
                            "--space", DEVICE, "--project", DEVICE, "--days", "14"])
         remote = FakeOwner()
         result = perform(args, "token", remote)
         self.assertEqual(result["group"]["space_id"], DEVICE)
         self.assertEqual(result["group"]["project_id"], DEVICE)
+
+    def test_profile_names_are_owned_by_control_plane(self):
+        # New/removed server profiles must never require updating a
+        # duplicate client-side catalog. The authoritative API refuses
+        # unrecognized names and inappropriate scope combinations.
+        class RejectingOwner(FakeOwner):
+            def replace_owner_remote_grant_group(self, token, **kwargs):
+                raise ValueError("owner_grant_invalid")
+
+        args = parse_args(["authorize", "--device", DEVICE, "--profile", "new-device-profile"])
+        with self.assertRaisesRegex(ValueError, "owner_grant_invalid"):
+            perform(args, "token", RejectingOwner())
+        with self.assertRaises(SystemExit):
+            parse_args(["authorize", "--device", DEVICE, "--profile", "../invalid"])
 
     def test_expiry_invalid_client_and_uuid_fail_closed(self):
         for days in ("0", "366", "1.5", "NaN"):
