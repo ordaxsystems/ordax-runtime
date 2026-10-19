@@ -30,7 +30,7 @@ func TestCanonicalOutboxReplayRetainsUnacknowledgedReceipts(t *testing.T) {
    }))
    defer server.Close()
    dir:=t.TempDir()
-   outbox:=filepath.Join(dir,"outbox")
+   outbox:=filepath.Join(dir,"postgres-outbox")
    if err:=os.Mkdir(outbox,0700);err!=nil{t.Fatal(err)}
    result:=map[string]any{"ok":true}
    encoded,_:=json.Marshal(result)
@@ -51,7 +51,7 @@ func TestCanonicalOutboxReplayRetainsUnacknowledgedReceipts(t *testing.T) {
 }
 func TestCanonicalOutboxRejectsSymlinks(t *testing.T){
  dir:=t.TempDir()
- outbox:=filepath.Join(dir,"outbox")
+ outbox:=filepath.Join(dir,"postgres-outbox")
  if err:=os.Mkdir(outbox,0700);err!=nil{t.Fatal(err)}
  target:=filepath.Join(dir,"target.json")
  if err:=os.WriteFile(target,[]byte("{}"),0600);err!=nil{t.Fatal(err)}
