@@ -10,13 +10,62 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from .models import ActionResult
 
 
+@dataclass(frozen=True)
+class _DeviceProcessScope:
+    """Device namespace; never masquerades as a GitHub project or Space."""
+    device_id: str
+    root: Path
+
+    def path(self, value: str, *, must_exist: bool = True) -> Path:
+        if value == ".":
+            target = self.root
+        else:
+            candidate = Path(value).expanduser()
+            if not candidate.is_absolute():
+                raise ValueError("device process cwd must be absolute")
+            if "\\x00" in value or len(value) > 4096:
+                raise ValueError("invalid device process cwd")
+            target = candidate.resolve()
+        if must_exist and not target.exists():
+            raise ValueError("device process cwd does not exist")
+        return target
+
+
 class PersistentProcessActions:
+    def _device_process_scope(self) -> _DeviceProcessScope:
+        from .computer_filesystem_actions import load_computer_access_policy
+
+        policy = load_computer_access_policy(self.config)
+        if not (policy.enabled and policy.full_access):
+            raise PermissionError("local_full_access_required")
+        raw_device_id = str(self.config.device_id or "")
+        try:
+            device_id = str(uuid.UUID(raw_device_id))
+        except ValueError as error:
+            raise ValueError("device identity must be configured") from error
+        if raw_device_id != device_id:
+            raise ValueError("device identity must be canonical UUID")
+        return _DeviceProcessScope(device_id=device_id, root=Path.home().resolve())
+
+    @staticmethod
+    def _scope_identity_matches(scope: Any, state: dict[str, Any]) -> bool:
+        if isinstance(scope, _DeviceProcessScope):
+            return (
+                state.get("scope_kind") == "device"
+                and state.get("device_id") == scope.device_id
+                and "project" not in state
+            )
+        return state.get("project") == scope.slug and state.get("scope_kind") in (None, "project")
+
     def _process_root(self, project) -> Path:
+        if isinstance(project, _DeviceProcessScope):
+            return (self.config.state_dir / "device-processes" / project.device_id).resolve()
         return (self.config.state_dir / "processes" / project.slug).resolve()
 
     def _process_state_path(self, project, process_id: str) -> Path:
@@ -153,7 +202,7 @@ class PersistentProcessActions:
                     time.sleep(0.025)
                     continue
                 break
-            if not isinstance(state, dict) or state.get("process_id") != process_id or state.get("project") != project.slug:
+            if not isinstance(state, dict) or state.get("process_id") != process_id or not self._scope_identity_matches(project, state):
                 raise ValueError("persistent process state identity mismatch")
             return state
 
@@ -237,7 +286,12 @@ class PersistentProcessActions:
         return result
 
     def process_start(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_start_scoped(payload, self._project(payload))
+
+    def computer_process_start(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_start_scoped(payload, self._device_process_scope())
+
+    def _process_start_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         argv = payload.get("argv")
         if (
             not isinstance(argv, list)
@@ -303,10 +357,17 @@ class PersistentProcessActions:
         state = {
             "schema_version": 1,
             "process_id": process_id,
-            "project": project.slug,
+            **(
+                {"scope_kind": "device", "device_id": project.device_id}
+                if isinstance(project, _DeviceProcessScope)
+                else {"project": project.slug}
+            ),
             "token": token,
             "state": "starting",
-            "cwd": cwd.relative_to(project.root.resolve()).as_posix() if cwd != project.root.resolve() else ".",
+            "cwd": (
+                str(cwd) if isinstance(project, _DeviceProcessScope)
+                else cwd.relative_to(project.root.resolve()).as_posix() if cwd != project.root.resolve() else "."
+            ),
             "argv": argv,
             "log_path": str(log_path),
             "started_at_unix": time.time(),
@@ -395,13 +456,23 @@ class PersistentProcessActions:
         )
 
     def process_status(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_status_scoped(payload, self._project(payload))
+
+    def computer_process_status(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_status_scoped(payload, self._device_process_scope())
+
+    def _process_status_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         process_id = str(payload.get("process_id") or "")
         state = self._public_process_state(self._load_process_state(project, process_id))
         return ActionResult(True, "persistent process status ready", state)
 
     def process_list(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_list_scoped(payload, self._project(payload))
+
+    def computer_process_list(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_list_scoped(payload, self._device_process_scope())
+
+    def _process_list_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         root = self._process_root(project)
         items: list[dict[str, Any]] = []
         if root.is_dir():
@@ -413,10 +484,15 @@ class PersistentProcessActions:
                         items.append(self._public_process_state(self._load_process_state(project, process_id)))
                 except Exception:
                     continue
-        return ActionResult(True, "persistent process list ready", {"project": project.slug, "processes": items})
+        return ActionResult(True, "persistent process list ready", {**({"device_id": project.device_id} if isinstance(project, _DeviceProcessScope) else {"project": project.slug}), "processes": items})
 
     def process_logs(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_logs_scoped(payload, self._project(payload))
+
+    def computer_process_logs(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_logs_scoped(payload, self._device_process_scope())
+
+    def _process_logs_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         process_id = str(payload.get("process_id") or "")
         state = self._public_process_state(self._load_process_state(project, process_id))
         max_bytes = int(payload.get("max_bytes", 65536))
@@ -441,7 +517,12 @@ class PersistentProcessActions:
         })
 
     def process_write_stdin(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_write_stdin_scoped(payload, self._project(payload))
+
+    def computer_process_write_stdin(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_write_stdin_scoped(payload, self._device_process_scope())
+
+    def _process_write_stdin_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         process_id = str(payload.get("process_id") or "")
         state = self._public_process_state(self._load_process_state(project, process_id))
         if not state.get("running") or not state.get("ownership_valid"):
@@ -481,7 +562,12 @@ class PersistentProcessActions:
         )
 
     def process_stop(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_stop_scoped(payload, self._project(payload))
+
+    def computer_process_stop(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_stop_scoped(payload, self._device_process_scope())
+
+    def _process_stop_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         process_id = str(payload.get("process_id") or "")
         state = self._public_process_state(self._load_process_state(project, process_id))
         pid = int(state.get("manager_pid") or 0)
