@@ -58,6 +58,27 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
         self.assertFalse(status.data["full_filesystem"])
         self.assertEqual([str(self.allowed.resolve())], status.data["allowed_roots"])
         self.assertEqual([], status.data["allowed_applications"])
+        reported = status.data["runtime_capabilities"]
+        self.assertEqual(reported["agent_version"], "1.31.0")
+        self.assertEqual(set(reported["implemented_actions"]), {
+            "computer.terminal_exec",
+            "computer.process_start",
+            "computer.process_status",
+            "computer.process_list",
+            "computer.process_logs",
+            "computer.process_write_stdin",
+            "computer.process_stop",
+        })
+        self.assertNotIn("terminal.exec", reported["implemented_actions"])
+        self.assertNotIn("process.start", reported["implemented_actions"])
+
+        # No fake availability: the report reflects the live action registry.
+        self.registry._actions.pop("computer.process_start")
+        second = self.registry.execute("computer.access_status", {})
+        self.assertNotIn(
+            "computer.process_start",
+            second.data["runtime_capabilities"]["implemented_actions"],
+        )
 
         blocked = self.registry.execute(
             "computer.file_stat", {"path": str(self.outside)}

@@ -64,3 +64,16 @@ dispositivo, verificada na leitura. Nenhum projeto GitHub é criado.
 A disponibilização ao usuário final requer CI das duas PRs, Runtime instalado
 pelo mecanismo oficial, atualização do catálogo MCP no cliente e prova E2E
 na própria conexão OrdaX. Nenhuma PR ativa grants por conta própria.
+
+## Diagnóstico de compatibilidade Runtime (v1.31.0)
+
+A ação já autorizada `computer_access_status` retorna `runtime_capabilities`
+com `agent_version` e uma lista de `implemented_actions` obtida diretamente
+pelo `ActionRegistry`, sem checar GitHub, Studio ou Space. Essa lista representa
+**somente implementação local**: não representa grants OAuth, nem autorização
+para executá-las, nem disponibilidade das ferramentas no catálogo carregado
+pela conversa ChatGPT. A ausência da ação revela Runtime desatualizado.
+
+Identidade do agente incrementada de 1.30.3 para 1.31.0; a versão de produto
+Windows e a revisão do catálogo MCP continuam indicadores **independentes**,
+não devem ser confundidos com a versão do executor instalado.

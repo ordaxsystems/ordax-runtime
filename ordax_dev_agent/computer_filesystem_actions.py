@@ -516,7 +516,28 @@ class ComputerFilesystemActions:
         if payload:
             return ActionResult(False, "computer.access_status does not accept fields")
         policy = self._computer_access_policy()
-        return ActionResult(True, "computer access policy ready", policy.public())
+        from . import __version__
+
+        status = policy.public()
+        # Execution capability presence is distinct from authorization: remote
+        # Owner grants are still resolved by the canonical Control Plane.
+        device_actions = (
+            "computer.terminal_exec",
+            "computer.process_start",
+            "computer.process_status",
+            "computer.process_list",
+            "computer.process_logs",
+            "computer.process_write_stdin",
+            "computer.process_stop",
+        )
+        registered = getattr(self, "_actions", {})
+        status["runtime_capabilities"] = {
+            "agent_version": __version__,
+            "implemented_actions": [
+                name for name in device_actions if name in registered
+            ],
+        }
+        return ActionResult(True, "computer access policy ready", status)
 
     def computer_file_stat(self, payload: dict[str, Any]) -> ActionResult:
         path, _ = self._computer_path(payload.get("path"), must_exist=True, read_public_product_manifest=True)
