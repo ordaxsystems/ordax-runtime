@@ -25,6 +25,7 @@ class StudioBrowserOAuthTests(unittest.TestCase):
 
     def test_browser_flow_uses_s256_state_and_exact_loopback_callback(self):
         observed = {}
+        callback_done = threading.Event()
 
         def open_browser(url, **kwargs):
             parsed = urllib.parse.urlparse(url)
@@ -49,6 +50,7 @@ class StudioBrowserOAuthTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 observed["callback_body"] = response.read().decode("utf-8")
                 connection.close()
+                callback_done.set()
             threading.Thread(target=callback, daemon=True).start()
             return True
 
@@ -62,6 +64,7 @@ class StudioBrowserOAuthTests(unittest.TestCase):
         self.assertLessEqual(len(verifier), 128)
         self.assertNotIn("password", observed["url"].lower())
         self.assertEqual(observed["kwargs"], {"new": 1, "autoraise": True})
+        self.assertTrue(callback_done.wait(5), "OAuth callback response was not fully consumed")
         self.assertIn("Autorização recebida", observed["callback_body"])
         self.assertNotIn("Conexão concluída", observed["callback_body"])
         self.assertIn("concluir a validação deste computador", observed["callback_body"])

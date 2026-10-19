@@ -8,21 +8,18 @@ the Electron main process and is never persisted by this bridge.
 """
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import os
 import re
-import secrets
 import sys
-import time
 import uuid
 import webbrowser
 from dataclasses import replace
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import HTTPServer
 from typing import Any, Callable
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import urlparse
 
+from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code
 from ordax_dev_agent.config import AgentConfig, DEFAULT_PRODUCT_MCP_URL
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 from .product_auth import (
@@ -30,12 +27,6 @@ from .product_auth import (
     ProductAuthSession,
     connect_existing_device,
     exchange_authorization_code,
-)
-from .public_auth_metadata import (
-    PRODUCT_AUTH_ISSUER,
-    STUDIO_OAUTH_CLIENT_ID,
-    STUDIO_OAUTH_REDIRECT_URI,
-    STUDIO_OAUTH_SCOPES,
 )
 
 _SCHEMA = "ordax.studio-product-account-session/1"
@@ -47,12 +38,6 @@ _CALLBACK_PORT = 8766
 _CALLBACK_PATH = "/oauth/callback"
 _OAUTH_TIMEOUT_SECONDS = 300
 _SAFE_ERROR_CODE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,127}\Z")
-
-
-def _pkce() -> tuple[str, str]:
-    verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
-    return verifier, challenge
 
 
 def _safe_error_code(value: Any, *, fallback: str = "account_auth_failed") -> str:
@@ -121,114 +106,23 @@ def browser_oauth_session(
     server_factory: Callable[..., HTTPServer] = HTTPServer,
     timeout_seconds: float = _OAUTH_TIMEOUT_SECONDS,
 ) -> ProductAuthSession:
-    redirect = urlparse(STUDIO_OAUTH_REDIRECT_URI)
-    if (
-        redirect.scheme != "http"
-        or redirect.hostname != _CALLBACK_HOST
-        or redirect.port != _CALLBACK_PORT
-        or redirect.path != _CALLBACK_PATH
-        or redirect.query
-        or redirect.fragment
-    ):
-        raise ProductAccountError("product_oauth_redirect_invalid", "O callback OAuth do Studio é inválido.")
-
-    verifier, challenge = _pkce()
-    state = secrets.token_urlsafe(32)
-    outcome: dict[str, str] = {}
-
-    class CallbackHandler(BaseHTTPRequestHandler):
-        def log_message(self, _format: str, *_args: Any) -> None:
-            return
-
-        def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
-            parsed = urlparse(self.path)
-            host = self.headers.get("Host", "")
-            if parsed.path != _CALLBACK_PATH or host != f"{_CALLBACK_HOST}:{_CALLBACK_PORT}":
-                self.send_response(404)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            if outcome:
-                self.send_response(409)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=False)
-            returned_state = query.get("state", [])
-            if len(returned_state) != 1 or not secrets.compare_digest(returned_state[0], state):
-                outcome["error"] = "state_mismatch"
-                ok = False
-            elif "error" in query:
-                outcome["error"] = "authorization_denied"
-                ok = False
-            else:
-                codes = query.get("code", [])
-                if len(codes) != 1 or not codes[0] or len(codes[0]) > 4096:
-                    outcome["error"] = "invalid_code"
-                    ok = False
-                else:
-                    outcome["code"] = codes[0]
-                    ok = True
-            body = (
-                "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
-                "<title>ORDAX Studio</title><style>body{font:16px system-ui;background:#07111d;color:#eaf2ff;"
-                "display:grid;place-items:center;min-height:90vh}main{max-width:520px;padding:32px;"
-                "border:1px solid #24364d;border-radius:18px;background:#0d1a2a}</style><main><h1>"
-                + ("Autorização recebida" if ok else "Autorização não concluída")
-                + "</h1><p>" + (
-                    "Volte ao ORDAX Studio para concluir a validação deste computador."
-                    if ok else "Volte ao ORDAX Studio e tente novamente."
-                ) + "</p></main>"
-            ).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
+    """Backwards-compatible Studio facade over the canonical Runtime Owner OAuth."""
     try:
-        server = server_factory((_CALLBACK_HOST, _CALLBACK_PORT), CallbackHandler)
-    except OSError as error:
+        code, verifier = browser_authorization_code(
+            open_browser=open_browser, server_factory=server_factory,
+            timeout_seconds=timeout_seconds, studio_callback=True,
+        )
+    except OwnerOAuthError as error:
+        descriptions = {
+            "owner_oauth_redirect_invalid": "O callback OAuth do Studio é inválido.",
+            "owner_oauth_callback_unavailable": "O Studio não conseguiu reservar o retorno seguro do navegador.",
+            "owner_oauth_browser_unavailable": "Não foi possível abrir o navegador padrão.",
+            "owner_oauth_timeout": "A autorização no navegador expirou.",
+        }
         raise ProductAccountError(
-            "product_oauth_callback_unavailable",
-            "O Studio não conseguiu reservar o retorno seguro do navegador.",
+            error.code, descriptions.get(error.code, "A conexão foi cancelada ou não pôde ser confirmada.")
         ) from error
-    try:
-        server.timeout = 0.5
-        authorize_url = PRODUCT_AUTH_ISSUER + "/oauth/authorize?" + urlencode({
-            "response_type": "code",
-            "client_id": STUDIO_OAUTH_CLIENT_ID,
-            "redirect_uri": STUDIO_OAUTH_REDIRECT_URI,
-            "scope": STUDIO_OAUTH_SCOPES,
-            "state": state,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        })
-        if open_browser(authorize_url, new=1, autoraise=True) is False:
-            raise ProductAccountError(
-                "product_oauth_browser_unavailable",
-                "Não foi possível abrir o navegador padrão.",
-            )
-        deadline = time.monotonic() + max(1.0, min(float(timeout_seconds), _OAUTH_TIMEOUT_SECONDS))
-        while not outcome and time.monotonic() < deadline:
-            server.handle_request()
-        if not outcome:
-            raise ProductAccountError(
-                "product_oauth_timeout",
-                "A autorização no navegador expirou.",
-            )
-        if "code" not in outcome:
-            raise ProductAccountError(
-                "product_oauth_rejected",
-                "A conexão foi cancelada ou não pôde ser confirmada.",
-            )
-        return exchange(outcome["code"], verifier)
-    finally:
-        server.server_close()
-
+    return exchange(code, verifier)
 
 def authorize_account(
     data: Any,
