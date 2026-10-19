@@ -4,6 +4,14 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _windows_pr_checks_cover_all_paths(workflow: str) -> bool:
+    """Unfiltered pull_request emits required checks for every changed path."""
+    if "  pull_request:" not in workflow or "  workflow_dispatch:" not in workflow:
+        return False
+    trigger = workflow.split("  pull_request:", 1)[1].split("  workflow_dispatch:", 1)[0]
+    return "paths:" not in trigger and "paths-ignore:" not in trigger
+
+
 class WindowsProductPackagingTests(unittest.TestCase):
     def test_native_launchers_are_product_entrypoints(self) -> None:
         launcher = (ROOT / "packaging" / "windows" / "ordax_launcher.c").read_text(encoding="utf-8")
@@ -85,7 +93,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertNotIn("/IM python.exe", quiesce)
         self.assertNotIn("/IM node.exe", quiesce)
         self.assertNotIn("/IM blender.exe", quiesce)
-        self.assertIn('"scripts/windows/ordax-upgrade-quiesce.ps1"', workflow)
+        self.assertTrue(_windows_pr_checks_cover_all_paths(workflow))
         self.assertIn("ORDAX_PACKAGED_PRIVATE_PYTHON_ORPHAN_RUNNING", smoke)
         self.assertIn("ORDAX_PACKAGED_PRIVATE_PYTHON_ORPHAN_RETIRED", smoke)
         self.assertIn("ordax-private-runtime-lock.py", smoke)
@@ -328,8 +336,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("-PresentationProcessId $presentationProcess.ProcessId", smoke)
         self.assertIn("[string]$ArtifactDirectory", smoke)
         self.assertIn("Exactly one ORDAX Studio installer", smoke)
-        for source in ("ordax_core", "ordax_dev_agent", "ordax_device_agent", "ordax_studio"):
-            self.assertIn(f'- "{source}/**"', workflow)
+        self.assertTrue(_windows_pr_checks_cover_all_paths(workflow))
 
     def test_release_requires_immutable_apps_main_ancestry_before_signing(self) -> None:
         workflow = (ROOT / ".github/workflows/windows-product-build.yml").read_text("utf-8")
@@ -372,7 +379,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
                         signed_smoke.index("Reverify final installer SHA-256 after signed installation smoke"))
         self.assertIn("needs:\n      - sign-release\n      - signed-release-smoke", publish)
         self.assertIn("Publish GitHub Release assets", publish)
-        self.assertIn('- "scripts/windows/test-ordax-studio-install-smoke.ps1"', workflow)
+        self.assertTrue(_windows_pr_checks_cover_all_paths(workflow))
 
     def test_public_release_requires_trusted_authenticode_at_each_handoff(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
@@ -429,8 +436,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("merge-base --is-ancestor", script)
         self.assertIn("not an ancestor of canonical origin/main", script)
         self.assertIn('tests.test_release_main_ancestry', workflow)
-        self.assertIn('- "scripts/windows/assert-release-main-ancestry.ps1"', workflow)
-        self.assertIn('- "tests/test_release_main_ancestry.py"', workflow)
+        self.assertTrue(_windows_pr_checks_cover_all_paths(workflow))
 
     def test_release_publish_handles_missing_release_without_powershell_error_stream_failure(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")

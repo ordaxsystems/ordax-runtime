@@ -32,7 +32,7 @@ A migração preserva o mesmo Inno Setup AppId histórico:
 
 `{0D31F22D-8451-4CF4-9E34-F0D4D857F55F}`
 
-Isso mantém o upgrade in-place das instalações existentes. Em instalação nova, o diretório padrão passa a ser `Programs\ORDAX Studio`; upgrades podem continuar no diretório previamente registrado pelo instalador antigo, sem mover estado por conta própria.
+Isso preserva a identidade de upgrade das instalações existentes. **A raiz canônica de binários, tanto na instalação nova quanto na atualização, é `%LOCALAPPDATA%\Programs\ORDAX`**: o Inno Setup usa `DefaultDirName={localappdata}\Programs\ORDAX` e `UsePreviousAppDir=no`, sem herdar um diretório antigo arbitrário. O bootstrap de atualização assinada valida essa mesma raiz. O estado persistente, credenciais e identidade do dispositivo devem ser preservados pelas rotinas próprias de upgrade e não pela permanência de um diretório antigo.
 
 O shutdown cooperativo continua usando `Local\ORDAXStudioShutdown` para a UI e `Local\ORDAXRuntimeShutdown` para o Runtime. O instalador também possui fallback explícito para encerrar um `ORDAX Dev.exe` histórico que não exponha o evento cooperativo.
 
