@@ -99,19 +99,20 @@ def _record_job_lease_renewal(runtime: dict, reply: dict) -> None:
     if not isinstance(lease, dict):
         return
     lease["renewal_attempts"] += 1
+    # Fencing loss is terminal for this execution. A later heartbeat or a
+    # malformed/subsequent response must not overwrite that evidence.
+    if lease["state"] == "fencing_lost":
+        return
     deadline = reply.get("lease_expires_at") if isinstance(reply, dict) else None
     if not isinstance(deadline, str) or not deadline.strip():
         lease["state"] = "unverified"
         lease["last_error_code"] = "lease_response_invalid"
         lease["last_error_at"] = time.time()
         return
-    # Fencing loss is terminal for this execution. An unrelated heartbeat
-    # or a subsequent response must not silently overwrite that evidence.
-    if lease["state"] != "fencing_lost":
-        lease["state"] = "renewed"
-        lease["last_renewed_at"] = time.time()
-        lease["lease_expires_at"] = deadline
-        lease["last_error_code"] = None
+    lease["state"] = "renewed"
+    lease["last_renewed_at"] = time.time()
+    lease["lease_expires_at"] = deadline
+    lease["last_error_code"] = None
 
 
 def _record_job_lease_error(runtime: dict, error: Exception) -> None:
