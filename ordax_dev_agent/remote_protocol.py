@@ -70,7 +70,7 @@ def postgres_safe_result(value: Any) -> Any:
     files or raw process streams.
     """
     if isinstance(value, str):
-        return value.replace(chr(0), r"\\u0000")
+        return value.replace(chr(0), r"\u0000")
     if isinstance(value, dict):
         return {postgres_safe_result(key): postgres_safe_result(item)
                 for key, item in value.items()}
