@@ -92,7 +92,14 @@ class PersistentProcessActions:
 
                 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
                 SYNCHRONIZE = 0x00100000
-                handle = ctypes.windll.kernel32.OpenProcess(
+                kernel32 = ctypes.windll.kernel32
+                kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+                kernel32.OpenProcess.restype = ctypes.c_void_p
+                kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+                kernel32.WaitForSingleObject.restype = ctypes.c_ulong
+                kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+                kernel32.CloseHandle.restype = ctypes.c_int
+                handle = kernel32.OpenProcess(
                     PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
                     False,
                     pid,
@@ -101,9 +108,9 @@ class PersistentProcessActions:
                     return False
                 try:
                     WAIT_TIMEOUT = 0x00000102
-                    return ctypes.windll.kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+                    return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
                 finally:
-                    ctypes.windll.kernel32.CloseHandle(handle)
+                    kernel32.CloseHandle(handle)
             except (AttributeError, OSError):
                 return False
         proc_stat = Path(f"/proc/{pid}/stat")
