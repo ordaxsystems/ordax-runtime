@@ -21,6 +21,12 @@ $headers = @{
     "X-GitHub-Api-Version" = "2022-11-28"
     "User-Agent" = "ORDAX-Main-Governance-Gate"
 }
+# The protected-main publication check must use the GitHub Actions identity.
+# Unauthenticated public branch-rule responses can be stale or incomplete
+# immediately after merges; never weaken the four required rules instead.
+if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+    $headers.Authorization = "Bearer $env:GH_TOKEN"
+}
 $repositoryUri = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)"
 $repositoryState = Invoke-RestMethod -Method Get -Uri $repositoryUri -Headers $headers
 if (-not $repositoryState -or [string]$repositoryState.default_branch -ne "main") {
