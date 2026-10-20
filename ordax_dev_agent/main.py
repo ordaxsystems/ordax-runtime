@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime
 import signal
@@ -56,6 +57,22 @@ def _transport_retry_delay(consecutive_failures: int) -> float:
     if consecutive_failures < 1:
         raise ValueError("consecutive_failures must be positive")
     return min(30.0, 5.0 * (2 ** min(consecutive_failures - 1, 3)))
+
+
+def product_idle_claim_delay_seconds(idle_misses: int, configured_ceiling: float) -> float:
+    """Bounded idle polling that preserves the daily PostgreSQL query budget.
+
+    A claim against an empty queue still consumes PostgreSQL queries. The
+    previous 1s ceiling could exhaust the Hyperdrive Free allowance and
+    disable all requests until the UTC reset. Burst promptly after activity,
+    then settle; old 1s configs also observe the safe minimum.
+    """
+    if idle_misses < 1:
+        raise ValueError("idle_misses must be positive")
+    if not math.isfinite(configured_ceiling):
+        raise ValueError("configured_ceiling must be finite")
+    ceiling = min(60.0, max(8.0, configured_ceiling))
+    return min(ceiling, 0.25 * (1.8 ** min(idle_misses - 1, 11)))
 
 
 def _mark_transport_delivery_error(runtime: dict, error: Exception) -> None:
@@ -451,9 +468,8 @@ def main() -> int:
                     idle_claim_misses += 1
                     # Stay very responsive during interactive work, then ease
                     # toward the configured ceiling while the agent is idle.
-                    idle_delay = min(
-                        config.poll_seconds,
-                        0.20 * (1.55 ** min(idle_claim_misses - 1, 5)),
+                    idle_delay = product_idle_claim_delay_seconds(
+                        idle_claim_misses, config.poll_seconds,
                     )
                     # The WebSocket transport already waits for work; avoid an extra idle gap.
                     time.sleep(0.10 if getattr(control, "uses_long_poll", False) and claim_seconds >= 1.0
