@@ -45,6 +45,25 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertNotIn("skipifsilent", run_section.split(runtime_entry, 1)[1].splitlines()[0])
         self.assertLess(run_section.index(runtime_entry), run_section.index('Filename: "{app}\\{#AppExeName}"'))
 
+    def test_install_smoke_does_not_wait_forever_for_persistent_descendants(self) -> None:
+        smoke = (ROOT / "scripts/windows/test-ordax-studio-install-smoke.ps1").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/windows-product-build.yml").read_text(encoding="utf-8")
+        self.assertIn('$centralNavigation.WaitForExit(30000)', smoke)
+        self.assertIn('$uninstallProcess.WaitForExit(300000)', smoke)
+        self.assertIn('$uninstallProcess.StartInfo = $uninstallStart', smoke)
+        self.assertIn('$centralNavigation.StartInfo = $navigationStart', smoke)
+        self.assertIn('$Process.WaitForExit(600000)', smoke)
+        self.assertIn('New-Object System.Diagnostics.ProcessStartInfo', smoke)
+        self.assertIn('New-Object System.Diagnostics.Process', smoke)
+        self.assertIn('$accountProbe.Start()', smoke)
+        self.assertIn('$accountProbe.WaitForExit(15000)', smoke)
+        self.assertIn('$accountProbe.ExitCode -ne 1', smoke)
+        self.assertIn('$accountProbe.StandardOutput.ReadToEnd()', smoke)
+        self.assertIn('$accountProbe.StandardError.ReadToEnd()', smoke)
+        self.assertNotIn(' -Wait -PassThru', smoke)
+        install_job = workflow.split("  install-smoke:", 1)[1].split("\n  attest-owner-dev-candidate:", 1)[0]
+        self.assertIn("    timeout-minutes: 75", install_job)
+
     def test_installer_preserves_app_id_while_migrating_branding(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
         self.assertIn("AppId={{0D31F22D-8451-4CF4-9E34-F0D4D857F55F}", installer)

@@ -127,6 +127,9 @@ jobs:
   install-smoke:
     needs: build-installer
     runs-on: windows-latest
+    # Three full installs and Electron UI probes are bounded; never leave a
+    # broken installer or long-lived child process consuming a runner forever.
+    timeout-minutes: 75
     steps:
       - name: Checkout pinned Runtime smoke implementation
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

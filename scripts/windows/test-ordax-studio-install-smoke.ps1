@@ -217,22 +217,48 @@ if ($LASTEXITCODE -ne 0) { throw "Retired WebView2/pywebview Python host survive
 # Verify the actual installed Python supports the canonical Electron login pipe
 # in isolated (-I) mode, and rejects a synthetic request before network/login.
 $accountProbeIn = Join-Path $env:RUNNER_TEMP "ordax-account-probe-in.json"
-$accountProbeOut = Join-Path $env:RUNNER_TEMP "ordax-account-probe-out.json"
-$accountProbeErr = Join-Path $env:RUNNER_TEMP "ordax-account-probe-err.txt"
+$accountProbe = $null
 try {
   [IO.File]::WriteAllText($accountProbeIn, '{"schema":"ordax.studio-product-account-session/1","operation":"unsupported","email":"invalid","password":"synthetic"}')
-  $accountProbe = Start-Process -FilePath $privatePython -WorkingDirectory $installRoot -ArgumentList @('-I', '-u', '-m', 'ordax_studio.electron_account_session') -RedirectStandardInput $accountProbeIn -RedirectStandardOutput $accountProbeOut -RedirectStandardError $accountProbeErr -NoNewWindow -Wait -PassThru
-  if ($accountProbe.ExitCode -ne 1) { throw "Installed account IPC did not reject invalid operation" }
-  $accountReply = Get-Content -Raw -Encoding UTF8 -LiteralPath $accountProbeOut | ConvertFrom-Json
+  # Start-Process -PassThru may return an unowned PID-based process wrapper
+  # if the child exits immediately; its ExitCode is then unavailable. Own the
+  # process handle directly and enforce an exact bounded wait instead.
+  $probeStart = New-Object System.Diagnostics.ProcessStartInfo
+  $probeStart.FileName = $privatePython
+  $probeStart.WorkingDirectory = $installRoot
+  $probeStart.Arguments = "-I -u -m ordax_studio.electron_account_session"
+  $probeStart.UseShellExecute = $false
+  $probeStart.CreateNoWindow = $true
+  $probeStart.RedirectStandardInput = $true
+  $probeStart.RedirectStandardOutput = $true
+  $probeStart.RedirectStandardError = $true
+  $accountProbe = New-Object System.Diagnostics.Process
+  $accountProbe.StartInfo = $probeStart
+  if (-not $accountProbe.Start()) { throw "Installed account IPC probe failed to start" }
+  $accountProbe.StandardInput.Write([IO.File]::ReadAllText($accountProbeIn))
+  $accountProbe.StandardInput.Close()
+  if (-not $accountProbe.WaitForExit(15000)) {
+    $accountProbe.Kill()
+    $null = $accountProbe.WaitForExit(5000)
+    throw "Installed account IPC probe exceeded 15 seconds"
+  }
+  # Invalid requests yield only a single small bounded JSON line.
+  $accountOut = $accountProbe.StandardOutput.ReadToEnd()
+  $accountErr = $accountProbe.StandardError.ReadToEnd()
+  if ($accountProbe.ExitCode -ne 1) {
+    throw "Installed account IPC did not reject invalid operation (exit $($accountProbe.ExitCode))"
+  }
+  $accountReply = $accountOut | ConvertFrom-Json
   if ($accountReply.schema -ne "ordax.studio-product-account-session/1" -or
       $accountReply.ok -ne $false -or $accountReply.error -ne "account_auth_failed" -or
       $accountReply.PSObject.Properties.Name -contains "access_token" -or
-      -not [string]::IsNullOrWhiteSpace((Get-Content -Raw -Encoding UTF8 -LiteralPath $accountProbeErr))) {
+      -not [string]::IsNullOrWhiteSpace($accountErr)) {
     throw "Installed Product account IPC violated the fail-closed response contract"
   }
   Write-Host "ORDAX_INSTALLED_ACCOUNT_PIPE_FAIL_CLOSED=PASS"
 } finally {
-  Remove-Item -LiteralPath $accountProbeIn,$accountProbeOut,$accountProbeErr -Force -ErrorAction SilentlyContinue
+  if ($accountProbe) { $accountProbe.Dispose() }
+  Remove-Item -LiteralPath $accountProbeIn -Force -ErrorAction SilentlyContinue
 }
 
 # Silent install must start the Runtime itself; do not let Studio mask a
@@ -270,9 +296,26 @@ try {
     throw "Central shortcut bypasses official Studio supervisor or lacks mode parameter"
   }
   Write-Host "ORDAX_INSTALLED_CENTRAL_SHORTCUT=PASS"
-  $centralNavigation = Start-Process -FilePath $studioExe -WorkingDirectory $installRoot -ArgumentList "--ordax-central" -Wait -PassThru
-  if ($centralNavigation.ExitCode -ne 0) {
-    throw "Running Studio did not accept Central navigation request"
+  # This one-shot navigation may exit before Start-Process -PassThru
+  # retains an owned handle; use Process.Start to obtain a real ExitCode.
+  $navigationStart = New-Object System.Diagnostics.ProcessStartInfo
+  $navigationStart.FileName = $studioExe
+  $navigationStart.WorkingDirectory = $installRoot
+  $navigationStart.Arguments = "--ordax-central"
+  $navigationStart.UseShellExecute = $false
+  $centralNavigation = New-Object System.Diagnostics.Process
+  $centralNavigation.StartInfo = $navigationStart
+  try {
+    if (-not $centralNavigation.Start()) { throw "Central navigation did not start" }
+    if (-not $centralNavigation.WaitForExit(30000)) {
+      $centralNavigation.Kill()
+      throw "Central navigation did not finish within 30 seconds"
+    }
+    if ($centralNavigation.ExitCode -ne 0) {
+      throw "Running Studio did not accept Central navigation request"
+    }
+  } finally {
+    $centralNavigation.Dispose()
   }
   $studio.Refresh()
   if ($studio.HasExited) { throw "Central navigation terminated the existing Studio supervisor" }
@@ -501,13 +544,26 @@ try {
 
 $uninstaller = Join-Path $installRoot "unins000.exe"
 if (-not (Test-Path $uninstaller)) { throw "ORDAX Studio uninstaller is missing" }
-$uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @(
-  "/VERYSILENT",
-  "/SUPPRESSMSGBOXES",
-  "/NORESTART"
-) -Wait -PassThru
-if ($uninstallProcess.ExitCode -ne 0) {
-  throw "ORDAX Studio silent uninstall failed: $($uninstallProcess.ExitCode)"
+# Own the short-lived uninstaller handle as well; a PID-based
+# Start-Process wrapper can lose ExitCode if it finishes before attach.
+$uninstallStart = New-Object System.Diagnostics.ProcessStartInfo
+$uninstallStart.FileName = $uninstaller
+$uninstallStart.Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+$uninstallStart.UseShellExecute = $false
+$uninstallStart.CreateNoWindow = $true
+$uninstallProcess = New-Object System.Diagnostics.Process
+$uninstallProcess.StartInfo = $uninstallStart
+try {
+  if (-not $uninstallProcess.Start()) { throw "ORDAX Studio uninstaller did not start" }
+  if (-not $uninstallProcess.WaitForExit(300000)) {
+    $uninstallProcess.Kill()
+    throw "ORDAX Studio uninstaller exceeded 5 minutes"
+  }
+  if ($uninstallProcess.ExitCode -ne 0) {
+    throw "ORDAX Studio silent uninstall failed: $($uninstallProcess.ExitCode)"
+  }
+} finally {
+  $uninstallProcess.Dispose()
 }
 
 $leftoverAutoStart = (Get-ItemProperty -Path $runKey -Name "ORDAX Runtime" -ErrorAction SilentlyContinue)."ORDAX Runtime"
