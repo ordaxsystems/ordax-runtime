@@ -74,6 +74,24 @@ class ComputerParityActionTests(unittest.TestCase):
         self.assertFalse(result.ok)
         open_clipboard.assert_not_called()
 
+    def test_clipboard_read_handles_64bit_pointer(self):
+        native_handle = 0x100000001
+        user32 = Mock()
+        kernel32 = Mock()
+        user32.GetClipboardData.return_value = native_handle
+        kernel32.GlobalLock.return_value = 0x100000002
+        with patch.object(self.actions, "_open_clipboard", return_value=True), patch(
+            "ordax_dev_agent.computer_parity_actions.ctypes.windll",
+            SimpleNamespace(user32=user32, kernel32=kernel32),
+        ), patch(
+            "ordax_dev_agent.computer_parity_actions.ctypes.wstring_at",
+            return_value="ORDAX_TESTE",
+        ):
+            result = self.actions.computer_clipboard_read({"max_bytes": 256})
+        self.assertTrue(result.ok)
+        self.assertEqual(result.data["text"], "ORDAX_TESTE")
+        kernel32.GlobalUnlock.assert_called_once_with(native_handle)
+
     def test_clipboard_write_rejects_oversized_text_without_touching_windows(self):
         with patch.object(self.actions, "_open_clipboard") as open_clipboard:
             result = self.actions.computer_clipboard_write(
