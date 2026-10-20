@@ -89,11 +89,30 @@ if ($studioAppSource) {
         throw "Canonical Studio Application Action manifest is incompatible"
     }
 
+    $studioSemanticUiPath = Join-Path $studioAppSource "presentation\\semantic-ui.json"
+    if (-not (Test-Path $studioSemanticUiPath)) {
+        throw "Canonical Studio semantic UI manifest is missing: $studioSemanticUiPath"
+    }
+    $studioSemanticUi = Get-Content $studioSemanticUiPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (
+        $studioSemanticUi.schema -ne "ordax-apps.ui-semantic-map/1" -or
+        $studioSemanticUi.appId -ne "studio" -or
+        [string]$studioSemanticUi.appVersion -ne [string]$studioAppManifest.version -or
+        $studioSemanticUi.authority -ne "none" -or
+        $studioSemanticUi.execution -ne "descriptive-only" -or
+        $studioSemanticUi.privacy.captureInputValues -ne $false -or
+        $studioSemanticUi.privacy.captureCredentials -ne $false -or
+        -not $studioSemanticUi.elements -or
+        $studioSemanticUi.elements.Count -gt 256
+    ) {
+        throw "Canonical Studio semantic UI manifest is incompatible"
+    }
+
     # Produce only immutable app metadata here. Runtime Git sources are NEVER
     # rewritten by a Studio installer build. The Electron visual owner stays
     # in the locked Apps checkout; Runtime owns execution and installation.
     $appIntelligenceRegistry = [ordered]@{
-        schema = "ordax.app-intelligence-registry/1"
+        schema = "ordax.app-intelligence-registry/2"
         authority = "none"
         source = [ordered]@{
             repository = [string]$sourceLock.repository
@@ -105,6 +124,7 @@ if ($studioAppSource) {
                 title = [string]$studioAppManifest.title
                 version = [string]$studioAppManifest.version
                 manifest = $studioAiManifest
+                semanticUi = $studioSemanticUi
             }
         )
     }
@@ -134,8 +154,8 @@ if ($studioAppSource) {
     $accountHostSource = Get-Content -LiteralPath $accountHost -Raw -Encoding UTF8
     $accountRuntimeSource = Get-Content -LiteralPath $accountRuntime -Raw -Encoding UTF8
     $consumerVerifiedSubject = $accountConsumerSource.Contains("subject_id") -and $accountConsumerSource.Contains("SUBJECT_UUID")
-    $hostAttestedSubject = $accountHostSource.Contains("acceptAccountToken(token, subjectId)")
-    $runtimeAttestedSubject = $accountRuntimeSource.Contains("acceptAccountToken(token, verifiedSubjectId)")
+    $hostAttestedSubject = $accountHostSource.Contains("acceptAccountToken(token, subjectId, productOrigin)")
+    $runtimeAttestedSubject = $accountRuntimeSource.Contains("acceptAccountToken(token, verifiedSubjectId, verifiedProductOrigin)")
     if (-not ($consumerVerifiedSubject -and $hostAttestedSubject -and $runtimeAttestedSubject)) {
         throw "Pinned Studio account protocol cannot consume verified Runtime subject; update canonical Apps source lock"
     }
@@ -246,6 +266,8 @@ Write-Output "ORDAX_STUDIO_PACKAGE_SOURCE_VERIFIED=$($sourceLock.commit)"
 Copy-Item (Join-Path $repoRoot "scripts") (Join-Path $stageRoot "scripts") -Recurse -Force
 
 $privatePython = Join-Path $runtimeRoot "python.exe"
+$runtimePackageAssertion = Join-Path $repoRoot "scripts\windows\assert-runtime-package-capabilities.ps1"
+& $runtimePackageAssertion -PrivatePython $privatePython -RuntimeRoot $runtimeRoot -Phase "staged"
 & $privatePython -c "import ordax_studio, ordax_dev_agent, ordax_device_agent; print('ORDAX_PRIVATE_RUNTIME_OK')"
 if ($LASTEXITCODE -ne 0) {
     throw "Private ORDAX Python runtime import smoke failed"
@@ -255,22 +277,105 @@ if ($LASTEXITCODE -ne 0) {
     throw "Packaged App Intelligence registry validation failed"
 }
 
+# Verify the Owner MCP administration entry point is usable by the private
+# packaged Python, rather than assuming pip --target installs Scripts/*.exe.
+& $privatePython -m ordax_dev_agent.owner_grants_cli --help | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged Owner grant CLI is unavailable"
+}
+& $privatePython -c "import importlib.metadata as md; e=[x for x in md.entry_points(group='console_scripts') if x.name=='ordax-owner-grants']; assert len(e)==1 and e[0].value=='ordax_dev_agent.owner_grants_cli:main'; print('ORDAX_OWNER_GRANT_ENTRYPOINT_OK')"
+if ($LASTEXITCODE -ne 0) {
+    throw "Canonical Owner grant console entry point is missing"
+}
+Write-Output "ORDAX_OWNER_GRANT_CLI=PASS"
+
+$runtimeVersion = (& $privatePython -I -c "import importlib.metadata as metadata; print(metadata.version('ordax-runtime'))").Trim()
+if ($LASTEXITCODE -ne 0 -or $runtimeVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+    throw "Packaged ORDAX Runtime version is missing or invalid: $runtimeVersion"
+}
+Write-Output "ORDAX_RUNTIME_PACKAGE_VERSION=$runtimeVersion"
+
 $cl = Get-Command cl.exe -ErrorAction SilentlyContinue
 if (-not $cl) {
     throw "cl.exe was not found. Run from a Visual Studio developer environment."
 }
+$rc = Get-Command rc.exe -ErrorAction SilentlyContinue
+if (-not $rc) {
+    throw "rc.exe was not found. Run from a Visual Studio developer environment."
+}
+
+function Convert-ToWindowsVersionQuad([string]$SemanticVersion) {
+    $core = ($SemanticVersion -split '[+-]', 2)[0]
+    $parts = $core -split '\.'
+    if ($parts.Count -ne 3 -or ($parts | Where-Object { $_ -notmatch '^\d+$' }).Count -ne 0) {
+        throw "Version cannot be represented as a Windows VERSIONINFO value: $SemanticVersion"
+    }
+    return "$($parts[0]),$($parts[1]),$($parts[2]),0"
+}
+
+function Write-LauncherVersionResource(
+    [string]$Path,
+    [string]$SemanticVersion,
+    [string]$Description,
+    [string]$InternalName,
+    [string]$OriginalFilename
+) {
+    $quad = Convert-ToWindowsVersionQuad $SemanticVersion
+    $resource = @"
+#include <windows.h>
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION $quad
+ PRODUCTVERSION $quad
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "ORDAX\0"
+            VALUE "FileDescription", "$Description\0"
+            VALUE "FileVersion", "$SemanticVersion\0"
+            VALUE "InternalName", "$InternalName\0"
+            VALUE "OriginalFilename", "$OriginalFilename\0"
+            VALUE "ProductName", "ORDAX\0"
+            VALUE "ProductVersion", "$SemanticVersion\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
+"@
+    [System.IO.File]::WriteAllText($Path, $resource, [System.Text.Encoding]::ASCII)
+}
+
 $launcherSource = Join-Path $repoRoot "packaging\windows\ordax_launcher.c"
 $studioExe = Join-Path $stageRoot "ORDAX Studio.exe"
 $legacyStudioExe = Join-Path $stageRoot "ORDAX Dev.exe"
 $runtimeExe = Join-Path $stageRoot "ORDAX Runtime.exe"
+$studioRc = Join-Path $buildRoot "ordax-studio-version.rc"
+$studioRes = Join-Path $buildRoot "ordax-studio-version.res"
+$runtimeRc = Join-Path $buildRoot "ordax-runtime-version.rc"
+$runtimeRes = Join-Path $buildRoot "ordax-runtime-version.res"
+Write-LauncherVersionResource $studioRc $Version "ORDAX Studio launcher" "ORDAX Studio" "ORDAX Studio.exe"
+Write-LauncherVersionResource $runtimeRc $runtimeVersion "ORDAX Runtime launcher" "ORDAX Runtime" "ORDAX Runtime.exe"
 
 Push-Location $buildRoot
 try {
-    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=0 "/Fe:$studioExe" $launcherSource /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib
+    & rc.exe /nologo "/fo$studioRes" $studioRc
+    if ($LASTEXITCODE -ne 0) { throw "ORDAX Studio VERSIONINFO compilation failed" }
+    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=0 "/Fe:$studioExe" $launcherSource $studioRes /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib
     if ($LASTEXITCODE -ne 0) { throw "ORDAX Studio launcher compilation failed" }
     Remove-Item "ordax_launcher.obj" -Force -ErrorAction SilentlyContinue
 
-    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=1 "/Fe:$runtimeExe" $launcherSource /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib
+    & rc.exe /nologo "/fo$runtimeRes" $runtimeRc
+    if ($LASTEXITCODE -ne 0) { throw "ORDAX Runtime VERSIONINFO compilation failed" }
+    & cl.exe /nologo /O2 /W4 /DUNICODE /D_UNICODE /DORDAX_RUNTIME_LAUNCHER=1 "/Fe:$runtimeExe" $launcherSource $runtimeRes /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib
     if ($LASTEXITCODE -ne 0) { throw "ORDAX Runtime launcher compilation failed" }
     Remove-Item "ordax_launcher.obj" -Force -ErrorAction SilentlyContinue
 } finally {
@@ -280,6 +385,16 @@ try {
 if (-not (Test-Path $studioExe) -or -not (Test-Path $runtimeExe)) {
     throw "Native ORDAX launchers were not produced"
 }
+$studioVersionInfo = (Get-Item -LiteralPath $studioExe).VersionInfo
+if ($studioVersionInfo.FileVersion -ne $Version -or $studioVersionInfo.ProductVersion -ne $Version) {
+    throw "ORDAX Studio launcher VERSIONINFO does not match canonical Studio version $Version"
+}
+$runtimeVersionInfo = (Get-Item -LiteralPath $runtimeExe).VersionInfo
+if ($runtimeVersionInfo.FileVersion -ne $runtimeVersion -or $runtimeVersionInfo.ProductVersion -ne $runtimeVersion) {
+    throw "ORDAX Runtime launcher VERSIONINFO does not match packaged Runtime version $runtimeVersion"
+}
+Write-Output "ORDAX_STUDIO_LAUNCHER_VERSION=$($studioVersionInfo.FileVersion)"
+Write-Output "ORDAX_RUNTIME_LAUNCHER_VERSION=$($runtimeVersionInfo.FileVersion)"
 
 # Compatibility only: old shortcuts/automation may still point at ORDAX Dev.exe.
 # Keep one implementation by copying the exact Studio launcher bytes rather than
@@ -299,6 +414,7 @@ $manifest = [ordered]@{
         source = $versionSource
         canonical_version_asserted = [bool]$canonicalVersion
     }
+    runtime_version = $runtimeVersion
     architecture = "x64"
     python = $PythonVersion
     entrypoints = @{
@@ -313,7 +429,7 @@ $manifest = [ordered]@{
     }
     studio_source_commit = [string]$sourceLock.commit
     presentation_host = "electron"
-    control_plane = "https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev"
+    control_plane = "https://mcp.ordax.com.br"
     built_at = [DateTimeOffset]::UtcNow.ToString("o")
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stageRoot "product-manifest.json") -Encoding UTF8

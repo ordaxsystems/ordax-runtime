@@ -1,0 +1,386 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import tempfile
+import unittest
+import uuid
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import httpx
+
+from ordax_dev_agent import __version__ as DEVICE_AGENT_VERSION
+from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.models import ActionResult
+from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
+from ordax_dev_agent.product_remote import PRODUCT_REMOTE_CAPABILITY
+from ordax_dev_agent.remote_protocol import DeviceAuthorizationError
+
+DEVICE_ID = "22222222-2222-4222-8222-222222222222"
+
+
+def config(root: Path) -> AgentConfig:
+    return AgentConfig(
+        agent_name="test-agent", poll_seconds=1.0,
+        state_dir=root / "state", agent_repo_path=root / "agent",
+        hordax_path=root / "hordax", bridge_path=root / "bridge",
+        control_plane_protocol="cloudflare-v3", device_id=DEVICE_ID,
+        product_mcp_url="https://product.example",
+    )
+
+
+def token(root: Path) -> None:
+    state = root / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "device-token.cloudflare-v3.txt").write_text("a" * 64, encoding="utf-8")
+
+
+class Central:
+    def __init__(self): self.ticks = 0
+    def tick(self): self.ticks += 1
+
+
+class ProductDeviceControlPlaneTests(unittest.TestCase):
+    def test_remote_terminal_and_process_actions_require_canonical_project_attestation(self):
+        project_id = "33333333-3333-4333-8333-333333333333"
+        repo = "ordaxsystems/demo-project"
+        plane = ProductDeviceControlPlane.__new__(ProductDeviceControlPlane)
+        plane.config = object()
+        actions = (
+            "terminal.exec", "process.start", "process.status",
+            "process.list", "process.logs", "process.write_stdin", "process.stop",
+        )
+        with patch(
+            "ordax_dev_agent.product_device_control_plane.resolve_project_for_repository",
+            return_value=SimpleNamespace(slug="real-local-project"),
+        ) as resolve:
+            for action in actions:
+                with self.subTest(action=action):
+                    bound = plane._bind_project_scope(
+                        {"capability": action, "project_id": project_id},
+                        {
+                            "project": "untrusted-model-slug",
+                            "argv": ["python", "--version"],
+                            "_ordax_project_scope": {
+                                "project_id": project_id,
+                                "repository_full_name": repo,
+                            },
+                        },
+                    )
+                    self.assertEqual(bound["project"], "real-local-project")
+                    self.assertEqual(bound["argv"], ["python", "--version"])
+                    self.assertNotIn("_ordax_project_scope", bound)
+            self.assertEqual(resolve.call_count, len(actions))
+            resolve.assert_called_with(plane.config, repo)
+
+        for action in actions:
+            with self.subTest(action=action):
+                with self.assertRaisesRegex(RuntimeError, "attestation is missing"):
+                    plane._bind_project_scope(
+                        {"capability": action, "project_id": project_id}, {"project": "untrusted"},
+                    )
+                with self.assertRaisesRegex(RuntimeError, "id mismatch"):
+                    plane._bind_project_scope(
+                        {"capability": action, "project_id": project_id},
+                        {"_ordax_project_scope": {
+                            "project_id": "44444444-4444-4444-8444-444444444444",
+                            "repository_full_name": repo,
+                        }},
+                    )
+
+        with self.assertRaisesRegex(RuntimeError, "unexpected"):
+            plane._bind_project_scope(
+                {"capability": "computer.click", "project_id": None},
+                {"x": 1, "y": 2, "_ordax_project_scope": {
+                    "project_id": project_id, "repository_full_name": repo,
+                }},
+            )
+
+    def plane(self, root: Path, handler):
+        token(root)
+        plane = ProductDeviceControlPlane(config(root))
+        plane.http.close()
+        plane.http = httpx.Client(
+            transport=httpx.MockTransport(handler),
+            base_url="https://product.example",
+            headers={
+                "X-Ordax-Device-Id": DEVICE_ID,
+                "X-Ordax-Device-Token": "a" * 64,
+            },
+        )
+        plane.product_central_session = Central()
+        return plane
+
+    def test_native_os_compatibility_manifest_does_not_authorize_execution(self):
+        manifest = json.loads(
+            (Path(__file__).resolve().parents[1]
+             / "docs/contracts/ordax-os-runtime-compatibility.json").read_text(
+                 encoding="utf-8"
+             )
+        )
+        native = manifest["ordax_os"]
+        self.assertTrue(native["native_device_credential_provider_supported"])
+        self.assertEqual(
+            native["native_device_credential_provider_owner"],
+            "ProductDeviceIdentityStore.read_enrolled_credential",
+        )
+        self.assertTrue(native["native_provider_exact_device_id_required"])
+        self.assertFalse(native["native_provider_duplicate_token_file_allowed"])
+        self.assertFalse(native["native_provider_denial_file_fallback_allowed"])
+        self.assertFalse(manifest["activation"]["runtime_dispatch_enabled"])
+        self.assertEqual(native["native_runtime_kind"], "ordax-os")
+        self.assertTrue(native["native_runtime_kind_requires_credential_provider"])
+        self.assertTrue(native["native_heartbeat_uses_product_transport"])
+        self.assertTrue(native["native_heartbeat_writes_no_action_grants"])
+        self.assertTrue(native["single_presence_owner_required"])
+
+    def test_native_identity_provider_uses_only_existing_device_credential(self):
+        # The Native Host supplies the same private store as its discovery
+        # worker; no second device token file or login is created.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            called = []
+            def provider():
+                called.append(True)
+                return {"device_id": DEVICE_ID, "device_token": "b" * 64}
+            plane = ProductDeviceControlPlane(
+                config(root), device_credential_provider=provider,
+            )
+            self.assertEqual(called, [True])
+            self.assertEqual(plane.device_token, "b" * 64)
+            self.assertEqual(plane.runtime_kind, "ordax-os")
+            self.assertFalse(
+                (root / "state" / "device-token.cloudflare-v3.txt").exists()
+            )
+            self.assertEqual(
+                plane.http.headers["X-Ordax-Device-Id"], DEVICE_ID,
+            )
+            self.assertEqual(
+                plane.http.headers["X-Ordax-Device-Token"], "b" * 64,
+            )
+            self.assertEqual(
+                plane.product_central_session._credential_provider(), "b" * 64,
+            )
+            plane.product_central_session.close()
+            plane.http.close()
+
+    def test_native_provider_denial_never_falls_back_to_windows_token(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            token(root)
+            for value in (
+                None,
+                {},
+                {"device_id": str(uuid.uuid4()), "device_token": "b" * 64},
+                {"device_id": DEVICE_ID, "device_token": ""},
+                {"device_id": DEVICE_ID, "device_token": 12},
+                {"device_id": DEVICE_ID, "device_token": "b" * 64, "extra": True},
+                {"device_id": DEVICE_ID, "device_token": "X" * 64},
+                {"device_id": DEVICE_ID, "device_token": "z" * 64},
+            ):
+                with self.subTest(value=value):
+                    with self.assertRaises(RuntimeError):
+                        ProductDeviceControlPlane(
+                            config(root), device_credential_provider=lambda: value,
+                        )
+            with self.assertRaises(TypeError):
+                ProductDeviceControlPlane(
+                    config(root), device_credential_provider="not a callback",
+                )
+
+    def test_native_heartbeat_declares_actual_os_kind_without_extra_identity(self):
+        seen = []
+        def handler(request):
+            seen.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(200, json={"ok": True, "recorded": True})
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            plane = ProductDeviceControlPlane(
+                config(root),
+                device_credential_provider=lambda: {
+                    "device_id": DEVICE_ID, "device_token": "b" * 64,
+                },
+            )
+            plane.http.close()
+            plane.http = httpx.Client(
+                transport=httpx.MockTransport(handler),
+                base_url="https://product.example",
+                headers={
+                    "X-Ordax-Device-Id": DEVICE_ID,
+                    "X-Ordax-Device-Token": "b" * 64,
+                },
+            )
+            plane.product_central_session = Central()
+            plane.heartbeat(["agent.status"], agent_version="0.4.7")
+            self.assertEqual(seen[0][0], "/v3/device/transport/heartbeat")
+            self.assertEqual(seen[0][1]["runtime_kind"], "ordax-os")
+            self.assertEqual(seen[0][1]["capabilities_digest"],
+                             hashlib.sha256(b'["agent.status"]').hexdigest())
+            self.assertNotIn("capabilities", seen[0][1])
+            self.assertEqual(plane._runtime_provenance()["runtime_kind"], "ordax-os")
+            self.assertFalse(
+                (root / "state" / "device-token.cloudflare-v3.txt").exists()
+            )
+            plane.http.close()
+
+    def test_heartbeat_uses_product_transport_only(self):
+        seen = []
+        def handler(request):
+            seen.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(200, json={"ok": True, "recorded": True})
+        with tempfile.TemporaryDirectory() as raw:
+            plane = self.plane(Path(raw), handler)
+            plane.heartbeat(["agent.status"], agent_version="1.2.3")
+            self.assertEqual(seen[0][0], "/v3/device/transport/heartbeat")
+            expected = hashlib.sha256(b'["agent.status"]').hexdigest()
+            self.assertEqual(seen[0][1]["capabilities_digest"], expected)
+            self.assertNotIn("capabilities", seen[0][1])
+            self.assertNotIn("runtime_kind", seen[0][1])
+            self.assertEqual(plane.runtime_kind, "desktop-agent")
+            self.assertEqual(plane.product_central_session.ticks, 1)
+            self.assertNotIn("legacy-control.invalid", str(seen))
+            plane.http.close()
+
+    def test_heartbeat_digest_is_order_independent_and_cached(self):
+        seen = []
+        def handler(request):
+            seen.append(json.loads(request.content))
+            return httpx.Response(200, json={"ok": True, "recorded": True})
+        with tempfile.TemporaryDirectory() as raw:
+            plane = self.plane(Path(raw), handler)
+            plane.heartbeat(["b", "a", "a"], agent_version="1")
+            first = seen[-1]["capabilities_digest"]
+            plane.heartbeat(["a", "b"], agent_version="1")
+            self.assertEqual(seen[-1]["capabilities_digest"], first)
+            self.assertEqual(first, hashlib.sha256(b'["a","b"]').hexdigest())
+            self.assertEqual(plane._heartbeat_capabilities, ("a", "b"))
+            plane.http.close()
+
+    def test_claim_starts_same_fenced_job_context_with_runtime_provenance(self):
+        payload = {"request_id": "r", "action": "agent.status"}
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        job = {
+            "job_id": "33333333-3333-4333-8333-333333333333",
+            "device_id": DEVICE_ID,
+            "project_id": None,
+            "capability": PRODUCT_REMOTE_CAPABILITY,
+            "payload_canonical_b64": base64.b64encode(raw).decode(),
+            "payload_sha256": hashlib.sha256(raw).hexdigest(),
+            "effect_id": "44444444-4444-4444-8444-444444444444",
+            "attempt_id": "55555555-5555-4555-8555-555555555555",
+            "lease_id": "66666666-6666-4666-8666-666666666666",
+            "execution_epoch": 1,
+        }
+        seen = []
+        def handler(request):
+            body = json.loads(request.content)
+            seen.append((request.url.path, body))
+            if request.url.path.endswith("/claim"):
+                job["agent_instance_id"] = body["agent_instance_id"]
+                job["boot_id"] = body["boot_id"]
+                return httpx.Response(200, json={"ok": True, "job": job})
+            return httpx.Response(200, json={"ok": True})
+        with tempfile.TemporaryDirectory() as raw_dir:
+            plane = self.plane(Path(raw_dir), handler)
+            claimed = plane.claim_next_job()
+            self.assertIsNotNone(claimed)
+            self.assertEqual([item[0] for item in seen], [
+                "/v3/device/transport/claim", "/v3/device/transport/start",
+            ])
+            for _path, body in seen:
+                self.assertEqual(body["agent_instance_id"], plane.agent_instance_id)
+                self.assertEqual(body["boot_id"], plane.boot_id)
+                self.assertEqual(body["runtime_kind"], "desktop-agent")
+                self.assertEqual(body["agent_version"], DEVICE_AGENT_VERSION)
+            plane.http.close()
+
+    def test_complete_persists_canonical_b64_report_and_runtime_provenance(self):
+        seen = []
+        def handler(request):
+            seen.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(200, json={"ok": True})
+        with tempfile.TemporaryDirectory() as raw_dir:
+            plane = self.plane(Path(raw_dir), handler)
+            from ordax_dev_agent.models import AgentJob
+            job = AgentJob(
+                id="33333333-3333-4333-8333-333333333333",
+                action=PRODUCT_REMOTE_CAPABILITY, payload={},
+                lease_token="66666666-6666-4666-8666-666666666666",
+                effect_id="44444444-4444-4444-8444-444444444444",
+                attempt_id="55555555-5555-4555-8555-555555555555",
+                execution_epoch=1, agent_instance_id=plane.agent_instance_id,
+                boot_id=plane.boot_id,
+            )
+            plane._jobs[job.id] = job
+            plane.complete(job, ActionResult(True, "ok", {"value": 1}))
+            self.assertEqual(seen[-1][0], "/v3/device/transport/report")
+            report = seen[-1][1]
+            decoded = json.loads(base64.b64decode(report["result_canonical_b64"]))
+            self.assertEqual(decoded, {"data": {"value": 1}, "ok": True, "summary": "ok"})
+            self.assertNotIn("result", report)
+            self.assertEqual(report["runtime_kind"], "desktop-agent")
+            self.assertEqual(report["agent_version"], DEVICE_AGENT_VERSION)
+            plane.http.close()
+
+    def test_recovery_replays_persisted_execution_version_not_current_process_version(self):
+        seen = []
+        def handler(request):
+            seen.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(200, json={"ok": True})
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            plane = self.plane(root, handler)
+            report = {
+                "job_id": "33333333-3333-4333-8333-333333333333",
+                "effect_id": "44444444-4444-4444-8444-444444444444",
+                "attempt_id": "55555555-5555-4555-8555-555555555555",
+                "lease_id": "66666666-6666-4666-8666-666666666666",
+                "execution_epoch": 1,
+                "agent_instance_id": "77777777-7777-4777-8777-777777777777",
+                "boot_id": "88888888-8888-4888-8888-888888888888",
+                "runtime_kind": "desktop-agent",
+                "agent_version": "0.3.0-old",
+                "report_id": "99999999-9999-4999-8999-999999999999",
+                "status": "succeeded",
+                "result": {"ok": True, "summary": "done", "data": {}},
+                "error_code": None,
+            }
+            plane._terminal_outbox.persist(report)
+            plane.agent_version = "0.4.0-new"
+            recovered = plane.recover_pending_reports()
+            self.assertEqual(recovered, 1)
+            self.assertEqual(seen[-1][0], "/v3/device/transport/recover-report")
+            self.assertEqual(seen[-1][1]["agent_version"], "0.3.0-old")
+            self.assertEqual(seen[-1][1]["runtime_kind"], "desktop-agent")
+            plane.http.close()
+
+    def test_auth_failure_requires_device_recovery(self):
+        def handler(_request):
+            return httpx.Response(401, json={"ok": False, "error": "invalid_device_token"})
+        with tempfile.TemporaryDirectory() as raw_dir:
+            plane = self.plane(Path(raw_dir), handler)
+            with self.assertRaises(DeviceAuthorizationError):
+                plane.heartbeat(["agent.status"], agent_version="1")
+            plane.http.close()
+
+    def test_artifacts_never_fall_back_to_legacy_authority(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            plane = self.plane(Path(raw_dir), lambda _: httpx.Response(200, json={"ok": True}))
+            with self.assertRaisesRegex(RuntimeError, "refusing legacy D1 artifact fallback"):
+                plane.upload_artifact(None)
+            plane.http.close()
+
+    def test_runtime_transport_has_no_websocket_or_legacy_operator_dependency(self):
+        source = Path(__file__).resolve().parents[1] / "ordax_dev_agent" / "product_device_control_plane.py"
+        text = source.read_text(encoding="utf-8")
+        self.assertNotIn("from websockets", text)
+        self.assertNotIn("websockets.sync", text)
+        self.assertNotIn("ORDAX_OPERATOR_TOKEN", text)
+        self.assertNotIn("/v3/device/ws", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

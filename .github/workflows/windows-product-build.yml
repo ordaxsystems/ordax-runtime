@@ -1,32 +1,12 @@
 name: Windows Product Build
 
 on:
+  # Required Windows checks must appear for every PR, including documentation-only.
   pull_request:
-    paths:
-      - "packaging/windows/**"
-      - "native/ordax-workbench/**"
-      - "tests/test_studio_host_transport_boundary.py"
-      - "ordax_core/**"
-      - "ordax_dev_agent/**"
-      - "ordax_device_agent/**"
-      - "ordax_studio/**"
-      - "native/ordax-workbench/**"
-      - "scripts/windows/build-ordax-studio-product.ps1"
-      - "scripts/windows/ordax-studio-start.ps1"
-      - "scripts/windows/ordax-upgrade-quiesce.ps1"
-      - "scripts/windows/assert-release-authenticode.ps1"
-      - "scripts/windows/assert-release-provenance.ps1"
-      - "scripts/windows/assert-release-main-ancestry.ps1"
-      - "tests/test_release_main_ancestry.py"
-      - "scripts/windows/test-ordax-studio-install-smoke.ps1"
-      - "tests/test_release_provenance.py"
-      - "tests/test_windows_product_packaging.py"
-      - "tests/test_release_signer_identity.py"
-      - "pyproject.toml"
-      - "studio-source.lock.json"
-      - ".github/workflows/windows-product-build.yml"
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -37,12 +17,12 @@ jobs:
   packaging-contracts:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
-        run: python -m unittest tests.test_windows_product_packaging tests.test_release_provenance tests.test_release_signer_identity tests.test_release_main_ancestry tests.test_studio_host_transport_boundary tests.test_studio_presentation_handoff_contract
+        run: python -m unittest tests.test_windows_product_packaging tests.test_windows_runtime_provenance_packaging_gate tests.test_release_provenance tests.test_release_signer_identity tests.test_release_signing_contract tests.test_release_main_ancestry tests.test_studio_host_transport_boundary tests.test_studio_presentation_handoff_contract tests.test_product_update_bootstrap_guard tests.test_windows_product_install_root_contract
       - name: Reject PowerShell syntax errors before expensive Windows packaging
         shell: pwsh
         run: |
@@ -50,6 +30,12 @@ jobs:
           foreach ($path in @(
             'scripts/windows/build-ordax-studio-product.ps1',
             'scripts/windows/test-ordax-studio-install-smoke.ps1',
+            'scripts/windows/assert-runtime-package-capabilities.ps1',
+            'scripts/windows/sign-release-authenticode.ps1',
+            'scripts/windows/assert-release-authenticode.ps1',
+            'scripts/windows/assert-release-provenance.ps1',
+            'scripts/windows/assert-release-main-ancestry.ps1',
+            'scripts/windows/assert-github-main-governance.ps1',
             'scripts/windows/assert-installed-studio-ux.ps1',
             'scripts/windows/verify-studio-presentation-handoff.ps1'
           )) {
@@ -64,25 +50,29 @@ jobs:
             }
           }
 
+      - name: Prove updater accepts only the installed ORDAX runtime listener
+        shell: pwsh
+        run: .\scripts\windows\test-ordax-update-runtime-health.ps1
+
   build-installer:
     needs: packaging-contracts
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Resolve canonical Studio source lock
         shell: powershell
         run: |
-          $lock = Get-Content .\\studio-source.lock.json -Raw | ConvertFrom-Json
+          $lock = Get-Content .\studio-source.lock.json -Raw | ConvertFrom-Json
           if ($lock.schema -ne "ordax.studio-source-lock/1") { throw "Studio source lock schema is invalid" }
           "ORDAX_STUDIO_SOURCE_COMMIT=$($lock.commit)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Checkout canonical ORDAX Studio app source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ordaxsystems/ordax-apps
           ref: ${{ env.ORDAX_STUDIO_SOURCE_COMMIT }}
           path: .ordax/apps
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -91,7 +81,7 @@ jobs:
           cache: npm
           cache-dependency-path: .ordax/apps/tools/assistant-host/package-lock.json
       - name: Enable MSVC command line
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: x64
       - name: Install Inno Setup
@@ -125,7 +115,7 @@ jobs:
             "$hash  $($_.Name)" | Add-Content .\dist\windows\SHA256SUMS.txt -Encoding ascii
           }
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ordax-studio-windows-x64
           path: |
@@ -139,11 +129,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout pinned Runtime smoke implementation
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Download Windows installer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ordax-studio-windows-x64
           path: artifact
@@ -151,26 +141,120 @@ jobs:
         shell: powershell
         run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
 
-  publish-release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    environment: windows-production-release
+  # Owner/Dev candidates derive only from protected main after the same
+  # canonical build and live-upgrade smoke. No independent signing service.
+  # Sigstore-backed GitHub attestation is not Authenticode and can never
+  # satisfy the public production signing/release gates below.
+  attest-owner-dev-candidate:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
       - build-installer
       - install-smoke
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - name: Checkout tagged Runtime source and canonical Studio lock
-        uses: actions/checkout@v4
+      - name: Download exact smoke-tested installer bytes
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ordax-studio-windows-x64
+          path: artifact
+      - name: Check exact digest against canonical CI checksum manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $items = @(Get-ChildItem .\artifact -File)
+          $installers = @($items | Where-Object { $_.Name -match '^ORDAX-Studio-Setup-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-x64\.exe$' })
+          if ($items.Count -ne 2 -or $installers.Count -ne 1 -or
+              -not (Test-Path .\artifact\SHA256SUMS.txt -PathType Leaf)) {
+            throw 'Owner development candidate has an invalid artifact inventory'
+          }
+          $manifest = (Get-Content .\artifact\SHA256SUMS.txt -Raw -Encoding ASCII).Trim()
+          $expectedLine = '^([0-9a-f]{64})  ' + [regex]::Escape($installers[0].Name) + '$'
+          $match = [regex]::Match($manifest, $expectedLine, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+          if (-not $match.Success) {
+            throw 'Owner development candidate manifest is malformed'
+          }
+          $actual = (Get-FileHash -LiteralPath $installers[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $match.Groups[1].Value) {
+            throw 'Owner development candidate digest mismatch'
+          }
+          Write-Host 'ORDAX_OWNER_DEV_ARTIFACT_DIGEST=PASS'
+      - name: Attest only the exact installer verified by Windows smoke
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: artifact/ORDAX-Studio-Setup-*.exe
+          show-summary: true
+      - name: Independently verify issued provenance against canonical main SHA
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidate = @(Get-ChildItem .\artifact -File -Filter 'ORDAX-Studio-Setup-*.exe')
+          if ($candidate.Count -ne 1 -or $env:GITHUB_REF -cne 'refs/heads/main' -or
+              $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Owner Dev verification requires one installer from an exact canonical main SHA'
+          }
+          & gh attestation verify $candidate[0].FullName --repo ordaxsystems/ordax-runtime --source-digest $env:GITHUB_SHA --signer-workflow ordaxsystems/ordax-runtime/.github/workflows/windows-product-build.yml
+          if ($LASTEXITCODE -ne 0) { throw 'Sigstore attestation verification failed' }
+          Write-Host 'ORDAX_OWNER_DEV_ATTESTATION_VERIFIED=PASS'
+
+  release-governance:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout tagged Runtime governance implementation without retained credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Verify tagged Runtime commit belongs to protected canonical main before HSM selection
+        shell: powershell
+        run: .\scripts\windows\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
+
+  sign-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: windows-production-release
+    needs:
+      - build-installer
+      - install-smoke
+      - release-governance
+    runs-on: [self-hosted, windows, x64, ordax-release-signing]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout tagged Runtime source and canonical Studio lock
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Assert dedicated production signing runner prerequisites
+        shell: pwsh
+        env:
+          ORDAX_RELEASE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          ORDAX_RELEASE_SIGNING_KEY_PROVIDERS: ${{ vars.ORDAX_RELEASE_SIGNING_KEY_PROVIDERS }}
+          ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:ORDAX_RELEASE_RUNNER_ENVIRONMENT -ne 'self-hosted') {
+            throw 'Public ORDAX releases must sign only on the dedicated self-hosted signing runner'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:ORDAX_RELEASE_SIGNING_KEY_PROVIDERS)) {
+            throw 'Approved HSM/KSP/CSP release signing providers are not configured'
+          }
+          if ($env:ORDAX_RELEASE_SIGNER_THUMBPRINTS -cnotmatch '^[0-9a-fA-F]{40}(,[0-9a-fA-F]{40}){0,3}$') {
+            throw 'Trusted ORDAX publisher certificate thumbprints are missing or invalid'
+          }
       - name: Verify tagged Runtime commit belongs to canonical main
         shell: powershell
         run: .\scripts\windows\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
       - name: Checkout canonical Apps main for immutable Studio source ancestry
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ordaxsystems/ordax-apps
           ref: main
@@ -191,27 +275,122 @@ jobs:
             throw 'Blocked release: locked Studio source was not integrated into canonical Apps main'
           }
           Write-Host "ORDAX_STUDIO_RELEASE_SOURCE_MAIN_ANCESTRY=PASS"
-      - name: Download validated Windows installer
-        uses: actions/download-artifact@v4
+      - name: Download validated unsigned Windows installer
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ordax-studio-windows-x64
           path: artifact
-      - name: Verify release provenance and artifact digest
+      - name: Verify release provenance and unsigned artifact digest
         shell: powershell
+        run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
+      - name: Sign final production installer
+        shell: pwsh
+        env:
+          ORDAX_RELEASE_SIGNING_CERT_THUMBPRINT: ${{ vars.ORDAX_RELEASE_SIGNING_CERT_THUMBPRINT }}
+          ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
+          ORDAX_RELEASE_SIGNING_KEY_PROVIDERS: ${{ vars.ORDAX_RELEASE_SIGNING_KEY_PROVIDERS }}
+          ORDAX_RELEASE_TIMESTAMP_URL: ${{ vars.ORDAX_RELEASE_TIMESTAMP_URL }}
         run: |
-          .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
-      - name: Verify production Authenticode signature and authorized publisher
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Validated ORDAX Studio installer is missing' }
+          .\scripts\windows\sign-release-authenticode.ps1 -Path $installer.FullName -CertificateThumbprint $env:ORDAX_RELEASE_SIGNING_CERT_THUMBPRINT -TimestampServer $env:ORDAX_RELEASE_TIMESTAMP_URL -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS -AllowedKeyProviders $env:ORDAX_RELEASE_SIGNING_KEY_PROVIDERS
+      - name: Verify production Authenticode signature on signing runner
         shell: powershell
         env:
           ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
         run: |
           $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
-          if (-not $installer) { throw "Validated ORDAX Studio installer is missing" }
+          if (-not $installer) { throw 'Signed ORDAX Studio installer is missing' }
           .\scripts\windows\assert-release-authenticode.ps1 -Path $installer.FullName -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS
+      - name: Replace checksums with final signed installer digest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Signed ORDAX Studio installer is missing' }
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content .\artifact\SHA256SUMS.txt -Encoding ascii
+      - name: Verify final signed release provenance before handoff
+        shell: powershell
+        run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
+      - name: Upload immutable signed Windows installer handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ordax-studio-windows-x64-signed
+          path: |
+            artifact/ORDAX-Studio-Setup-*.exe
+            artifact/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  signed-release-smoke:
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: windows-production-release
+    needs: sign-release
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout pinned Runtime signed smoke implementation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download immutable signed Windows installer handoff
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ordax-studio-windows-x64-signed
+          path: artifact
+      - name: Verify production Authenticode signature on clean hosted runner
+        shell: powershell
+        env:
+          ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
+        run: |
+          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Signed ORDAX Studio installer is missing' }
+          .\scripts\windows\assert-release-authenticode.ps1 -Path $installer.FullName -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS
+      - name: Verify final signed release provenance before installation smoke
+        shell: powershell
+        run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Install and upgrade from final signed release bytes
         shell: powershell
         run: .\scripts\windows\test-ordax-studio-install-smoke.ps1 -ArtifactDirectory ".\artifact"
       - name: Reverify final installer SHA-256 after signed installation smoke
+        shell: powershell
+        run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: windows-production-release
+    needs:
+      - sign-release
+      - signed-release-smoke
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout tagged Runtime publication implementation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify tagged Runtime commit still belongs to protected canonical main before publication
+        shell: powershell
+        run: .\scripts\windows\assert-release-main-ancestry.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA" -RepositoryRoot "."
+      - name: Download immutable signed Windows installer handoff
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ordax-studio-windows-x64-signed
+          path: artifact
+      - name: Reverify production Authenticode signature before publication
+        shell: powershell
+        env:
+          ORDAX_RELEASE_SIGNER_THUMBPRINTS: ${{ vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS }}
+        run: |
+          $installer = Get-ChildItem .\artifact\ORDAX-Studio-Setup-*.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Signed ORDAX Studio installer is missing' }
+          .\scripts\windows\assert-release-authenticode.ps1 -Path $installer.FullName -TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS
+      - name: Reverify final release provenance before publication
         shell: powershell
         run: .\scripts\windows\assert-release-provenance.ps1 -Tag "$env:GITHUB_REF_NAME" -SourceLock ".\studio-source.lock.json" -ArtifactDirectory ".\artifact"
       - name: Publish GitHub Release assets

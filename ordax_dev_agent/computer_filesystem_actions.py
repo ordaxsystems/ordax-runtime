@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import ActionResult
+from .product_update import installed_windows_product
 
 
 _MAX_TEXT_BYTES = 8 * 1024 * 1024
@@ -423,6 +424,42 @@ def _path_allowed(path: Path, policy: ComputerAccessPolicy) -> bool:
     return False
 
 
+def _readable_installed_product_manifest(
+    candidate: Path, resolved: Path, policy: ComputerAccessPolicy,
+) -> bool:
+    """Permit only read-only version inspection from canonical Windows install.
+
+    Runtime state, credentials, binaries, symlinks, alternate files and writes
+    remain protected. The installed product registry and fixed per-user install
+    root are independent of the MCP caller's path or tool arguments.
+    """
+    if not (policy.enabled and policy.full_access and policy.full_filesystem):
+        return False
+    if candidate.name.lower() != "product-manifest.json":
+        return False
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if not local_appdata:
+        return False
+    try:
+        canonical_install = (Path(local_appdata) / "Programs" / "ORDAX").resolve(strict=False)
+        installed = installed_windows_product()
+        registered_install = Path(installed["installLocation"]).resolve(strict=False)
+        manifest = registered_install / "product-manifest.json"
+        # No aliases, junctions, symlinks or arbitrary installation roots.
+        if canonical_install != registered_install:
+            return False
+        # Windows expands an existing 8.3 alias (RUNNER~1) in resolve().
+        # Compare canonical parent and final file identities, not the raw
+        # spelling; a same-named link outside the install root still fails.
+        if candidate.parent.resolve(strict=False) != registered_install or resolved != manifest:
+            return False
+        if candidate.is_symlink() or manifest.is_symlink() or not manifest.is_file():
+            return False
+    except (OSError, ValueError, KeyError, RuntimeError):
+        return False
+    return True
+
+
 class ComputerFilesystemActions:
     def _computer_access_policy(self) -> ComputerAccessPolicy:
         return load_computer_access_policy(self.config)
@@ -434,6 +471,7 @@ class ComputerFilesystemActions:
         must_exist: bool,
         mutating: bool = False,
         follow_final_symlink: bool = True,
+        read_public_product_manifest: bool = False,
     ) -> tuple[Path, ComputerAccessPolicy]:
         if not isinstance(raw, str) or not raw.strip() or "\x00" in raw:
             raise ValueError("path is required")
@@ -448,12 +486,17 @@ class ComputerFilesystemActions:
         if not candidate.is_absolute():
             candidate = Path.home() / candidate
         resolved = candidate.resolve(strict=False)
+        public_manifest_read = (
+            read_public_product_manifest
+            and not mutating
+            and _readable_installed_product_manifest(candidate, resolved, policy)
+        )
         if any(
             resolved.is_relative_to(root) or (mutating and root.is_relative_to(resolved))
             for root in policy.protected_roots
-        ):
+        ) and not public_manifest_read:
             raise PermissionError("Runtime state and executable sources are protected; use owner settings or the Runtime updater")
-        if not _path_allowed(resolved, policy):
+        if not public_manifest_read and not _path_allowed(resolved, policy):
             raise PermissionError("path is outside local ORDAX computer access roots")
         if must_exist and not resolved.exists() and (follow_final_symlink or not candidate.is_symlink()):
             raise FileNotFoundError(resolved)
@@ -473,10 +516,31 @@ class ComputerFilesystemActions:
         if payload:
             return ActionResult(False, "computer.access_status does not accept fields")
         policy = self._computer_access_policy()
-        return ActionResult(True, "computer access policy ready", policy.public())
+        from . import __version__
+
+        status = policy.public()
+        # Execution capability presence is distinct from authorization: remote
+        # Owner grants are still resolved by the canonical Control Plane.
+        device_actions = (
+            "computer.terminal_exec",
+            "computer.process_start",
+            "computer.process_status",
+            "computer.process_list",
+            "computer.process_logs",
+            "computer.process_write_stdin",
+            "computer.process_stop",
+        )
+        registered = getattr(self, "_actions", {})
+        status["runtime_capabilities"] = {
+            "agent_version": __version__,
+            "implemented_actions": [
+                name for name in device_actions if name in registered
+            ],
+        }
+        return ActionResult(True, "computer access policy ready", status)
 
     def computer_file_stat(self, payload: dict[str, Any]) -> ActionResult:
-        path, _ = self._computer_path(payload.get("path"), must_exist=True)
+        path, _ = self._computer_path(payload.get("path"), must_exist=True, read_public_product_manifest=True)
         stat = path.stat()
         data: dict[str, Any] = {
             "path": str(path),
@@ -571,7 +635,7 @@ class ComputerFilesystemActions:
         )
 
     def computer_text_read(self, payload: dict[str, Any]) -> ActionResult:
-        path, _ = self._computer_path(payload.get("path"), must_exist=True)
+        path, _ = self._computer_path(payload.get("path"), must_exist=True, read_public_product_manifest=True)
         if not path.is_file():
             return ActionResult(False, "path is not a file")
         size = path.stat().st_size
@@ -721,7 +785,19 @@ class ComputerFilesystemActions:
         ):
             return ActionResult(False, "replacements must contain 1..100 entries")
 
-        updated = content
+        # A Windows CRLF checkout is semantically identical to the LF fragments
+        # produced by text tools. Normalize only homogeneous files, keeping
+        # mixed-EOL files on strict exact-match semantics.
+        without_crlf = content.replace("\r\n", "")
+        if "\r\n" in content and "\n" not in without_crlf and "\r" not in without_crlf:
+            newline = "\r\n"
+            updated = content.replace("\r\n", "\n")
+        elif "\r" not in content:
+            newline = "\n"
+            updated = content
+        else:
+            newline = None
+            updated = content
         counts: list[int] = []
         for item in replacements:
             if not isinstance(item, dict):
@@ -733,6 +809,9 @@ class ComputerFilesystemActions:
                 return ActionResult(False, "replacement old must be a non-empty string")
             if not isinstance(new, str):
                 return ActionResult(False, "replacement new must be a string")
+            if newline is not None:
+                old = old.replace("\r\n", "\n")
+                new = new.replace("\r\n", "\n")
             count = updated.count(old)
             if not isinstance(expected_count, int) or expected_count < 1 or expected_count > 10000:
                 return ActionResult(False, "expected_count must be an integer between 1 and 10000")
@@ -745,12 +824,20 @@ class ComputerFilesystemActions:
             updated = updated.replace(old, new)
             counts.append(count)
 
-        encoded = updated.encode("utf-8")
+        if newline == "\r\n":
+            updated = updated.replace("\n", "\r\n")
+        # decode("utf-8-sig") strips a BOM. Reapply it explicitly so the patch
+        # preserves the on-disk encoding signature and SHA-256 semantics.
+        bom = b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b""
+        encoded = bom + updated.encode("utf-8")
         if len(encoded) > _MAX_WRITE_BYTES:
             return ActionResult(False, f"patched content exceeds {_MAX_WRITE_BYTES} bytes")
         temp = path.with_name(f".{path.name}.ordax-{uuid.uuid4().hex}.tmp")
         try:
-            temp.write_bytes(encoded)
+            with temp.open("wb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(temp, path)
         finally:
             try:

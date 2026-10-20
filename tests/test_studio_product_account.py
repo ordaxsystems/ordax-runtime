@@ -1,467 +1,219 @@
 from __future__ import annotations
 
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
-
-import httpx
+from unittest.mock import patch
 
 from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.device_setup import SetupError
 from ordax_studio.product_auth import (
     ProductAccountError,
     ProductAuthSession,
     connect_existing_device,
-    sign_in_with_password,
 )
 from ordax_studio.product_web_desktop import StudioProductApi
 
 
+DEVICE_ID = "22222222-2222-4222-8222-222222222222"
+LEGACY_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def config_for(state: Path, *, device_id: str | None) -> AgentConfig:
+    return AgentConfig(
+        agent_name="test",
+        poll_seconds=1.0,
+        state_dir=state,
+        agent_repo_path=state.parent / "agent",
+        hordax_path=state.parent / "hordax",
+        bridge_path=state.parent / "bridge",
+        projects={},
+        device_id=device_id,
+        product_mcp_url="https://product.example.test",
+    )
+
+
 class StudioProductAccountTests(unittest.TestCase):
-    def test_password_login_goes_directly_to_supabase_and_returns_memory_session(self) -> None:
-        response = Mock()
-        response.status_code = 200
-        response.json.return_value = {
-            "access_token": "header.payload.signature",
-            "user": {"email": "user@example.com"},
-        }
-        client = Mock(spec=httpx.Client)
-        client.post.return_value = response
-
-        session = sign_in_with_password(
-            " user@example.com ",
-            "secret-password",
-            http=client,
-        )
-
-        self.assertEqual("header.payload.signature", session.access_token)
-        self.assertEqual("user@example.com", session.email)
-        _, kwargs = client.post.call_args
-        self.assertEqual({"grant_type": "password"}, kwargs["params"])
-        self.assertEqual(
-            {"email": "user@example.com", "password": "secret-password"},
-            kwargs["json"],
-        )
-        self.assertTrue(client.post.call_args.args[0].endswith("/auth/v1/token"))
-
-    def test_rejected_login_does_not_surface_provider_body(self) -> None:
-        response = Mock()
-        response.status_code = 400
-        response.json.return_value = {
-            "error": "invalid_grant",
-            "error_description": "provider internal detail",
-        }
-        client = Mock(spec=httpx.Client)
-        client.post.return_value = response
-
-        with self.assertRaises(ProductAccountError) as raised:
-            sign_in_with_password("user@example.com", "wrong", http=client)
-
-        self.assertEqual("product_auth_rejected", raised.exception.code)
-        self.assertNotIn("provider internal detail", raised.exception.message)
-
-    def test_connect_existing_device_uses_device_pairing_and_never_returns_jwt(self) -> None:
-        config = SimpleNamespace(
-            control_plane_url="https://control.example.test",
-            device_id="22222222-2222-4222-8222-222222222222",
-        )
-        control = Mock()
-        control.http = Mock()
-        control.create_product_pairing.return_value = {
-            "pairing_id": "33333333-3333-4333-8333-333333333333",
-            "pairing_secret": "a" * 64,
-            "expires_at": "2026-09-30T20:00:00Z",
-        }
-        remote = Mock()
-        remote.__enter__ = Mock(return_value=remote)
-        remote.__exit__ = Mock(return_value=None)
-        remote.claim_device_pairing.return_value = {
-            "link_id": "44444444-4444-4444-8444-444444444444",
-            "device_id": config.device_id,
-            "device_name": "TONECOS",
-            "space_id": None,
-        }
-
-        with (
-            patch(
-                "ordax_studio.product_auth.sign_in_with_password",
-                return_value=ProductAuthSession(
-                    access_token="sensitive-jwt",
-                    email="user@example.com",
-                ),
-            ),
-            patch(
-                "ordax_studio.product_auth.CloudflareControlPlane",
-                return_value=control,
-            ),
-            patch(
-                "ordax_studio.product_auth.ProductRemoteClient",
-                return_value=remote,
-            ),
-        ):
-            result = connect_existing_device(config, "user@example.com", "secret")
-
-        control.create_product_pairing.assert_called_once_with()
-        control.http.close.assert_called_once_with()
-        remote.claim_device_pairing.assert_called_once_with(
-            "sensitive-jwt",
-            pairing_id="33333333-3333-4333-8333-333333333333",
-            pairing_secret="a" * 64,
-        )
-        self.assertEqual(config.device_id, result["link"]["device_id"])
-        self.assertEqual("user@example.com", result["email"])
-        self.assertNotIn("access_token", result)
-        self.assertNotIn("sensitive-jwt", repr(result))
-
-    def test_connect_new_device_enrolls_with_product_session_before_pairing(self) -> None:
+    def test_existing_product_device_uses_canonical_product_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state = Path(raw) / "state"
             state.mkdir()
-            config = AgentConfig(
-                agent_name="test",
-                poll_seconds=1.0,
-                state_dir=state,
-                agent_repo_path=Path(raw) / "agent",
-                hordax_path=Path(raw) / "hordax",
-                bridge_path=Path(raw) / "bridge",
-                projects={},
-                device_id=None,
-                control_plane_url="https://control.example.test",
-            )
-            control = Mock()
-            control.http = Mock()
-            control.create_product_pairing.return_value = {
-                "pairing_id": "33333333-3333-4333-8333-333333333333",
-                "pairing_secret": "a" * 64,
-                "expires_at": "2026-09-30T20:00:00Z",
-            }
-            remote = Mock()
-            remote.__enter__ = Mock(return_value=remote)
-            remote.__exit__ = Mock(return_value=None)
-            remote.claim_device_pairing.return_value = {
-                "link_id": "44444444-4444-4444-8444-444444444444",
-                "device_id": "22222222-2222-4222-8222-222222222222",
-                "device_name": "REVIEW-PC",
-                "space_id": None,
-            }
-
+            config = config_for(state, device_id=DEVICE_ID)
+            session = ProductAuthSession("browser.jwt", "owner@example.com")
             with (
-                patch(
-                    "ordax_studio.product_auth.sign_in_with_password",
-                    return_value=ProductAuthSession(
-                        access_token="sensitive-jwt",
-                        email="user@example.com",
-                    ),
-                ),
-                patch(
-                    "ordax_studio.product_auth.configure_device",
-                    return_value={
-                        "ok": True,
-                        "device_id": "22222222-2222-4222-8222-222222222222",
-                        "protocol": "cloudflare-v3",
-                    },
-                ) as enrollment,
-                patch(
-                    "ordax_studio.product_auth.CloudflareControlPlane",
-                    return_value=control,
-                ),
-                patch(
-                    "ordax_studio.product_auth.ProductRemoteClient",
-                    return_value=remote,
-                ),
+                patch("ordax_studio.product_auth.configure_device", return_value={
+                    "ok": True, "device_id": DEVICE_ID, "protocol": "cloudflare-v3",
+                }) as enrollment,
+                patch("ordax_studio.product_auth._revalidate_existing_device", return_value=DEVICE_ID) as validate,
             ):
-                result = connect_existing_device(config, "user@example.com", "secret")
-
+                result = connect_existing_device(config, session=session)
             enrollment.assert_called_once_with(
                 state,
-                control_plane_url="https://control.example.test",
+                product_mcp_url="https://product.example.test",
+                product_access_token="browser.jwt",
+            )
+            validated = validate.call_args.args[0]
+            self.assertEqual("https://product.example.test", validated.product_mcp_url)
+            self.assertIs(validate.call_args.args[1], session)
+            self.assertEqual(
+                "https://product.example.test",
+                validate.call_args.kwargs["product_mcp_url"],
+            )
+            self.assertFalse(result["enrolled_now"])
+            self.assertEqual(DEVICE_ID, result["device_id"])
+            self.assertEqual("owner@example.com", result["email"])
+            self.assertNotIn("browser.jwt", repr(result))
+            self.assertNotIn("link", result)
+
+    def test_explicit_product_endpoint_override_is_single_selected_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            state.mkdir()
+            config = config_for(state, device_id=None)
+            session = ProductAuthSession("jwt", None)
+            with (
+                patch("ordax_studio.product_auth.configure_device", return_value={
+                    "ok": True, "device_id": DEVICE_ID, "protocol": "cloudflare-v3",
+                }) as enrollment,
+                patch("ordax_studio.product_auth._revalidate_existing_device", return_value=DEVICE_ID) as validate,
+            ):
+                connect_existing_device(
+                    config,
+                    session=session,
+                    product_mcp_url="https://fallback.product.test",
+                )
+            enrollment.assert_called_once_with(
+                state,
+                product_mcp_url="https://fallback.product.test",
+                product_access_token="jwt",
+            )
+            self.assertEqual(
+                "https://fallback.product.test",
+                validate.call_args.args[0].product_mcp_url,
+            )
+
+    def test_legacy_local_identity_can_migrate_to_product_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            state.mkdir()
+            config = config_for(state, device_id=LEGACY_ID)
+            session = ProductAuthSession("browser.jwt", "owner@example.com")
+            with (
+                patch("ordax_studio.product_auth.configure_device", return_value={
+                    "ok": True, "device_id": DEVICE_ID, "protocol": "cloudflare-v3",
+                }),
+                patch("ordax_studio.product_auth._revalidate_existing_device", return_value=DEVICE_ID),
+            ):
+                result = connect_existing_device(config, session=session)
+            self.assertTrue(result["enrolled_now"])
+            self.assertEqual(DEVICE_ID, result["device_id"])
+
+    def test_new_device_enrolls_with_product_session_and_is_revalidated(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            state.mkdir()
+            config = config_for(state, device_id=None)
+            session = ProductAuthSession("sensitive-jwt", "user@example.com")
+            with (
+                patch("ordax_studio.product_auth.configure_device", return_value={
+                    "ok": True, "device_id": DEVICE_ID, "protocol": "cloudflare-v3",
+                }) as enrollment,
+                patch("ordax_studio.product_auth._revalidate_existing_device", return_value=DEVICE_ID) as validate,
+            ):
+                result = connect_existing_device(config, session=session)
+            enrollment.assert_called_once_with(
+                state,
+                product_mcp_url="https://product.example.test",
                 product_access_token="sensitive-jwt",
             )
+            self.assertEqual(DEVICE_ID, validate.call_args.args[0].device_id)
             self.assertTrue(result["enrolled_now"])
-            self.assertEqual(
-                "22222222-2222-4222-8222-222222222222",
-                result["device_id"],
-            )
+            self.assertEqual(DEVICE_ID, result["device_id"])
             self.assertNotIn("sensitive-jwt", repr(result))
 
-    def test_product_api_restarts_packaged_runtime_after_first_enrollment(self) -> None:
+    def test_specific_setup_failure_is_preserved_for_studio_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            state.mkdir()
+            config = config_for(state, device_id=None)
+            with (
+                patch(
+                    "ordax_studio.product_auth.configure_device",
+                    side_effect=SetupError("SETTINGS_INVALID_PRESERVED"),
+                ),
+                self.assertRaises(ProductAccountError) as raised,
+            ):
+                connect_existing_device(
+                    config,
+                    session=ProductAuthSession("jwt", "owner@example.com"),
+                )
+            self.assertEqual("SETTINGS_INVALID_PRESERVED", raised.exception.code)
+            self.assertIn("configuração local", raised.exception.message)
+            self.assertNotIn("jwt", repr(raised.exception))
+
+    def test_owner_revalidation_mismatch_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            state.mkdir()
+            config = config_for(state, device_id=DEVICE_ID)
+            with (
+                patch("ordax_studio.product_auth.configure_device", return_value={
+                    "ok": True, "device_id": DEVICE_ID, "protocol": "cloudflare-v3",
+                }),
+                patch("ordax_studio.product_auth._revalidate_existing_device", return_value=LEGACY_ID),
+                self.assertRaises(ProductAccountError) as raised,
+            ):
+                connect_existing_device(config, session=ProductAuthSession("jwt", "owner@example.com"))
+            self.assertEqual("device_identity_changed", raised.exception.code)
+
+    def test_product_api_accepts_no_credentials(self) -> None:
+        signature = inspect.signature(StudioProductApi.connect_product_account)
+        self.assertEqual(["self"], list(signature.parameters))
+
+    def test_product_api_uses_browser_oauth_and_restarts_after_first_enrollment(self) -> None:
         api = object.__new__(StudioProductApi)
         api.agent = SimpleNamespace(config=SimpleNamespace())
         session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
         with (
-            patch(
-                "ordax_studio.product_web_desktop.sign_in_with_password",
-                return_value=session,
-            ),
-            patch(
-                "ordax_studio.product_web_desktop.connect_existing_device",
-                return_value={
-                    "email": "user@example.com",
-                    "link": {"device_id": "dev-1"},
-                    "device_id": "dev-1",
-                    "enrolled_now": True,
-                },
-            ) as connect,
+            patch("ordax_studio.product_web_desktop.browser_oauth_session", return_value=session) as oauth,
+            patch("ordax_studio.product_web_desktop.connect_existing_device", return_value={
+                "email": "user@example.com", "device_id": DEVICE_ID, "enrolled_now": True,
+            }) as connect,
             patch(
                 "ordax_studio.product_web_desktop._restart_packaged_runtime_after_enrollment",
                 return_value=True,
             ) as restart,
         ):
-            result = api.connect_product_account("user@example.com", "secret")
-
+            result = api.connect_product_account()
         self.assertTrue(result["ok"])
         self.assertTrue(result["data"]["runtime_restarted"])
         self.assertFalse(result["data"]["runtime_restart_required"])
+        oauth.assert_called_once_with()
         restart.assert_called_once_with()
         self.assertIs(session, api._product_session)
-        self.assertEqual("dev-1", api._product_device_id)
+        self.assertEqual(DEVICE_ID, api._product_device_id)
         self.assertNotIn("sensitive-jwt", repr(result))
         self.assertIs(connect.call_args.kwargs["session"], session)
+        self.assertEqual((api.agent.config,), connect.call_args.args)
+
     def test_product_api_returns_safe_error_shape(self) -> None:
         api = object.__new__(StudioProductApi)
         api.agent = SimpleNamespace(config=SimpleNamespace())
         with (
             patch(
-                "ordax_studio.product_web_desktop.sign_in_with_password",
+                "ordax_studio.product_web_desktop.browser_oauth_session",
                 return_value=ProductAuthSession(access_token="sensitive-jwt", email="user@example.com"),
             ),
-            patch(
-                "ordax_studio.product_web_desktop.connect_existing_device",
-                side_effect=ProductAccountError("device_not_enrolled", "M?quina n?o registrada"),
-            ),
+            patch("ordax_studio.product_web_desktop.connect_existing_device", side_effect=ProductAccountError(
+                "device_not_enrolled", "Máquina não registrada")),
         ):
-            result = api.connect_product_account("user@example.com", "secret")
+            result = api.connect_product_account()
         self.assertFalse(result["ok"])
         self.assertEqual("device_not_enrolled", result["code"])
-        self.assertEqual("M?quina n?o registrada", result["summary"])
+        self.assertEqual("Máquina não registrada", result["summary"])
         self.assertIsNone(getattr(api, "_product_session", None))
-    def test_remote_grant_requires_in_memory_product_session(self) -> None:
-        api = object.__new__(StudioProductApi)
-        api.agent = SimpleNamespace(config=SimpleNamespace(
-            control_plane_url="https://control.example.test",
-            device_id="dev-1",
-        ))
-        api._product_session = None
-        api._product_device_id = "dev-1"
-        result = api.remote_computer_grants()
-        self.assertFalse(result["ok"])
-        self.assertEqual("product_auth_session_required", result["code"])
-
-    def test_owner_can_authorize_interactive_profile_for_current_device_link(self) -> None:
-        api = object.__new__(StudioProductApi)
-        api.agent = SimpleNamespace(config=SimpleNamespace(
-            control_plane_url="https://control.example.test",
-            device_id="dev-1",
-        ))
-        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
-        api._product_device_id = "dev-1"
-        remote = Mock()
-        remote.__enter__ = Mock(return_value=remote)
-        remote.__exit__ = Mock(return_value=None)
-        remote.device_links.return_value = [
-            {"link_id": "link-1", "device_id": "dev-1"},
-            {"link_id": "foreign", "device_id": "dev-2"},
-        ]
-        remote.create_device_computer_grant.return_value = {
-            "mode": "interactive-computer-control",
-            "replayed": False,
-            "grant": {"id": "grant-1", "device_id": "dev-1"},
-        }
-        with patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote):
-            result = api.authorize_remote_computer_grant("interactive-computer-control", expires_days=30)
-        self.assertTrue(result["ok"])
-        args, kwargs = remote.create_device_computer_grant.call_args
-        self.assertEqual("sensitive-jwt", args[0])
-        self.assertEqual("link-1", kwargs["link_id"])
-        self.assertEqual("interactive-computer-control", kwargs["mode"])
-        self.assertNotIn("sensitive-jwt", repr(result))
-
-    def test_owner_can_authorize_app_intelligence_read_for_current_device_link(self) -> None:
-        api = object.__new__(StudioProductApi)
-        api.agent = SimpleNamespace(config=SimpleNamespace(
-            control_plane_url="https://control.example.test",
-            device_id="dev-1",
-        ))
-        api._product_session = ProductAuthSession(
-            access_token="sensitive-jwt",
-            email="user@example.com",
-        )
-        api._product_device_id = "dev-1"
-        remote = Mock()
-        remote.__enter__ = Mock(return_value=remote)
-        remote.__exit__ = Mock(return_value=None)
-        remote.device_links.return_value = [
-            {"link_id": "link-1", "device_id": "dev-1"},
-            {"link_id": "foreign", "device_id": "dev-2"},
-        ]
-        remote.create_device_intelligence_grant.return_value = {
-            "mode": "app-intelligence-read",
-            "replayed": False,
-            "grant": {"id": "grant-intelligence-1", "device_id": "dev-1"},
-        }
-        with patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote):
-            result = api.authorize_remote_app_intelligence_grant(expires_days=30)
-        self.assertTrue(result["ok"])
-        args, kwargs = remote.create_device_intelligence_grant.call_args
-        self.assertEqual("sensitive-jwt", args[0])
-        self.assertEqual("link-1", kwargs["link_id"])
-        self.assertEqual("app-intelligence-read", kwargs["mode"])
-        self.assertNotIn("sensitive-jwt", repr(result))
-
-    def test_app_intelligence_grant_listing_filters_current_device(self) -> None:
-        api = object.__new__(StudioProductApi)
-        api.agent = SimpleNamespace(config=SimpleNamespace(
-            control_plane_url="https://control.example.test",
-            device_id="dev-1",
-        ))
-        api._product_session = ProductAuthSession(
-            access_token="sensitive-jwt",
-            email="user@example.com",
-        )
-        api._product_device_id = "dev-1"
-        remote = Mock()
-        remote.__enter__ = Mock(return_value=remote)
-        remote.__exit__ = Mock(return_value=None)
-        remote.device_links.return_value = [
-            {"link_id": "link-1", "device_id": "dev-1"},
-            {"link_id": "link-2", "device_id": "dev-2"},
-        ]
-        remote.device_intelligence_grants.return_value = [
-            {"id": "grant-intelligence-1", "device_id": "dev-1"},
-            {"id": "grant-intelligence-2", "device_id": "dev-2"},
-        ]
-        with patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote):
-            result = api.remote_app_intelligence_grants()
-        self.assertTrue(result["ok"])
-        self.assertEqual(["link-1"], [item["link_id"] for item in result["data"]["links"]])
-        self.assertEqual(
-            ["grant-intelligence-1"],
-            [item["id"] for item in result["data"]["grants"]],
-        )
-        self.assertEqual(["app-intelligence-read"], result["data"]["available_modes"])
-        self.assertNotIn("sensitive-jwt", repr(result))
-
-    def test_owner_full_profile_requires_local_full_access(self) -> None:
-        api = object.__new__(StudioProductApi)
-        api.agent = SimpleNamespace(config=SimpleNamespace(
-            control_plane_url="https://control.example.test",
-            device_id="dev-1",
-        ))
-        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
-        api._product_device_id = "dev-1"
-        with patch(
-            "ordax_studio.product_web_desktop.computer_access_management_status",
-            return_value={"enabled": True, "full_access": False},
-        ):
-            result = api.authorize_remote_computer_grant("full-computer-control")
-        self.assertFalse(result["ok"])
-        self.assertEqual("local_full_access_required", result["code"])
-
-    def test_owner_can_authorize_full_profile_after_local_full_access(self) -> None:
-        api = object.__new__(StudioProductApi)
-        api.agent = SimpleNamespace(config=SimpleNamespace(
-            control_plane_url="https://control.example.test",
-            device_id="dev-1",
-        ))
-        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
-        api._product_device_id = "dev-1"
-        remote = Mock()
-        remote.__enter__ = Mock(return_value=remote)
-        remote.__exit__ = Mock(return_value=None)
-        remote.device_links.return_value = [{"link_id": "link-1", "device_id": "dev-1"}]
-        remote.create_device_computer_grant.return_value = {
-            "mode": "full-computer-control",
-            "replayed": False,
-            "grant": {"id": "grant-full", "device_id": "dev-1"},
-        }
-        with (
-            patch(
-                "ordax_studio.product_web_desktop.computer_access_management_status",
-                return_value={"enabled": True, "full_access": True},
-            ),
-            patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote),
-        ):
-            result = api.authorize_remote_computer_grant("full-computer-control", expires_days=30)
-        self.assertTrue(result["ok"])
-        args, kwargs = remote.create_device_computer_grant.call_args
-        self.assertEqual("sensitive-jwt", args[0])
-        self.assertEqual("link-1", kwargs["link_id"])
-        self.assertEqual("full-computer-control", kwargs["mode"])
-
-    def test_invalid_local_policy_refuses_full_grant_without_remote_call(self) -> None:
-        api = object.__new__(StudioProductApi)
-        api.agent = SimpleNamespace(config=SimpleNamespace())
-        with (
-            patch("ordax_studio.product_web_desktop.computer_access_management_status", side_effect=ValueError("bad configuration")),
-            patch("ordax_studio.product_web_desktop.ProductRemoteClient") as remote,
-        ):
-            result = api.authorize_remote_computer_grant("full-computer-control")
-        self.assertFalse(result["ok"])
-        self.assertEqual("local_computer_access_unavailable", result["code"])
-        remote.assert_not_called()
-
-    def test_owner_ui_host_refuses_non_computer_or_unknown_profile(self) -> None:
-        api = object.__new__(StudioProductApi)
-        api.agent = SimpleNamespace(config=SimpleNamespace(
-            control_plane_url="https://control.example.test",
-            device_id="dev-1",
-        ))
-        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
-        api._product_device_id = "dev-1"
-        for mode in ("terminal.exec", "unknown"):
-            result = api.authorize_remote_computer_grant(mode)
-            self.assertFalse(result["ok"], mode)
-            self.assertEqual("owner_device_grant_mode_not_allowed", result["code"])
-
-    def test_owner_grant_listing_filters_current_device(self) -> None:
-        api = object.__new__(StudioProductApi)
-        api.agent = SimpleNamespace(config=SimpleNamespace(
-            control_plane_url="https://control.example.test",
-            device_id="dev-1",
-        ))
-        api._product_session = ProductAuthSession(access_token="sensitive-jwt", email="user@example.com")
-        api._product_device_id = "dev-1"
-        remote = Mock()
-        remote.__enter__ = Mock(return_value=remote)
-        remote.__exit__ = Mock(return_value=None)
-        remote.device_links.return_value = [
-            {"link_id": "link-1", "device_id": "dev-1"},
-            {"link_id": "link-2", "device_id": "dev-2"},
-        ]
-        remote.device_computer_grants.return_value = [
-            {"id": "grant-1", "device_id": "dev-1"},
-            {"id": "grant-2", "device_id": "dev-2"},
-        ]
-        with patch("ordax_studio.product_web_desktop.ProductRemoteClient", return_value=remote):
-            result = api.remote_computer_grants()
-        self.assertTrue(result["ok"])
-        self.assertEqual(["link-1"], [item["link_id"] for item in result["data"]["links"]])
-        self.assertEqual(["grant-1"], [item["id"] for item in result["data"]["grants"]])
-        self.assertNotIn("sensitive-jwt", repr(result))
-
-    def test_product_identity_is_separate_from_github_provider(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        auth_source = (root / "ordax_studio" / "product_auth.py").read_text(encoding="utf-8")
-        contract = (root / "docs" / "ORDAX_STUDIO_WINDOWS_PRODUCT.md").read_text(encoding="utf-8")
-        self.assertIn("Conta ORDAX", contract)
-        self.assertIn("GitHub", contract)
-        self.assertIn("plugin GitHub", contract)
-        self.assertNotIn("github.com/login/oauth", auth_source.lower())
-        self.assertNotIn("api.github.com/user", auth_source.lower())
-
-    def test_product_auth_does_not_persist_password_or_access_token(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        auth_source = (root / "ordax_studio" / "product_auth.py").read_text(encoding="utf-8")
-        self.assertNotIn("write_text", auth_source)
-        self.assertNotIn("open(", auth_source)
-
-    def test_host_authorization_messages_use_intact_utf8_portuguese(self) -> None:
-        source = (Path(__file__).resolve().parents[1] / "ordax_studio" / "product_web_desktop.py").read_text(encoding="utf-8")
-        for broken in ("autoriza??", "Autoriza??", "n?o", "v?nculo", "sess?o", "opera??o", "indispon?vel", "inv?lido"):
-            self.assertNotIn(broken, source)
-        self.assertIn("Autorizações remotas carregadas", source)
-        self.assertIn("Identificador de autorização inválido.", source)
 
 
 if __name__ == "__main__":

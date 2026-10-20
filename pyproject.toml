@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ordax-runtime"
 # ORDAX Runtime versioning is independent from the portable ORDAX Studio app version.
-version = "0.4.6"
+version = "0.4.7"
 description = "ORDAX provider-neutral Runtime and Windows host for projects, Git, preview, computer control and extensible adapters"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,16 +26,17 @@ ordax-mcp = "ordax_studio.mcp_server:main"
 ordax-studio-mcp = "ordax_studio.mcp_server:main"
 ordax-project-mcp = "ordax_studio.mcp_server:main"
 ordax-dev-agent = "ordax_dev_agent.main:main"
+ordax-owner-grants = "ordax_dev_agent.owner_grants_cli:main"
 ordax-device-agent = "ordax_device_agent.main:main"
-ordax-device-mcp = "ordax_studio.mcp_server:main"
+ordax-device-mcp = "ordax_device_agent.mcp_server:main"
+ordax-connector-mcp = "ordax_device_agent.mcp_server:main"
 ordax-product-mcp = "ordax_dev_agent.product_mcp_server:main"
 ordax-studio-remote-mcp = "ordax_dev_agent.product_mcp_server:main"
-ordax-device-pair = "ordax_dev_agent.product_pair_cli:main"
 ordax-studio = "ordax_studio.cli:main"
 ordax-dev = "ordax_studio.product_web_desktop:main"
 
 [tool.setuptools.packages.find]
-include = ["mcp_blender_unity*", "ordax_core*", "ordax_studio*", "ordax_dev_agent*", "ordax_device_agent*"]
+include = ["mcp_blender_unity*", "ordax_core*", "ordax_studio*", "ordax_connector*", "ordax_dev_agent*", "ordax_device_agent*"]
 
 [tool.setuptools.package-data]
 ordax_dev_agent = ["assets/*.py", "assets/*.cs", "assets/*.json"]

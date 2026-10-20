@@ -1,47 +1,69 @@
-# Sessão da Conta OrdaX no Studio Electron — contrato privado v1
+# Sessão da Conta OrdaX no Studio Electron — OAuth de navegador v2
 
-A autenticação **continua sob autoridade do Runtime**:
-`ordax_studio.product_auth.sign_in_with_password` valida a conta usando
-Supabase Auth, e `ordax_dev_agent.product_remote_client.ProductRemoteClient`
-confirma `GET /v3/product/session` na plataforma canônica. A identidade,
-grants, autorização de comandos e trilhas de auditoria **continuam** na
-plataforma e no gateway Product. Nenhum segundo autenticador ou action
-executor foi criado.
+A Conta OrdaX no Studio Windows usa **OAuth 2.1 Authorization Code + PKCE no navegador padrão**. O Studio não contém formulário de senha OrdaX e não deve voltar a implementar login por e-mail/senha no renderer, IPC ou host Electron.
 
-O módulo `ordax_studio.electron_account_session` é uma entrada
-**single-shot**, exclusiva do subprocesso iniciado pelo **processo principal
-Electron instalado**. Usa um envelope JSON de uma única chamada pelo
-**stdin** (`schema=ordax.studio-product-account-session/1`,
-`operation=sign-in`, `email`, `password`) e envia uma resposta única
-pelo **stdout**. Não abre socket, não aceita rota arbitrária, não vincula
-novo dispositivo, não cria grants e não disponibiliza o antigo método
-`workbench_bridge._invoke`.
+Fluxo canônico:
 
-Os dados de login **nunca** devem ser passados via argv, URL, log, variável
-de ambiente, storage ou resposta HTTP. O resultado é destinado
-exclusivamente ao processo principal Electron, contém o access token **em
-memória de processo** para o cliente Product já existente do Apps e não
-pode ser entregue ao renderer/ChatGPT Web/previews/plugins. A saída de erro
-omite credenciais, corpo do provedor e traceback.
+`Studio → Runtime privado → navegador padrão → Supabase OAuth/consentimento OrdaX → callback loopback → Runtime → enrollment/pairing → Studio`
 
-Verificações: tamanho de entrada até 3 KiB, JSON sem chaves duplicadas,
-envelope e operação exatos, controle ASCII de campos, token limitado,
-confirmação do subject Product. A verificação do subject tem de ser feita
-**antes** de entregar a sessão ao Studio. Falha de autenticação equivale a
-sem sessão.
+Se o navegador já possui uma sessão OrdaX válida, a página web deve aproveitar essa sessão e apresentar somente a etapa de continuar/autorizar. Se não possui, o login acontece **na página web**, nunca dentro do Studio.
 
-`python -m unittest tests.test_studio_electron_account_session -v`
+## Cliente desktop
 
-A chamada depende do Runtime **efetivamente instalado**. O App deve usar
-apenas Python privado do diretório de instalação comprovado e abrir
-subprocesso com `-m ordax_studio.electron_account_session`, nunca carregar
-a biblioteca diretamente de um repositório arbitrário. Em qualquer cenário
-sem instalação confiável, UI/product executa `fail-closed` e conserva
-conversas locais e o ChatGPT Web.
+O cliente first-party é público e não possui segredo:
 
-Esse contrato prepara a migração da issue Runtime #67, mas **não**
-promove a UI Electron ao Inno Setup nem declara equivalência da ponte
-WorkBench WebView2. Compatibilidade de runtime/versão, expiração,
-revogação, logout, upgrades e smoke do instalador final permanecem
-condições de homologação. O Studio não deve permitir trocar identidade
-enquanto existirem operações com status incerto, enviadas ou não concluídas.
+- nome: `ORDAX Studio`;
+- client id público: `202fd3e1-b058-4531-8750-82c57e4b6ca0`;
+- redirect URI exata: `http://127.0.0.1:8766/oauth/callback`;
+- grants: `authorization_code`, `refresh_token`;
+- scopes iniciais: `openid email offline_access`;
+- `token_endpoint_auth_method=none`;
+- PKCE: `S256` obrigatório pelo cliente.
+
+O client id e a redirect URI são metadata pública e ficam em `ordax_studio/public_auth_metadata.py`. Nenhum `client_secret` deve ser criado, empacotado ou solicitado para o aplicativo desktop.
+
+## Fronteira de segurança
+
+`ordax_studio.electron_account_session` é uma entrada single-shot exclusiva do Python privado instalado. O processo principal Electron envia somente:
+
+```json
+{"schema":"ordax.studio-product-account-session/1","operation":"browser-sign-in"}
+```
+
+E-mail e senha são campos inválidos nesse protocolo. O renderer expõe apenas uma ação sem argumentos para iniciar a conexão.
+
+O Runtime privado:
+
+1. gera `state` criptograficamente aleatório e `code_verifier` PKCE;
+2. deriva `code_challenge` SHA-256;
+3. abre o navegador padrão no authorize endpoint oficial;
+4. escuta somente `127.0.0.1:8766` e somente `/oauth/callback`;
+5. exige `state` exato e código único;
+6. troca o código diretamente no token endpoint usando o `code_verifier`, sem segredo;
+7. confirma o subject com `/v3/product/session`;
+8. registra o dispositivo, quando necessário, pelo `/v3/device/setup` canônico;
+9. cria e reivindica o pairing pelo fluxo Product existente.
+
+O callback loopback devolve apenas uma página estática informando para voltar ao Studio. Possui CSP restrita e não carrega scripts ou recursos externos.
+
+## Token e grants
+
+O access token fica somente em memória. Ele cruza apenas o pipe privado `stdout` do Runtime filho para o processo principal Electron para alimentar o cliente Product já existente. Não deve aparecer no renderer, ChatGPT Web, preview, logs, argv, URL, storage ou diagnósticos.
+
+Login, enrollment e pairing **não criam grants de Computer Control**. Ações remotas continuam condicionadas aos grants e políticas existentes. `supports_remote_actions=false` no MCP canônico não é alterado por este fluxo.
+
+## Compatibilidade
+
+`sign_in_with_password()` permanece apenas como compatibilidade interna para fluxos antigos/testes que ainda possuam owner explícito. O Studio Electron instalado não usa esse método. Novo código de UI não pode depender dele.
+
+O fluxo fail-closed quando o callback está ocupado, o navegador não abre, o state diverge, o código expira, o OAuth é negado, o Product subject não é canônico, o enrollment falha ou o pairing é recusado.
+
+## Testes obrigatórios
+
+- `test_studio_browser_oauth.py`: PKCE S256, state, callback loopback, ausência de client secret e troca do código;
+- `test_studio_electron_account_session.py`: protocolo sem senha, subject Product, enrollment e framing privado;
+- `test_studio_product_account.py`: pairing e sessão browser sem password grant;
+- Apps `canonical-account.test.mjs`: renderer/IPC não aceitam credenciais e o token não chega à UI;
+- Apps `central.test.mjs`: UI não contém `productEmail`/`productPassword`.
+
+O instalador Windows só deve promover esta mudança após o source lock do Studio apontar para o merge correspondente e os contratos Runtime/Windows Product Build estarem verdes.

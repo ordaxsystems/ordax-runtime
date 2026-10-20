@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .config import DEFAULT_CONTROL_PLANE_URL
+from .config import DEFAULT_PRODUCT_MCP_URL
 from .device_credentials import resolve_pending_token_path, resolve_token_path
 from .identity import machine_id
 
@@ -35,21 +35,48 @@ def private_directory(path: Path) -> None:
         import csv
 
         principal = next(csv.reader([sid.strip()]))[1]
+        # Do not depend on Microsoft.PowerShell.Security cmdlets here. Some
+        # supported Windows hosts can execute PowerShell but cannot import that
+        # module, which previously made first device enrollment impossible.
+        # DirectoryInfo/DirectorySecurity use the .NET ACL APIs directly.
         script = """
 $ErrorActionPreference='Stop'
-$current=Get-Acl -LiteralPath $env:ORDAX_SETUP_PRIVATE_PATH
+$directory=New-Object System.IO.DirectoryInfo($env:ORDAX_SETUP_PRIVATE_PATH)
+$current=$directory.GetAccessControl()
 $allowed=@($env:ORDAX_SETUP_SID,'S-1-5-18')
 $rules=@($current.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]))
-if ($current.AreAccessRulesProtected -and $rules.Count -eq 2 -and
-    @($rules | Where-Object { $_.IdentityReference.Value -notin $allowed -or $_.AccessControlType -ne 'Allow' -or $_.FileSystemRights -ne 'FullControl' }).Count -eq 0) { exit 0 }
+$valid=@($rules | Where-Object {
+  $_.IdentityReference.Value -in $allowed -and
+  $_.AccessControlType -eq 'Allow' -and
+  $_.FileSystemRights.ToString().Contains('FullControl')
+})
+$foreign=@($rules | Where-Object {
+  $_.IdentityReference.Value -notin $allowed -or
+  $_.AccessControlType -ne 'Allow' -or
+  -not $_.FileSystemRights.ToString().Contains('FullControl')
+})
+if ($current.AreAccessRulesProtected -and $valid.Count -eq 2 -and $foreign.Count -eq 0) { exit 0 }
 $acl=New-Object System.Security.AccessControl.DirectorySecurity
 $acl.SetAccessRuleProtection($true,$false)
-foreach($id in @($env:ORDAX_SETUP_SID,'S-1-5-18')) {
+foreach($id in $allowed) {
   $sid=New-Object System.Security.Principal.SecurityIdentifier($id)
   $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')
   $acl.AddAccessRule($rule)
 }
-Set-Acl -LiteralPath $env:ORDAX_SETUP_PRIVATE_PATH -AclObject $acl
+$directory.SetAccessControl($acl)
+$verified=$directory.GetAccessControl()
+$verifiedRules=@($verified.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]))
+$verifiedValid=@($verifiedRules | Where-Object {
+  $_.IdentityReference.Value -in $allowed -and
+  $_.AccessControlType -eq 'Allow' -and
+  $_.FileSystemRights.ToString().Contains('FullControl')
+})
+$verifiedForeign=@($verifiedRules | Where-Object {
+  $_.IdentityReference.Value -notin $allowed -or
+  $_.AccessControlType -ne 'Allow' -or
+  -not $_.FileSystemRights.ToString().Contains('FullControl')
+})
+if (-not $verified.AreAccessRulesProtected -or $verifiedValid.Count -ne 2 -or $verifiedForeign.Count -ne 0) { exit 2 }
 """
         env = {k: v for k, v in os.environ.items() if k.lower() != "psmodulepath"}
         result = subprocess.run(
@@ -169,14 +196,35 @@ def configure(state: Path, **kwargs) -> dict:
         return _configure(state, **kwargs)
 
 
-def _resolve_control_plane(control_plane_url: str | None) -> tuple[str, str]:
-    raw = str(control_plane_url or DEFAULT_CONTROL_PLANE_URL).strip().rstrip("/")
+def _resolve_base_url(value: str | None, *, fallback: str, error_code: str) -> str:
+    raw = str(value or fallback).strip().rstrip("/")
     parsed = urlparse(raw)
     loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
     allowed_schemes = {"http", "https"} if loopback else {"https"}
     if not parsed.netloc or parsed.scheme not in allowed_schemes:
-        raise SetupError("CONTROL_PLANE_URL_INVALID")
+        raise SetupError(error_code)
+    return raw
+
+
+def _resolve_product_mcp(product_mcp_url: str | None) -> tuple[str, str]:
+    raw = _resolve_base_url(
+        product_mcp_url,
+        fallback=DEFAULT_PRODUCT_MCP_URL,
+        error_code="PRODUCT_MCP_URL_INVALID",
+    )
     return raw, raw + "/v3/device/setup"
+
+def _quarantine_invalid_pending_token(pending: Path) -> Path:
+    """Preserve a malformed interrupted-setup token before replacing it.
+
+    Only the pending token is eligible for this recovery path. A committed
+    device credential is never renamed or deleted here.
+    """
+    quarantine = pending.with_name(
+        pending.name + ".invalid-" + secrets.token_hex(8)
+    )
+    os.replace(pending, quarantine)
+    return quarantine
 
 
 def _configure(
@@ -186,14 +234,14 @@ def _configure(
     client=None,
     binding=None,
     home=None,
-    control_plane_url: str | None = None,
+    product_mcp_url: str | None = None,
     product_access_token: str | None = None,
     device_kind: str | None = None,
     channel: str | None = None,
 ) -> dict:
     settings_path = state / "agent-settings.json"
     settings = load_settings(settings_path)
-    control_plane, endpoint = _resolve_control_plane(control_plane_url)
+    product_mcp, endpoint = _resolve_product_mcp(product_mcp_url)
     binding = binding or machine_id()
     token = resolve_token_path(state)
     pending = resolve_pending_token_path(state)
@@ -237,9 +285,11 @@ def _configure(
             if not credential or len(credential) > 16_000:
                 raise SetupError("PRODUCT_ACCOUNT_LOGIN_REQUIRED")
             if pending.is_file():
-                secret = pending.read_text(encoding="utf-8").strip()
+                secret = pending.read_text(encoding="utf-8-sig").strip()
                 if len(secret) != 64 or any(c not in "0123456789abcdef" for c in secret):
-                    raise SetupError("PENDING_TOKEN_INVALID_PRESERVED")
+                    _quarantine_invalid_pending_token(pending)
+                    secret = secrets.token_hex(32)
+                    atomic_write(pending, secret)
             else:
                 secret = secrets.token_hex(32)
                 atomic_write(pending, secret)
@@ -267,8 +317,9 @@ def _configure(
         if identity.get("protocol") != "cloudflare-v3":
             raise SetupError("PROTOCOL_MISMATCH")
 
+        settings.pop("control_plane_url", None)
         settings.update(
-            control_plane_url=control_plane,
+            product_mcp_url=product_mcp,
             control_plane_protocol="cloudflare-v3",
             device_id=device_id,
         )
@@ -293,7 +344,7 @@ def _configure(
             "ok": True,
             "device_id": device_id,
             "protocol": "cloudflare-v3",
-            "control_plane_url": control_plane,
+            "product_mcp_url": product_mcp,
         }
     finally:
         if own_client:
@@ -304,8 +355,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--interactive", action="store_true")
     parser.add_argument(
-        "--control-plane-url",
-        default=os.environ.get("ORDAX_CONTROL_PLANE_URL", DEFAULT_CONTROL_PLANE_URL),
+        "--product-mcp-url",
+        default=os.environ.get("ORDAX_PRODUCT_MCP_URL"),
     )
     parser.add_argument(
         "--device-kind",
@@ -323,7 +374,7 @@ def main() -> int:
         result = configure(
             state,
             interactive=args.interactive,
-            control_plane_url=args.control_plane_url,
+            product_mcp_url=args.product_mcp_url,
             device_kind=args.device_kind,
             channel=args.channel,
         )

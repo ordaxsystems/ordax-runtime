@@ -94,6 +94,20 @@ _NONBLOCKING_OBSERVATION_ACTIONS = frozenset({
 })
 
 
+def _action_error_result(action: str, error: Exception) -> ActionResult:
+    # A missing allowed computer path is an expected outcome, not an internal
+    # agent crash. Never expose machine-local exception paths to MCP clients.
+    # Other exceptions retain their existing behavior to avoid changing
+    # authorization policy or unrelated project adapters.
+    if action.startswith("computer.") and isinstance(error, FileNotFoundError):
+        return ActionResult(
+            False,
+            "computer path not found",
+            {"error_code": "computer_path_not_found"},
+        )
+    return ActionResult(False, f"{type(error).__name__}: {error}")
+
+
 class ActionRegistry(
     ObservationActions,
     ReferenceActions,
@@ -167,6 +181,7 @@ class ActionRegistry(
             "workspace.path_remove": self.workspace_path_remove,
             "workspace.path_move": self.workspace_path_move,
             "terminal.exec": self.terminal_exec,
+            "computer.terminal_exec": self.computer_terminal_exec,
             "git.command": self.git_command,
             "process.start": self.process_start,
             "process.status": self.process_status,
@@ -174,6 +189,12 @@ class ActionRegistry(
             "process.logs": self.process_logs,
             "process.write_stdin": self.process_write_stdin,
             "process.stop": self.process_stop,
+            "computer.process_start": self.computer_process_start,
+            "computer.process_status": self.computer_process_status,
+            "computer.process_list": self.computer_process_list,
+            "computer.process_logs": self.computer_process_logs,
+            "computer.process_write_stdin": self.computer_process_write_stdin,
+            "computer.process_stop": self.computer_process_stop,
             "browser.start": self.browser_start,
             "browser.status": self.browser_status,
             "browser.list": self.browser_list,
@@ -525,7 +546,7 @@ class ActionRegistry(
             try:
                 return self._execute_handler(action, handler, payload)
             except (ValueError, FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
-                return ActionResult(False, f"{type(error).__name__}: {error}")
+                return _action_error_result(action, error)
         if action in (
             "agent.status",
             "agent.component_catalog",
@@ -554,7 +575,7 @@ class ActionRegistry(
             result = self._execute_handler(action, handler, payload)
             return result
         except (ValueError, FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
-            return ActionResult(False, f"{type(error).__name__}: {error}")
+            return _action_error_result(action, error)
         finally:
             process_lock.release()
             self._execution_lock.release()

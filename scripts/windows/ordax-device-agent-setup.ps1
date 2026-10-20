@@ -1,14 +1,14 @@
 ﻿param(
     [switch]$NonInteractive,
     [int]$ReadyTimeoutSeconds = 120,
-    [string]$ControlPlaneUrl = 'https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev'
+    [string]$ProductMcpUrl = 'https://mcp.ordax.com.br'
 )
 
 $ErrorActionPreference = 'Stop'
-if ([string]::IsNullOrWhiteSpace($ControlPlaneUrl)) {
-    throw 'CLOUDFLARE_CONTROL_PLANE_URL_REQUIRED'
+if ([string]::IsNullOrWhiteSpace($ProductMcpUrl)) {
+    throw 'ORDAX_PRODUCT_MCP_URL_REQUIRED'
 }
-$ControlPlaneUrl = $ControlPlaneUrl.TrimEnd('/')
+$ProductMcpUrl = $ProductMcpUrl.TrimEnd('/')
 $stateDir = Join-Path $env:LOCALAPPDATA 'OrdaX\DevAgent'
 $repo = Join-Path $stateDir 'src'
 $remote = 'https://github.com/ordaxsystems/ordax-runtime.git'
@@ -173,7 +173,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'TASK_INSTALL_FAILED' }
     $setupArgs = @(
         '-m', 'ordax_dev_agent.device_setup',
-        '--control-plane-url', $ControlPlaneUrl
+        '--product-mcp-url', $ProductMcpUrl
     )
     if (-not $NonInteractive) { $setupArgs += '--interactive' }
     & $python @setupArgs
@@ -192,10 +192,10 @@ try {
             $task = Get-ScheduledTask -TaskName $taskName
             $registered = @($health.projects | ForEach-Object { $_.slug })
             $cercoExists = Test-Path (Join-Path $env:USERPROFILE 'Documents\github\cerco-no-interior-mvp')
-            $configuredUrl = if ($config.control_plane_url) { ([string]$config.control_plane_url).TrimEnd('/') } else { '' }
-            $controlPlaneMatches = $configuredUrl -eq $ControlPlaneUrl
+            $configuredUrl = if ($config.product_mcp_url) { ([string]$config.product_mcp_url).TrimEnd('/') } else { '' }
+            $productMcpMatches = $configuredUrl -eq $ProductMcpUrl
             if ($health.control_plane_protocol -eq 'cloudflare-v3' -and
-                $controlPlaneMatches -and
+                $productMcpMatches -and
                 $health.device_id -eq $config.device_id -and
                 $health.runtime.last_heartbeat_at -and
                 $health.runtime.supervisor_pid -gt 0 -and

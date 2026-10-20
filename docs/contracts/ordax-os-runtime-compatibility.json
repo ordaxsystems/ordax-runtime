@@ -2,7 +2,7 @@
   "$schema": "ordax.studio-runtime-compatibility/1",
   "product": {
     "id": "ordax-studio",
-    "version": "0.4.6",
+    "version": "0.4.7",
     "historical_repository": "washingtonmsdj/mcp-blender",
     "single_product": true,
     "canonical_runtime_repository": "ordaxsystems/ordax-runtime"
@@ -22,7 +22,17 @@
     "capability_reader_schema": "ordax.device-agent-capability-reader/1",
     "same_action_gateway_required": true,
     "surface_raw_execute_forbidden": true,
-    "parallel_runtime_forbidden": true
+    "parallel_runtime_forbidden": true,
+    "native_device_credential_provider_supported": true,
+    "native_device_credential_provider_owner": "ProductDeviceIdentityStore.read_enrolled_credential",
+    "native_provider_exact_device_id_required": true,
+    "native_provider_duplicate_token_file_allowed": false,
+    "native_provider_denial_file_fallback_allowed": false,
+    "native_runtime_kind": "ordax-os",
+    "native_runtime_kind_requires_credential_provider": true,
+    "native_heartbeat_uses_product_transport": true,
+    "native_heartbeat_writes_no_action_grants": true,
+    "single_presence_owner_required": true
   },
   "platform_authority": {
     "identity_owner": "ordax-os",

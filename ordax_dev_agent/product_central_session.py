@@ -3,7 +3,7 @@
 The client owns no scheduler and stores no device credential. The existing
 Cloudflare command heartbeat drives it. A short-lived challenge is polled from
 the canonical Product MCP and confirmed with the same Product device identity
-already verified by ``ProductPresenceBridge``.
+already verified by the canonical Product device heartbeat.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ class ProductCentralSessionClient:
         credential_provider: Callable[[], str],
         *,
         http: httpx.Client | None = None,
-        min_poll_seconds: float = 20.0,
+        min_poll_seconds: float = 5.0,
     ):
         base = str(base_url or "").strip().rstrip("/")
         parsed = httpx.URL(base)

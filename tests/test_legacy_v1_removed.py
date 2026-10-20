@@ -34,10 +34,15 @@ class RetiredProviderRemovalTests(unittest.TestCase):
         self.assertIn('protocol != "cloudflare-v3"', control)
         self.assertIn('control_plane_protocol: str = "cloudflare-v3"', config)
         self.assertIn("device_id: str | None", config)
-        self.assertIn("DEFAULT_CONTROL_PLANE_URL", config)
-        self.assertTrue(
-            (root / "ordax_dev_agent" / "cloudflare_control_plane.py").is_file()
+        self.assertIn("DEFAULT_PRODUCT_MCP_URL", config)
+        self.assertFalse(
+            (root / "ordax_dev_agent" / "cloudflare_control_plane.py").exists()
         )
+        self.assertTrue(
+            (root / "ordax_dev_agent" / "product_device_control_plane.py").is_file()
+        )
+        self.assertFalse((root / "ordax_dev_agent" / "product_pair_cli.py").exists())
+        self.assertFalse((root / "ordax_dev_agent" / "product_presence_bridge.py").exists())
         self.assertFalse(
             (root / "ordax_dev_agent" / "development_control_plane.py").exists()
         )

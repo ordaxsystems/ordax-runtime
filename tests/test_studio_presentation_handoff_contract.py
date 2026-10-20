@@ -37,6 +37,30 @@ class StudioPresentationHandoffContractTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, source)
 
+    def test_handoff_requires_explicit_owner_observe_authorization_boundary(self) -> None:
+        source = (ROOT / "scripts/windows/verify-studio-presentation-handoff.ps1").read_text("utf-8")
+        for required in (
+            "Require-SourceMarkers",
+            "studio-product:authorize-observe",
+            "runtime.authorizeComputerObserve(productDeviceId)",
+            "runtime.acceptAccountToken(token, subjectId, productOrigin)",
+            "authorizeObserve:()=>ipcRenderer.invoke('studio-product:authorize-observe')",
+            "const OWNER_OBSERVE_PROFILE = 'computer-observe';",
+            "async authorizeComputerObserve(deviceId)",
+            "/v3/owner/remote-authority?device_id=",
+            "/v3/owner/remote-grant-groups",
+            "profile_key: OWNER_OBSERVE_PROFILE",
+            "ORDAX_STUDIO_OWNER_OBSERVE_CONTRACT=PASS",
+        ):
+            self.assertIn(required, source)
+
+    def test_official_packager_requires_validated_product_origin_account_handoff(self) -> None:
+        build = (ROOT / "scripts/windows/build-ordax-studio-product.ps1").read_text("utf-8")
+        self.assertIn("acceptAccountToken(token, subjectId, productOrigin)", build)
+        self.assertIn("acceptAccountToken(token, verifiedSubjectId, verifiedProductOrigin)", build)
+        self.assertNotIn('Contains("acceptAccountToken(token, subjectId)")', build)
+        self.assertNotIn('Contains("acceptAccountToken(token, verifiedSubjectId)")', build)
+
     def test_ci_builds_on_real_windows_from_apps_checkout_without_release_upload(self) -> None:
         workflow = (ROOT / ".github/workflows/studio-presentation-handoff.yml").read_text("utf-8")
         self.assertIn("runs-on: windows-2025", workflow)
@@ -73,7 +97,6 @@ class StudioPresentationHandoffContractTests(unittest.TestCase):
         self.assertIn('Get-FileHash -Algorithm SHA256', installed)
         self.assertIn('Setup-Node', workflow.replace('setup-node', 'Setup-Node'))
         self.assertNotIn('Build native ORDAX Workbench', workflow)
-
 
 
 if __name__ == "__main__":

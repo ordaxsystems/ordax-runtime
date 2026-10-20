@@ -1,4 +1,4 @@
-"""Persistent project process manager for ORDAX Dev."""
+"""Canonical persistent process supervisor for both project and device scopes."""
 from __future__ import annotations
 
 import json
@@ -10,13 +10,63 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from .models import ActionResult
+from .persistent_process_runtime import WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS
+
+
+@dataclass(frozen=True)
+class _DeviceProcessScope:
+    """Device namespace; never masquerades as a GitHub project or Space."""
+    device_id: str
+    root: Path
+
+    def path(self, value: str, *, must_exist: bool = True) -> Path:
+        if value == ".":
+            target = self.root
+        else:
+            candidate = Path(value).expanduser()
+            if not candidate.is_absolute():
+                raise ValueError("device process cwd must be absolute")
+            if "\x00" in value or len(value) > 4096:
+                raise ValueError("invalid device process cwd")
+            target = candidate.resolve()
+        if must_exist and not target.exists():
+            raise ValueError("device process cwd does not exist")
+        return target
 
 
 class PersistentProcessActions:
+    def _device_process_scope(self) -> _DeviceProcessScope:
+        from .computer_filesystem_actions import load_computer_access_policy
+
+        policy = load_computer_access_policy(self.config)
+        if not (policy.enabled and policy.full_access):
+            raise PermissionError("local_full_access_required")
+        raw_device_id = str(self.config.device_id or "")
+        try:
+            device_id = str(uuid.UUID(raw_device_id))
+        except ValueError as error:
+            raise ValueError("device identity must be configured") from error
+        if raw_device_id != device_id:
+            raise ValueError("device identity must be canonical UUID")
+        return _DeviceProcessScope(device_id=device_id, root=Path.home().resolve())
+
+    @staticmethod
+    def _scope_identity_matches(scope: Any, state: dict[str, Any]) -> bool:
+        if isinstance(scope, _DeviceProcessScope):
+            return (
+                state.get("scope_kind") == "device"
+                and state.get("device_id") == scope.device_id
+                and "project" not in state
+            )
+        return state.get("project") == scope.slug and state.get("scope_kind") in (None, "project")
+
     def _process_root(self, project) -> Path:
+        if isinstance(project, _DeviceProcessScope):
+            return (self.config.state_dir / "device-processes" / project.device_id).resolve()
         return (self.config.state_dir / "processes" / project.slug).resolve()
 
     def _process_state_path(self, project, process_id: str) -> Path:
@@ -153,7 +203,7 @@ class PersistentProcessActions:
                     time.sleep(0.025)
                     continue
                 break
-            if not isinstance(state, dict) or state.get("process_id") != process_id or state.get("project") != project.slug:
+            if not isinstance(state, dict) or state.get("process_id") != process_id or not self._scope_identity_matches(project, state):
                 raise ValueError("persistent process state identity mismatch")
             return state
 
@@ -237,7 +287,12 @@ class PersistentProcessActions:
         return result
 
     def process_start(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_start_scoped(payload, self._project(payload))
+
+    def computer_process_start(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_start_scoped(payload, self._device_process_scope())
+
+    def _process_start_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         argv = payload.get("argv")
         if (
             not isinstance(argv, list)
@@ -303,10 +358,17 @@ class PersistentProcessActions:
         state = {
             "schema_version": 1,
             "process_id": process_id,
-            "project": project.slug,
+            **(
+                {"scope_kind": "device", "device_id": project.device_id}
+                if isinstance(project, _DeviceProcessScope)
+                else {"project": project.slug}
+            ),
             "token": token,
             "state": "starting",
-            "cwd": cwd.relative_to(project.root.resolve()).as_posix() if cwd != project.root.resolve() else ".",
+            "cwd": (
+                str(cwd) if isinstance(project, _DeviceProcessScope)
+                else cwd.relative_to(project.root.resolve()).as_posix() if cwd != project.root.resolve() else "."
+            ),
             "argv": argv,
             "log_path": str(log_path),
             "started_at_unix": time.time(),
@@ -374,7 +436,7 @@ class PersistentProcessActions:
                         ["taskkill", "/PID", str(manager.pid), "/T", "/F"],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
-                        timeout=15,
+                        timeout=WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS,
                         shell=False,
                     )
                 else:
@@ -395,13 +457,23 @@ class PersistentProcessActions:
         )
 
     def process_status(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_status_scoped(payload, self._project(payload))
+
+    def computer_process_status(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_status_scoped(payload, self._device_process_scope())
+
+    def _process_status_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         process_id = str(payload.get("process_id") or "")
         state = self._public_process_state(self._load_process_state(project, process_id))
         return ActionResult(True, "persistent process status ready", state)
 
     def process_list(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_list_scoped(payload, self._project(payload))
+
+    def computer_process_list(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_list_scoped(payload, self._device_process_scope())
+
+    def _process_list_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         root = self._process_root(project)
         items: list[dict[str, Any]] = []
         if root.is_dir():
@@ -413,10 +485,15 @@ class PersistentProcessActions:
                         items.append(self._public_process_state(self._load_process_state(project, process_id)))
                 except Exception:
                     continue
-        return ActionResult(True, "persistent process list ready", {"project": project.slug, "processes": items})
+        return ActionResult(True, "persistent process list ready", {**({"device_id": project.device_id} if isinstance(project, _DeviceProcessScope) else {"project": project.slug}), "processes": items})
 
     def process_logs(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_logs_scoped(payload, self._project(payload))
+
+    def computer_process_logs(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_logs_scoped(payload, self._device_process_scope())
+
+    def _process_logs_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         process_id = str(payload.get("process_id") or "")
         state = self._public_process_state(self._load_process_state(project, process_id))
         max_bytes = int(payload.get("max_bytes", 65536))
@@ -441,7 +518,12 @@ class PersistentProcessActions:
         })
 
     def process_write_stdin(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_write_stdin_scoped(payload, self._project(payload))
+
+    def computer_process_write_stdin(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_write_stdin_scoped(payload, self._device_process_scope())
+
+    def _process_write_stdin_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         process_id = str(payload.get("process_id") or "")
         state = self._public_process_state(self._load_process_state(project, process_id))
         if not state.get("running") or not state.get("ownership_valid"):
@@ -481,7 +563,12 @@ class PersistentProcessActions:
         )
 
     def process_stop(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
+        return self._process_stop_scoped(payload, self._project(payload))
+
+    def computer_process_stop(self, payload: dict[str, Any]) -> ActionResult:
+        return self._process_stop_scoped(payload, self._device_process_scope())
+
+    def _process_stop_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         process_id = str(payload.get("process_id") or "")
         state = self._public_process_state(self._load_process_state(project, process_id))
         pid = int(state.get("manager_pid") or 0)
@@ -518,7 +605,11 @@ class PersistentProcessActions:
         except OSError as error:
             control_error = str(error)
 
-        graceful_deadline = time.monotonic() + 3.0
+        # On Windows the supervisor's child-tree shutdown may itself wait up to
+        # 15 seconds for taskkill. Killing its manager after only three seconds
+        # races that cleanup and can leave an orphaned child or stale journal.
+        # Retain the shorter grace on POSIX.
+        graceful_deadline = time.monotonic() + (WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS + 3.0 if os.name == "nt" else 3.0)
         while time.monotonic() < graceful_deadline:
             manager_running = self._pid_running(pid)
             root_running = bool(
@@ -542,19 +633,15 @@ class PersistentProcessActions:
                         ["taskkill", "/PID", str(termination_pid), "/T", "/F"],
                         capture_output=True,
                         text=True,
-                        timeout=15,
+                        timeout=WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS,
                         shell=False,
                     )
-                    if (
-                        completed.returncode != 0
-                        and self._pid_running(termination_pid)
-                        and self._pid_running(pid)
-                    ):
-                        return ActionResult(False, "persistent process stop failed", {
-                            **state,
-                            "control_error": control_error,
-                            "stderr": (completed.stderr or "")[-2000:],
-                        })
+                    # A nonzero taskkill exit can race the manager's own
+                    # successful cooperative exit (Windows launcher handoff).
+                    # Wait for actual observed termination before returning a
+                    # failure; the command's exit code is not ownership proof.
+                    if completed.returncode != 0:
+                        control_error = control_error or "windows_process_tree_fallback_unconfirmed"
                 else:
                     os.kill(pid, signal.SIGTERM)
             except (OSError, subprocess.TimeoutExpired) as error:
@@ -567,6 +654,27 @@ class PersistentProcessActions:
                 if not root_running and not manager_running:
                     break
                 time.sleep(0.05)
+
+            # A venv python launcher may no longer own the real supervisor
+            # process. Only target that manager PID if a fresh command-line
+            # probe still proves the exact launch token and script identity.
+            # Without that proof, fail closed rather than killing a reused PID.
+            if os.name == "nt" and self._pid_running(pid) and pid != termination_pid:
+                fresh = self._load_process_state(project, process_id)
+                token = str(fresh.get("token") or "")
+                commandline = self._commandline(pid)
+                if token and "persistent_process_runtime.py" in commandline and token in commandline:
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/PID", str(pid), "/T", "/F"],
+                            capture_output=True, text=True,
+                            timeout=WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS, shell=False,
+                        )
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                    retry_deadline = time.monotonic() + 5.0
+                    while time.monotonic() < retry_deadline and self._pid_running(pid):
+                        time.sleep(0.05)
 
         handle = handles.pop(process_id, None)
         getattr(self, "_persistent_process_launch_tokens", {}).pop(process_id, None)

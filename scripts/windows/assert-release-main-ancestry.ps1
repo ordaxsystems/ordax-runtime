@@ -1,5 +1,6 @@
-# Gate public releases on the actual canonical Runtime Git history, not merely
-# a version-looking tag. A tag created on an unrelated branch must fail closed.
+# Gate public stable releases on canonical Runtime Git history. GitHub main
+# governance is delegated to the shared publication SSOT so every public
+# publication path evaluates the same protection/ruleset policy.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
@@ -8,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
 if ($Tag -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
     throw "Release Git tag must be an exact stable version"
@@ -45,6 +47,23 @@ if ($head -cne $ExpectedCommit -or $tagCommit -cne $ExpectedCommit) {
 & git -C $RepositoryRoot merge-base --is-ancestor $ExpectedCommit $mainCommit
 if ($LASTEXITCODE -ne 0) {
     throw "Release Runtime commit is not an ancestor of canonical origin/main"
+}
+
+# GitHub Actions always exposes GITHUB_REPOSITORY. Local Git-history contract
+# tests intentionally remove it so they exercise only the ancestry half of this
+# gate. Production delegates the administrative policy to the shared SSOT.
+if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_REPOSITORY)) {
+    $governanceGate = Join-Path $PSScriptRoot "assert-github-main-governance.ps1"
+    if (-not (Test-Path -LiteralPath $governanceGate -PathType Leaf)) {
+        throw "Shared GitHub main governance gate is missing"
+    }
+    & $governanceGate -ExpectedMainCommit $mainCommit
+
+    # Preserve stable-release-specific evidence markers for existing release
+    # diagnostics while the policy itself remains centralized in the helper.
+    Write-Host "ORDAX_RELEASE_REPOSITORY_GOVERNANCE=PASS"
+    Write-Host "ORDAX_RELEASE_GITHUB_MAIN_COMMIT=$mainCommit"
+    Write-Host "ORDAX_RELEASE_MAIN_RULESET_POLICY=PASS"
 }
 
 Write-Host "ORDAX_RELEASE_MAIN_ANCESTRY_VALID"

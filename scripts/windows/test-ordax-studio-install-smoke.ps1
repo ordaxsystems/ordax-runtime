@@ -142,6 +142,15 @@ if (-not $autoStart -or $autoStart -notlike "*$runtimeExe*") {
 
 & $privatePython -c "import ordax_studio, ordax_dev_agent, ordax_device_agent; print('ORDAX_INSTALLED_RUNTIME_OK')"
 if ($LASTEXITCODE -ne 0) { throw "Installed private runtime import smoke failed" }
+$ownerHelp = @(& $privatePython -I -m ordax_dev_agent.owner_grants_cli --help)
+if ($LASTEXITCODE -ne 0 -or -not (($ownerHelp -join " ") -match '\bdiagnose\b')) {
+  throw "Installed private Runtime lacks canonical Owner MCP readiness CLI"
+}
+Write-Host "ORDAX_INSTALLED_OWNER_MCP_DIAGNOSE=PASS"
+& (Join-Path $PSScriptRoot "assert-runtime-package-capabilities.ps1") `
+  -PrivatePython $privatePython `
+  -RuntimeRoot (Join-Path $installRoot "runtime") `
+  -Phase "installed"
 & $privatePython -c "import importlib.util; assert importlib.util.find_spec('webview') is None; print('ORDAX_NO_LEGACY_WEBVIEW_IMPORT=PASS')"
 if ($LASTEXITCODE -ne 0) { throw "Retired WebView2/pywebview Python host survived Electron cutover" }
 
@@ -352,6 +361,11 @@ try {
   }
   Write-Host "ORDAX_PACKAGED_PRIVATE_PYTHON_ORPHAN_RETIRED"
 
+  & (Join-Path $PSScriptRoot "assert-runtime-package-capabilities.ps1") `
+    -PrivatePython $privatePython `
+    -RuntimeRoot (Join-Path $installRoot "runtime") `
+    -Phase "upgraded"
+
   if (-not (Test-Path $alternateSentinel)) {
     throw "installer removed an unrecognized alternate directory"
   }
@@ -382,6 +396,11 @@ try {
     throw "partial alternate ORDAX install root survived idempotent repair"
   }
   Write-Host "PARTIAL_LEGACY_INSTALL_ROOT_REMOVED"
+
+  & (Join-Path $PSScriptRoot "assert-runtime-package-capabilities.ps1") `
+    -PrivatePython $privatePython `
+    -RuntimeRoot (Join-Path $installRoot "runtime") `
+    -Phase "repaired"
 
   foreach ($required in @($studioExe, $legacyStudioExe, $runtimeExe, $presentationExe, $privatePython)) {
     if (-not (Test-Path $required)) {

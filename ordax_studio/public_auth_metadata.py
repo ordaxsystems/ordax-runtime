@@ -1,11 +1,9 @@
-"""Public Product authentication metadata snapshot of the Platform owner.
+"""Compatibility import for existing Studio and Electron code.
 
-Authority: ordaxsystems/ordax-platform/control-plane/cloudflare/wrangler.toml
-This is public metadata, not a credential. Windows CI verifies exact parity.
+Public OAuth metadata is owned by ordax_core, not the desktop UI.
 """
-from __future__ import annotations
-
-SUPABASE_ORIGIN = "https://jhfphsjptrpmtnzkpwud.supabase.co"
-SUPABASE_PUBLISHABLE_KEY = "sb_publishable_JHFaNBnQbkWLvdHI4zZDpQ_3RJWg6Bf"
-PRODUCT_AUTH_ISSUER = f"{SUPABASE_ORIGIN}/auth/v1"
-PRODUCT_AUTH_AUDIENCE = "authenticated"
+from ordax_core.product_auth_metadata import (
+    SUPABASE_ORIGIN, SUPABASE_PUBLISHABLE_KEY, PRODUCT_AUTH_ISSUER,
+    PRODUCT_AUTH_AUDIENCE, STUDIO_OAUTH_CLIENT_ID,
+    STUDIO_OAUTH_REDIRECT_URI, STUDIO_OAUTH_SCOPES,
+)

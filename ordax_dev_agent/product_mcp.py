@@ -30,7 +30,7 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(
         name="app_intelligence_detail",
         action="intelligence.app_detail",
-        description="Read declarative instructions, intents, parameters and examples for one exact app_id from the device App Intelligence registry. This does not grant permission to execute the app.",
+        description="Read declarative instructions, intents and packaged semantic UI identities for one exact app_id from the device App Intelligence registry. Use semantic element ids before screenshots or coordinate-based interaction. This does not grant permission to execute the app.",
     ),
     ProductMcpToolSpec(
         name="projects_list",
@@ -80,6 +80,13 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(name="workspace_path_move", action="workspace.path_move", effect="write", description="Move or rename a path inside a granted project."),
     ProductMcpToolSpec(name="git_command", action="git.command", effect="execute", description="Run an approved Git subcommand against a granted project without exposing provider credentials."),
     ProductMcpToolSpec(name="terminal_exec", action="terminal.exec", effect="execute", description="Run a foreground terminal command with the local OS user's permissions."),
+    ProductMcpToolSpec(name="computer_terminal_exec", action="computer.terminal_exec", effect="execute", description="Execute a bounded device-scoped command without a GitHub project, under an explicit Owner grant."),
+    ProductMcpToolSpec(name="computer_process_status", action="computer.process_status", description="Read status of a device-scoped ORDAX-owned process."),
+    ProductMcpToolSpec(name="computer_process_list", action="computer.process_list", description="List supervised processes in the authorized device namespace."),
+    ProductMcpToolSpec(name="computer_process_logs", action="computer.process_logs", description="Read bounded logs from a device-scoped supervised process."),
+    ProductMcpToolSpec(name="computer_process_start", action="computer.process_start", effect="execute", description="Start a supervised device process without a GitHub project."),
+    ProductMcpToolSpec(name="computer_process_write_stdin", action="computer.process_write_stdin", effect="execute", description="Send bounded stdin to an ORDAX-owned device process."),
+    ProductMcpToolSpec(name="computer_process_stop", action="computer.process_stop", effect="write", description="Stop a device process owned by the ORDAX supervisor."),
     ProductMcpToolSpec(name="process_status", action="process.status", description="Inspect one ORDAX-owned persistent project process."),
     ProductMcpToolSpec(name="process_list", action="process.list", description="List ORDAX-owned persistent processes for a granted project."),
     ProductMcpToolSpec(name="process_logs", action="process.logs", description="Read bounded tail logs from an ORDAX-owned persistent process."),

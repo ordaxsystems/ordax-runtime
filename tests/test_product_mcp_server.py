@@ -62,6 +62,17 @@ class ProductMcpServerTests(unittest.TestCase):
         self.client.stop()
         self.env.stop()
 
+    def test_device_process_start_routes_without_project(self):
+        response = server.computer_process_start("dev-1", ["node", "--version"], cwd="C:/project", wait_seconds=1)
+        self.assertEqual(response["status"], "succeeded")
+        calls = [call for item in FakeClient.instances for call in item.calls if call[0] == "submit"]
+        self.assertEqual(len(calls), 1)
+        info = calls[0][2]
+        self.assertEqual(info["action"], "computer.process_start")
+        self.assertIsNone(info["project"])
+        self.assertIsNone(info["space_id"])
+        self.assertEqual(info["arguments"]["argv"], ["node", "--version"])
+
     def test_session_and_targets_use_environment_token(self):
         self.assertEqual(server.product_session()["subject_id"], "user:1")
         targets = server.product_targets("space-1")
@@ -162,6 +173,23 @@ class ProductMcpServerTests(unittest.TestCase):
         self.assertEqual(desktop[2]["project"], "demo")
         self.assertEqual(desktop[2]["arguments"]["x"], 100)
         self.assertEqual(desktop[2]["arguments"]["y"], 200)
+
+    def test_device_terminal_routes_without_project_or_space(self):
+        result = server.computer_terminal_exec(
+            "dev-1", argv=["node", "--version"], timeout_seconds=10,
+            cwd="C:/Users/example",
+        )
+        self.assertEqual(result["status"], "succeeded")
+        calls = [call for item in FakeClient.instances for call in item.calls if call[0] == "submit"]
+        self.assertEqual(len(calls), 1)
+        request = calls[0][2]
+        self.assertEqual(request["action"], "computer.terminal_exec")
+        self.assertEqual(request["device_id"], "dev-1")
+        self.assertIsNone(request["project"])
+        self.assertIsNone(request["space_id"])
+        self.assertEqual(request["arguments"]["argv"], ["node", "--version"])
+        self.assertEqual(request["arguments"]["cwd"], "C:/Users/example")
+        self.assertEqual(request["arguments"]["timeout_seconds"], 10)
 
     def test_computer_filesystem_tools_route_without_project_scope(self):
         read = server.computer_text_read(

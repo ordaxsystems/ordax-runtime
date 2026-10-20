@@ -4,6 +4,14 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _windows_pr_checks_cover_all_paths(workflow: str) -> bool:
+    """Unfiltered pull_request emits required checks for every changed path."""
+    if "  pull_request:" not in workflow or "  workflow_dispatch:" not in workflow:
+        return False
+    trigger = workflow.split("  pull_request:", 1)[1].split("  workflow_dispatch:", 1)[0]
+    return "paths:" not in trigger and "paths-ignore:" not in trigger
+
+
 class WindowsProductPackagingTests(unittest.TestCase):
     def test_native_launchers_are_product_entrypoints(self) -> None:
         launcher = (ROOT / "packaging" / "windows" / "ordax_launcher.c").read_text(encoding="utf-8")
@@ -85,7 +93,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertNotIn("/IM python.exe", quiesce)
         self.assertNotIn("/IM node.exe", quiesce)
         self.assertNotIn("/IM blender.exe", quiesce)
-        self.assertIn('"scripts/windows/ordax-upgrade-quiesce.ps1"', workflow)
+        self.assertTrue(_windows_pr_checks_cover_all_paths(workflow))
         self.assertIn("ORDAX_PACKAGED_PRIVATE_PYTHON_ORPHAN_RUNNING", smoke)
         self.assertIn("ORDAX_PACKAGED_PRIVATE_PYTHON_ORPHAN_RETIRED", smoke)
         self.assertIn("ordax-private-runtime-lock.py", smoke)
@@ -132,13 +140,10 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("mcp-blender.exe", installer)
         self.assertIn("mcp-blender-unity.exe", installer)
 
-        # The only accepted historical repository references are migration input:
-        # an existing managed checkout can be cut over to ordax-runtime safely.
         self.assertIn("$legacyRemotes", setup)
         self.assertIn("washingtonmsdj/mcp-blender.git", setup)
         self.assertIn("LEGACY_MIGRATION", setup)
         self.assertIn("washingtonmsdj/ordax-runtime.git", setup)
-
 
     def test_installer_retires_legacy_scheduled_runtime_without_deleting_state(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
@@ -331,49 +336,57 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("-PresentationProcessId $presentationProcess.ProcessId", smoke)
         self.assertIn("[string]$ArtifactDirectory", smoke)
         self.assertIn("Exactly one ORDAX Studio installer", smoke)
-        for source in ("ordax_core", "ordax_dev_agent", "ordax_device_agent", "ordax_studio"):
-            self.assertIn(f'- "{source}/**"', workflow)
+        self.assertTrue(_windows_pr_checks_cover_all_paths(workflow))
 
-    def test_release_requires_immutable_apps_main_ancestry_before_publish(self) -> None:
+    def test_release_requires_immutable_apps_main_ancestry_before_signing(self) -> None:
         workflow = (ROOT / ".github/workflows/windows-product-build.yml").read_text("utf-8")
-        release = workflow.split("  publish-release:", 1)[1]
-        self.assertIn("repository: ordaxsystems/ordax-apps", release)
-        self.assertIn("fetch-depth: 0", release)
-        self.assertIn("persist-credentials: false", release)
-        self.assertIn("merge-base --is-ancestor ([string]$sourceLock.commit) HEAD", release)
-        self.assertIn("ORDAX_STUDIO_RELEASE_SOURCE_MAIN_ANCESTRY=PASS", release)
-        self.assertLess(release.index("Refuse release when Studio source is not integrated in Apps main"),
-                        release.index("Verify release provenance and artifact digest"))
-        self.assertLess(release.index("Blocked release: locked Studio source"),
-                        release.index("Publish GitHub Release assets"))
+        signing = workflow.split("  sign-release:", 1)[1].split("  signed-release-smoke:", 1)[0]
+        publish = workflow.split("  publish-release:", 1)[1]
+        self.assertIn("repository: ordaxsystems/ordax-apps", signing)
+        self.assertIn("fetch-depth: 0", signing)
+        self.assertIn("persist-credentials: false", signing)
+        self.assertIn("merge-base --is-ancestor ([string]$sourceLock.commit) HEAD", signing)
+        self.assertIn("ORDAX_STUDIO_RELEASE_SOURCE_MAIN_ANCESTRY=PASS", signing)
+        self.assertLess(signing.index("Refuse release when Studio source is not integrated in Apps main"),
+                        signing.index("Verify release provenance and unsigned artifact digest"))
+        self.assertIn("Blocked release: locked Studio source", signing)
+        self.assertIn("signed-release-smoke", publish)
+        self.assertIn("Publish GitHub Release assets", publish)
 
-    def test_signed_release_reuses_exact_same_smoke_and_checks_digest_after(self) -> None:
+    def test_signed_release_smoke_isolated_from_hsm_and_precedes_publication(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
-        release = workflow.split("  publish-release:", 1)[1]
-        candidate = workflow.split("  install-smoke:", 1)[1].split("  publish-release:", 1)[0]
+        candidate = workflow.split("  install-smoke:", 1)[1].split("  sign-release:", 1)[0]
+        signing = workflow.split("  sign-release:", 1)[1].split("  signed-release-smoke:", 1)[0]
+        signed_smoke = workflow.split("  signed-release-smoke:", 1)[1].split("  publish-release:", 1)[0]
+        publish = workflow.split("  publish-release:", 1)[1]
         script = r".\scripts\windows\test-ordax-studio-install-smoke.ps1"
         self.assertIn("Checkout pinned Runtime smoke implementation", candidate)
         self.assertIn(script, candidate)
-        self.assertIn(script, release)
+        self.assertNotIn(script, signing)
+        self.assertIn(script, signed_smoke)
+        self.assertNotIn(script, publish)
         self.assertEqual(2, workflow.count(f"run: {script}"))
-        self.assertIn("environment: windows-production-release", release)
-        self.assertIn("Install and upgrade from final signed release bytes", release)
-        self.assertIn("Reverify final installer SHA-256 after signed installation smoke", release)
-        self.assertLess(release.index("Verify release provenance and artifact digest"),
-                        release.index("Verify production Authenticode signature"))
-        self.assertLess(release.index("Verify production Authenticode signature"),
-                        release.index("Install and upgrade from final signed release bytes"))
-        self.assertLess(release.index("Install and upgrade from final signed release bytes"),
-                        release.index("Reverify final installer SHA-256 after signed installation smoke"))
-        self.assertLess(release.index("Reverify final installer SHA-256 after signed installation smoke"),
-                        release.index("Publish GitHub Release assets"))
-        self.assertEqual(2, release.count("assert-release-provenance.ps1"))
-        self.assertIn('- "scripts/windows/test-ordax-studio-install-smoke.ps1"', workflow)
+        self.assertIn("environment: windows-production-release", signing)
+        self.assertIn("Install and upgrade from final signed release bytes", signed_smoke)
+        self.assertIn("Reverify final installer SHA-256 after signed installation smoke", signed_smoke)
+        self.assertLess(signing.index("Verify release provenance and unsigned artifact digest"),
+                        signing.index("Sign final production installer"))
+        self.assertLess(signing.index("Sign final production installer"),
+                        signing.index("Verify production Authenticode signature on signing runner"))
+        self.assertLess(signed_smoke.index("Verify production Authenticode signature on clean hosted runner"),
+                        signed_smoke.index("Install and upgrade from final signed release bytes"))
+        self.assertLess(signed_smoke.index("Install and upgrade from final signed release bytes"),
+                        signed_smoke.index("Reverify final installer SHA-256 after signed installation smoke"))
+        self.assertIn("needs:\n      - sign-release\n      - signed-release-smoke", publish)
+        self.assertIn("Publish GitHub Release assets", publish)
+        self.assertTrue(_windows_pr_checks_cover_all_paths(workflow))
 
-    def test_public_release_requires_trusted_authenticode(self) -> None:
+    def test_public_release_requires_trusted_authenticode_at_each_handoff(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
         gate = (ROOT / "scripts" / "windows" / "assert-release-authenticode.ps1").read_text(encoding="utf-8")
-        self.assertIn("Verify production Authenticode signature", workflow)
+        signing = workflow.split("  sign-release:", 1)[1].split("  signed-release-smoke:", 1)[0]
+        signed_smoke = workflow.split("  signed-release-smoke:", 1)[1].split("  publish-release:", 1)[0]
+        publish = workflow.split("  publish-release:", 1)[1]
         self.assertIn("assert-release-authenticode.ps1", workflow)
         self.assertIn("Get-AuthenticodeSignature", gate)
         self.assertIn("SignatureStatus]::Valid", gate)
@@ -381,40 +394,49 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("self-signed certificate", gate)
         self.assertIn("TrustedSignerThumbprints", gate)
         self.assertIn("not an authorized ORDAX publisher", gate)
-        self.assertIn("environment: windows-production-release", workflow)
-        self.assertIn("vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS", workflow)
-        self.assertIn("-TrustedSignerThumbprints $env:ORDAX_RELEASE_SIGNER_THUMBPRINTS", workflow)
+        self.assertIn("environment: windows-production-release", signing)
+        self.assertIn("environment: windows-production-release", signed_smoke)
+        self.assertIn("environment: windows-production-release", publish)
+        self.assertIn("vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS", signing)
+        self.assertIn("vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS", signed_smoke)
+        self.assertIn("vars.ORDAX_RELEASE_SIGNER_THUMBPRINTS", publish)
+        self.assertNotIn("needs.sign-release.outputs", signed_smoke)
+        self.assertNotIn("needs.sign-release.outputs", publish)
         self.assertIn("tests.test_release_signer_identity", workflow)
-        self.assertIn("Checkout tagged Runtime source and canonical Studio lock", workflow)
-        self.assertIn("Verify release provenance and artifact digest", workflow)
-        self.assertIn("assert-release-provenance.ps1", workflow)
-        self.assertLess(workflow.index("Verify release provenance and artifact digest"),
-                        workflow.index("Verify production Authenticode signature"))
-        self.assertLess(workflow.index("Verify production Authenticode signature"),
-                        workflow.index("Publish GitHub Release assets"))
+        self.assertLess(signing.index("Verify release provenance and unsigned artifact digest"),
+                        signing.index("Sign final production installer"))
+        self.assertLess(signed_smoke.index("Verify production Authenticode signature on clean hosted runner"),
+                        signed_smoke.index("Install and upgrade from final signed release bytes"))
+        self.assertLess(publish.index("Verify tagged Runtime commit still belongs to protected canonical main before publication"),
+                        publish.index("Reverify production Authenticode signature before publication"))
+        self.assertLess(publish.index("Reverify production Authenticode signature before publication"),
+                        publish.index("Publish GitHub Release assets"))
 
-    def test_release_tag_must_be_in_canonical_main_history_before_publisher_runs(self) -> None:
+    def test_release_tag_must_be_in_canonical_main_history_before_signing(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
         script = (ROOT / "scripts" / "windows" / "assert-release-main-ancestry.ps1").read_text(encoding="utf-8")
+        signing = workflow.split("  sign-release:", 1)[1].split("  signed-release-smoke:", 1)[0]
         publish = workflow.split("  publish-release:", 1)[1]
+        self.assertIn("fetch-depth: 0", signing)
+        self.assertIn("assert-release-main-ancestry.ps1", signing)
+        self.assertIn('-ExpectedCommit "$env:GITHUB_SHA"', signing)
+        self.assertLess(
+            signing.index("Verify tagged Runtime commit belongs to canonical main"),
+            signing.index("Download validated unsigned Windows installer"),
+        )
+        self.assertLess(
+            signing.index("Verify tagged Runtime commit belongs to canonical main"),
+            signing.index("Sign final production installer"),
+        )
         self.assertIn("fetch-depth: 0", publish)
         self.assertIn("assert-release-main-ancestry.ps1", publish)
-        self.assertIn('-ExpectedCommit "$env:GITHUB_SHA"', publish)
-        self.assertLess(
-            publish.index("Verify tagged Runtime commit belongs to canonical main"),
-            publish.index("Download validated Windows installer"),
-        )
-        self.assertLess(
-            publish.index("Verify tagged Runtime commit belongs to canonical main"),
-            publish.index("Verify production Authenticode signature"),
-        )
+        self.assertIn("Verify tagged Runtime commit still belongs to protected canonical main before publication", publish)
         self.assertIn("refs/remotes/origin/main^{commit}", script)
         self.assertIn("refs/tags/$Tag^{commit}", script)
         self.assertIn("merge-base --is-ancestor", script)
         self.assertIn("not an ancestor of canonical origin/main", script)
         self.assertIn('tests.test_release_main_ancestry', workflow)
-        self.assertIn('- "scripts/windows/assert-release-main-ancestry.ps1"', workflow)
-        self.assertIn('- "tests/test_release_main_ancestry.py"', workflow)
+        self.assertTrue(_windows_pr_checks_cover_all_paths(workflow))
 
     def test_release_publish_handles_missing_release_without_powershell_error_stream_failure(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
@@ -426,7 +448,6 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertNotIn("--clobber", workflow)
         self.assertIn("Release tag already published. Refusing to replace immutable installer assets.", workflow)
         self.assertIn("gh release create $tag", workflow)
-
 
     def test_windows_build_consumes_pinned_ordax_apps_studio_source(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "windows-product-build.yml").read_text(encoding="utf-8")
@@ -452,7 +473,10 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("verify-studio-presentation-handoff.ps1", build)
         self.assertIn("presentation_host = \"electron\"", build)
         self.assertIn("ai\\\\manifest.json", build)
-        self.assertIn("ordax.app-intelligence-registry/1", build)
+        self.assertIn("presentation\\\\semantic-ui.json", build)
+        self.assertIn("ordax-apps.ui-semantic-map/1", build)
+        self.assertIn("ordax.app-intelligence-registry/2", build)
+        self.assertIn("semanticUi = $studioSemanticUi", build)
         self.assertIn("ordax.application-action-manifest/1", build)
         self.assertIn("actions\\\\manifest.json", build)
         self.assertIn('execution -ne "proposal-only"', build)
@@ -462,7 +486,6 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertNotIn('Set-Content (Join-Path $targetStudio "app_intelligence_registry.json") -Encoding UTF8', build)
         self.assertIn("ORDAX_APP_INTELLIGENCE_REGISTRY_OK", build)
         self.assertIn('"*.json"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-
 
     def test_installer_retires_only_recognized_historical_install_roots(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")

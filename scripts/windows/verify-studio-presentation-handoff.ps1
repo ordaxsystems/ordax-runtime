@@ -20,6 +20,17 @@ function Read-Json([string]$File) {
 function Normalize-FullPath([string]$Value) {
     return [System.IO.Path]::GetFullPath($Value).TrimEnd('\', '/')
 }
+function Require-SourceMarkers([string]$File, [string[]]$Markers, [string]$Contract) {
+    if (-not (Test-Path -LiteralPath $File -PathType Leaf)) {
+        throw "Missing canonical source for $Contract`: $File"
+    }
+    $text = Get-Content -LiteralPath $File -Encoding UTF8 -Raw
+    foreach ($marker in $Markers) {
+        if (-not $text.Contains($marker)) {
+            throw "Pinned Studio source does not satisfy $Contract`: missing marker $marker"
+        }
+    }
+}
 
 $source = (Resolve-Path -LiteralPath $AppSourceRoot -ErrorAction Stop).Path
 if (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
@@ -66,11 +77,36 @@ if ($ai.appVersion -ne $appManifest.version -or
 if (-not (Test-Path -LiteralPath (Join-Path $source "apps\studio\conversation\src\index.html") -PathType Leaf)) {
     throw "Studio Conversation canonical entrypoint is absent"
 }
-if (-not (Test-Path -LiteralPath (Join-Path $source "tools\assistant-host\verify-windows-candidate.mjs") -PathType Leaf)) {
+
+# The installed Studio is also the explicit Owner-consent surface for the
+# minimum Product MCP computer flow. A source pin that keeps the Central UI
+# but drops this bridge would build successfully while making authorization
+# impossible on a real device. Prove the complete fixed-purpose boundary
+# before npm/build work: renderer selects no client/device/profile, the main
+# process uses the Runtime-verified Product origin, and ProductRuntime grants
+# only the reviewed observation profile.
+Require-SourceMarkers (Join-Path $hostRoot "native\main.cjs") @(
+    "studio-product:authorize-observe",
+    "runtime.authorizeComputerObserve(productDeviceId)",
+    "runtime.acceptAccountToken(token, subjectId, productOrigin)"
+) "Studio Owner observe IPC boundary"
+Require-SourceMarkers (Join-Path $hostRoot "native\preload.cjs") @(
+    "authorizeObserve:()=>ipcRenderer.invoke('studio-product:authorize-observe')"
+) "Studio Owner observe renderer boundary"
+Require-SourceMarkers (Join-Path $hostRoot "native\product-runtime.mjs") @(
+    "const OWNER_OBSERVE_PROFILE = 'computer-observe';",
+    "async authorizeComputerObserve(deviceId)",
+    "/v3/owner/remote-authority?device_id=",
+    "/v3/owner/remote-grant-groups",
+    "profile_key: OWNER_OBSERVE_PROFILE"
+) "Studio Owner observe Product boundary"
+
+if (-not (Test-Path -LiteralPath (Join-Path $hostRoot "verify-windows-candidate.mjs") -PathType Leaf)) {
     throw "Studio candidate independent SHA verifier is absent"
 }
 Write-Host "ORDAX_STUDIO_CANONICAL_SOURCE_SHA=$commit"
 Write-Host "ORDAX_STUDIO_PRESENTATION_VERSION=$($appManifest.version)"
+Write-Host "ORDAX_STUDIO_OWNER_OBSERVE_CONTRACT=PASS"
 
 & npm.cmd --prefix $hostRoot ci --no-audit --no-fund
 Require-Success "Pinned Studio Electron npm ci"
