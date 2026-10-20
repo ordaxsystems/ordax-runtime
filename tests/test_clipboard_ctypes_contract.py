@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import ast
 import inspect
+import textwrap
 import unittest
 
 from ordax_dev_agent.computer_parity_actions import ComputerParityActions
 
 
 def _attributes_assigned_before_call(method_name: str, native_call: str) -> set[str]:
-    tree = ast.parse(inspect.getsource(getattr(ComputerParityActions, method_name)))
+    tree = ast.parse(textwrap.dedent(inspect.getsource(getattr(ComputerParityActions, method_name))))
     method = next(node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)))
     assignments = {}
     calls = []
