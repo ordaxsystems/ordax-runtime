@@ -544,17 +544,26 @@ try {
 
 $uninstaller = Join-Path $installRoot "unins000.exe"
 if (-not (Test-Path $uninstaller)) { throw "ORDAX Studio uninstaller is missing" }
-$uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @(
-  "/VERYSILENT",
-  "/SUPPRESSMSGBOXES",
-  "/NORESTART"
-) -PassThru
-# Wait only for the uninstaller PID, not any persistent child process tree.
-if (-not $uninstallProcess.WaitForExit(300000)) {
-  throw "ORDAX Studio uninstaller exceeded 5 minutes"
-}
-if ($uninstallProcess.ExitCode -ne 0) {
-  throw "ORDAX Studio silent uninstall failed: $($uninstallProcess.ExitCode)"
+# Own the short-lived uninstaller handle as well; a PID-based
+# Start-Process wrapper can lose ExitCode if it finishes before attach.
+$uninstallStart = New-Object System.Diagnostics.ProcessStartInfo
+$uninstallStart.FileName = $uninstaller
+$uninstallStart.Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+$uninstallStart.UseShellExecute = $false
+$uninstallStart.CreateNoWindow = $true
+$uninstallProcess = New-Object System.Diagnostics.Process
+$uninstallProcess.StartInfo = $uninstallStart
+try {
+  if (-not $uninstallProcess.Start()) { throw "ORDAX Studio uninstaller did not start" }
+  if (-not $uninstallProcess.WaitForExit(300000)) {
+    $uninstallProcess.Kill()
+    throw "ORDAX Studio uninstaller exceeded 5 minutes"
+  }
+  if ($uninstallProcess.ExitCode -ne 0) {
+    throw "ORDAX Studio silent uninstall failed: $($uninstallProcess.ExitCode)"
+  }
+} finally {
+  $uninstallProcess.Dispose()
 }
 
 $leftoverAutoStart = (Get-ItemProperty -Path $runKey -Name "ORDAX Runtime" -ErrorAction SilentlyContinue)."ORDAX Runtime"
