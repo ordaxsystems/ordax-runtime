@@ -382,6 +382,10 @@ class ProductDeviceControlPlane:
             "result_sha256": digest,
             "error_code": None if result.ok else "device_agent_action_failed",
         }
+        # Use the same validated, PostgreSQL-safe canonical representation
+        # on first delivery and replay. Reporting raw U+0000 directly causes
+        # SQLSTATE 22P05 and leaves a durable report stuck in recovery.
+        report = self._wire_report(report)
         outbox_path = self._terminal_outbox.persist(report)
         for attempt in range(3):
             try:
