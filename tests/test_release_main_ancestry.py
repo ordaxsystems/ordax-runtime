@@ -119,6 +119,9 @@ class ReleaseMainAncestryTests(unittest.TestCase):
         self.assertIn('[bool]$githubMain.protected', governance)
         self.assertIn('Blocked publication: canonical main is not protected', governance)
         self.assertIn('/rules/branches/main?per_page=100', governance)
+        # PowerShell 5.1 returns a JSON array as a single output object from
+        # Invoke-RestMethod. All four rules must be enumerated independently.
+        self.assertIn('Headers $headers | ForEach-Object { $_ }', governance)
         self.assertIn('"deletion", "non_fast_forward", "pull_request", "required_status_checks"', governance)
         self.assertIn('required_review_thread_resolution', governance)
         self.assertIn('strict_required_status_checks_policy', governance)
