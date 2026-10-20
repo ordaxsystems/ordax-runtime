@@ -94,10 +94,8 @@ class AgentConfig:
                 max(
                     8.0,
                     float(
-                        os.environ.get(
-                            "ORDAX_AGENT_POLL_SECONDS",
-                            settings.get("poll_seconds", 12),
-                        )
+                        os.environ.get("ORDAX_AGENT_POLL_SECONDS")
+                        or settings.get("poll_seconds", 12)
                     ),
                 ),
             ),
