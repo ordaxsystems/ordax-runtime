@@ -113,6 +113,7 @@ class ReleaseMainAncestryTests(unittest.TestCase):
         self.assertNotIn('/rules/branches/main', gate)
 
         self.assertIn("$env:GITHUB_REPOSITORY", governance)
+        self.assertIn('$headers.Authorization = "Bearer $env:GH_TOKEN"', governance)
         self.assertIn('default_branch -ne "main"', governance)
         self.assertIn('/branches/main', governance)
         self.assertIn('[bool]$githubMain.protected', governance)
@@ -143,7 +144,7 @@ class ReleaseMainAncestryTests(unittest.TestCase):
         self.assertIn("assert-github-main-governance.ps1", governance)
         self.assertIn('-ExpectedMainCommit "${{ github.sha }}"', governance)
         self.assertNotIn("contents: write", governance)
-        self.assertNotIn("GH_TOKEN", governance)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", governance)
         self.assertNotIn("gh release create", governance)
 
         self.assertIn("needs: [build, governance]", publish)
