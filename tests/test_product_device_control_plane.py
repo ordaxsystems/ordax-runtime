@@ -325,6 +325,37 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             self.assertEqual(report["agent_version"], DEVICE_AGENT_VERSION)
             plane.http.close()
 
+    def test_complete_sanitizes_postgres_nul_before_first_report_and_recovery(self):
+        received = []
+        def handler(request):
+            wire = json.loads(request.content)
+            received.append((request.url.path, wire))
+            decoded = json.loads(base64.b64decode(wire["result_canonical_b64"]))
+            self.assertNotIn("\\u0000", json.dumps(decoded))
+            self.assertEqual(
+                hashlib.sha256(base64.b64decode(wire["result_canonical_b64"])).hexdigest(),
+                wire["result_sha256"],
+            )
+            return httpx.Response(200, json={"ok": True})
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            plane = self.plane(Path(raw_dir), handler)
+            from ordax_dev_agent.models import AgentJob
+            job = AgentJob(
+                id="33333333-3333-4333-8333-333333333333",
+                action=PRODUCT_REMOTE_CAPABILITY, payload={},
+                lease_token="66666666-6666-4666-8666-666666666666",
+                effect_id="44444444-4444-4444-8444-444444444444",
+                attempt_id="55555555-5555-4555-8555-555555555555",
+                execution_epoch=1, agent_instance_id=plane.agent_instance_id,
+                boot_id=plane.boot_id,
+            )
+            plane._jobs[job.id] = job
+            plane.complete(job, ActionResult(True, "nul output", {"stdout": "a" + chr(0) + "b"}))
+            self.assertEqual(received[0][0], "/v3/device/transport/report")
+            self.assertEqual(plane.recover_pending_reports(), 0)
+            plane.http.close()
+
     def test_recovery_replays_persisted_execution_version_not_current_process_version(self):
         seen = []
         def handler(request):
