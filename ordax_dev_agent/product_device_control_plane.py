@@ -28,6 +28,7 @@ from .remote_protocol import (
     read_secret,
 )
 from .terminal_outbox import TerminalOutbox
+from .product_ingress import TrustedProductIngress
 
 
 _PROJECT_SCOPE_ACTIONS = frozenset({
@@ -103,6 +104,7 @@ class ProductDeviceControlPlane:
         # to a job payload, MCP client or Surface preference.
         self.runtime_kind = "ordax-os" if device_credential_provider is not None else "desktop-agent"
         self.base_http_url = str(config.product_mcp_url).rstrip("/")
+        self._trusted_ingress = TrustedProductIngress(self.base_http_url)
         self.agent_instance_id = str(uuid.uuid4())
         self.boot_id = str(uuid.uuid4())
         # Execution provenance is immutable for this process. Heartbeat already
@@ -118,6 +120,7 @@ class ProductDeviceControlPlane:
         )
         self.http = httpx.Client(
             timeout=httpx.Timeout(30.0),
+            follow_redirects=False,
             limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
             headers={
                 "X-Ordax-Device-Id": self.device_id,
@@ -163,10 +166,9 @@ class ProductDeviceControlPlane:
 
     def _post(self, operation: str, body: dict[str, Any], *, timeout: float = 20.0) -> dict[str, Any]:
         try:
-            response = self.http.post(
-                f"{self.base_http_url}/v3/device/transport/{operation}",
-                json=body,
-                timeout=timeout,
+            response = self._trusted_ingress.request(
+                f"/v3/device/transport/{operation}",
+                lambda url: self.http.post(url, json=body, timeout=timeout),
             )
         except httpx.HTTPError as error:
             raise TransientDeliveryError(
