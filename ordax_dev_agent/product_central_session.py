@@ -15,6 +15,8 @@ from typing import Callable
 
 import httpx
 
+from .product_ingress import TrustedProductIngress
+
 _UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z",
     re.IGNORECASE,
@@ -66,6 +68,7 @@ class ProductCentralSessionClient:
 
         self.base_url = base
         self.endpoint = base + "/v3/product/device/central-session"
+        self._trusted_ingress = TrustedProductIngress(base)
         self.device_id = canonical_id
         self._credential_provider = credential_provider
         self._http = http or httpx.Client(timeout=8.0, follow_redirects=False)
@@ -114,9 +117,9 @@ class ProductCentralSessionClient:
 
         try:
             credential = self._credential(self._credential_provider())
-            polled = self._http.get(
-                self.endpoint,
-                headers=self._headers(credential),
+            polled = self._trusted_ingress.request(
+                "/v3/product/device/central-session",
+                lambda url: self._http.get(url, headers=self._headers(credential)),
             )
             payload = self._json(polled)
             if polled.status_code in {401, 403}:
@@ -136,13 +139,16 @@ class ProductCentralSessionClient:
             ):
                 raise RuntimeError("product_central_session_response_invalid")
 
-            confirmed = self._http.post(
-                self.endpoint,
-                headers={
-                    **self._headers(credential),
-                    "Content-Type": "application/json",
-                },
-                json={"challenge_id": challenge_id},
+            confirmed = self._trusted_ingress.request(
+                "/v3/product/device/central-session",
+                lambda url: self._http.post(
+                    url,
+                    headers={
+                        **self._headers(credential),
+                        "Content-Type": "application/json",
+                    },
+                    json={"challenge_id": challenge_id},
+                ),
             )
             receipt = self._json(confirmed)
             if confirmed.status_code in {401, 403}:
