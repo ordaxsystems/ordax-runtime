@@ -60,12 +60,34 @@ def dispatch_job(
     return dispatched.action, dispatched.payload, dispatched.project
 
 
+def postgres_safe_result(value: Any) -> Any:
+    """Escape NUL inside report text before JSONB signing and persistence.
+
+    PostgreSQL jsonb rejects U+0000 even when JSON encodes it as \\u0000.
+    Represent NUL visibly as the six printable characters \\u0000. Normal
+    text (including literal backslash sequences) remains unchanged. This is
+    deterministic for persisted report replay and does not alter arbitrary
+    files or raw process streams.
+    """
+    if isinstance(value, str):
+        return value.replace(chr(0), r"\\u0000")
+    if isinstance(value, dict):
+        return {postgres_safe_result(key): postgres_safe_result(item)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [postgres_safe_result(item) for item in value]
+    if isinstance(value, tuple):
+        return [postgres_safe_result(item) for item in value]
+    return value
+
+
 def canonical_result(result: ActionResult) -> tuple[dict[str, Any], str]:
     body = {
         "ok": bool(result.ok),
         "summary": str(result.summary),
         "data": result.data if isinstance(result.data, dict) else {},
     }
+    body = postgres_safe_result(body)
     encoded = json.dumps(
         body,
         sort_keys=True,
