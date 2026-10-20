@@ -329,7 +329,9 @@ class WindowsProductPackagingTests(unittest.TestCase):
         smoke = (ROOT / "scripts" / "windows" / "test-ordax-studio-install-smoke.ps1").read_text(encoding="utf-8")
         self.assertIn("ordax-studio-windows-x64", workflow)
         self.assertIn("Upgrade over running ORDAX Runtime and legacy ORDAX Dev launcher", smoke)
-        self.assertIn('Wait-OrdaxReady -Label "ORDAX_UPGRADE_RUNTIME"', smoke)
+        for label in ("ORDAX_SILENT_INSTALL_RUNTIME", "ORDAX_SILENT_UPGRADE_RUNTIME", "ORDAX_SILENT_REPAIR_RUNTIME"):
+            self.assertIn(f'Assert-SingleAutoStartedRuntime -ExecutablePath $runtimeExe -Label "{label}"', smoke)
+        self.assertNotIn("Start-Process -FilePath $runtimeExe -WorkingDirectory $installRoot -PassThru", smoke)
         self.assertIn("running runtime did not exit during upgrade", smoke)
         self.assertIn("legacy ORDAX Dev process survived Studio upgrade", smoke)
         for marker in (
