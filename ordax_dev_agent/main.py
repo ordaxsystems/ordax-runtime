@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 import signal
 import subprocess
 import sys
@@ -101,10 +102,15 @@ def _record_job_lease_renewal(runtime: dict, reply: dict) -> None:
     lease["renewal_attempts"] += 1
     # Fencing loss is terminal for this execution. A later heartbeat or a
     # malformed/subsequent response must not overwrite that evidence.
-    if lease["state"] == "fencing_lost":
+    if lease["state"] in {"fencing_lost", "reported"}:
         return
     deadline = reply.get("lease_expires_at") if isinstance(reply, dict) else None
-    if not isinstance(deadline, str) or not deadline.strip():
+    try:
+        date = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+        valid_deadline = date.tzinfo is not None and date.utcoffset() is not None
+    except (ValueError, AttributeError, TypeError):
+        valid_deadline = False
+    if not valid_deadline:
         lease["state"] = "unverified"
         lease["last_error_code"] = "lease_response_invalid"
         lease["last_error_at"] = time.time()
@@ -129,7 +135,7 @@ def _record_job_lease_error(runtime: dict, error: Exception) -> None:
         state, code = "unverified", "lease_transport_unavailable"
     else:
         state, code = "unverified", "lease_renewal_unexpected"
-    if lease["state"] != "fencing_lost":
+    if lease["state"] not in {"fencing_lost", "reported"}:
         lease["state"] = state
         lease["last_error_code"] = code
         lease["last_error_at"] = time.time()
