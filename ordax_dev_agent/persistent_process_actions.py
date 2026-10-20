@@ -279,7 +279,7 @@ class PersistentProcessActions:
         result = dict(state)
         result.update({
             "state": lifecycle,
-            "running": bool(running and owned),
+            "running": bool(running and owned and lifecycle == "running"),
             "ownership_valid": owned,
         })
         if not manager_pid and owned:
