@@ -74,6 +74,8 @@ jobs:
           persist-credentials: false
       - name: Require protected canonical main before Owner prerelease publication
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >-
           & ./scripts/windows/assert-github-main-governance.ps1
           -ExpectedMainCommit "${{ github.sha }}"
