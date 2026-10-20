@@ -218,6 +218,8 @@ class ComputerParityActions:
         user32.GetClipboardData.restype = ctypes.c_void_p
         kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
         kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
         if not self._open_clipboard(user32):
             return ActionResult(False, "clipboard is busy")
 
@@ -278,8 +280,12 @@ class ComputerParityActions:
         kernel32 = ctypes.windll.kernel32
         kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
         kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalFree.restype = ctypes.c_void_p
         kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
         kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
         data = (value + "\0").encode("utf-16-le")
         handle = kernel32.GlobalAlloc(_GMEM_MOVEABLE, len(data))
         if not handle:
