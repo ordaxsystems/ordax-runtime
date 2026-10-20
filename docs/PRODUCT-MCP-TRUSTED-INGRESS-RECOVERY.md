@@ -51,9 +51,13 @@ Product transport/session/outbox suites.
   then verify normal startup and a live authenticated device heartbeat.
 - A controlled Runtime termination *after* a test command saves a terminal
   report, followed by restart and the same original report reconciliation.
-- Check the Windows startup/watchdog mechanism: a legacy watchdog log referred
-  to a scheduled task `OrdaX Dev Agent`, while that task was not found in the
-  observed Task Scheduler listing. This needs a release-specific audit.
+- Verify automatic Runtime reconnect after a controlled application restart.
+  The current Windows installer **intentionally retires** the legacy scheduled
+  task `OrdaX Dev Agent` and uses an `HKCU\\...\\Run` entry named
+  `ORDAX Runtime`. On 2026-10-20, that registry entry existed and both
+  `ORDAX Runtime.exe` (PID 25452) and the Python agent (PID 51628) were
+  confirmed running since 13:22:56 local time. Do not re-create the retired
+  scheduled task as a workaround.
 - Verify end-to-end ChatGPT MCP discovery/attestation through the public
   hostname independently; the alternate device ingress does not solve public
   MCP network availability.
