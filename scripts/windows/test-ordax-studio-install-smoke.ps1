@@ -296,14 +296,26 @@ try {
     throw "Central shortcut bypasses official Studio supervisor or lacks mode parameter"
   }
   Write-Host "ORDAX_INSTALLED_CENTRAL_SHORTCUT=PASS"
-  $centralNavigation = Start-Process -FilePath $studioExe -WorkingDirectory $installRoot -ArgumentList "--ordax-central" -PassThru
-  # Start-Process -Wait waits for descendants too; a persistent Runtime must
-  # not extend a one-shot Studio navigation into an unbounded CI wait.
-  if (-not $centralNavigation.WaitForExit(30000)) {
-    throw "Central navigation did not finish within 30 seconds"
-  }
-  if ($centralNavigation.ExitCode -ne 0) {
-    throw "Running Studio did not accept Central navigation request"
+  # This one-shot navigation may exit before Start-Process -PassThru
+  # retains an owned handle; use Process.Start to obtain a real ExitCode.
+  $navigationStart = New-Object System.Diagnostics.ProcessStartInfo
+  $navigationStart.FileName = $studioExe
+  $navigationStart.WorkingDirectory = $installRoot
+  $navigationStart.Arguments = "--ordax-central"
+  $navigationStart.UseShellExecute = $false
+  $centralNavigation = New-Object System.Diagnostics.Process
+  $centralNavigation.StartInfo = $navigationStart
+  try {
+    if (-not $centralNavigation.Start()) { throw "Central navigation did not start" }
+    if (-not $centralNavigation.WaitForExit(30000)) {
+      $centralNavigation.Kill()
+      throw "Central navigation did not finish within 30 seconds"
+    }
+    if ($centralNavigation.ExitCode -ne 0) {
+      throw "Running Studio did not accept Central navigation request"
+    }
+  } finally {
+    $centralNavigation.Dispose()
   }
   $studio.Refresh()
   if ($studio.HasExited) { throw "Central navigation terminated the existing Studio supervisor" }
