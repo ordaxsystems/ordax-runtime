@@ -4,10 +4,15 @@ import unittest
 from unittest.mock import patch
 
 from ordax_dev_agent.main import (
+    _begin_job_lease,
+    _end_job_lease,
     _mark_transport_delivery_error,
     _mark_transport_healthy,
+    _record_job_lease_error,
+    _record_job_lease_renewal,
     _transport_retry_delay,
 )
+from ordax_dev_agent.remote_protocol import TransientDeliveryError
 
 
 class TransportHealthRecoveryTests(unittest.TestCase):
@@ -50,6 +55,54 @@ class TransportHealthRecoveryTests(unittest.TestCase):
         _mark_transport_healthy(runtime)
         self.assertEqual("completed", runtime["job_phase"])
         self.assertEqual("job complete", runtime["last_result"]["summary"])
+
+    def test_lease_renewal_reports_status_separately_from_transport(self) -> None:
+        runtime = {"transport_state": "connected", "job_phase": "executing"}
+        with patch("ordax_dev_agent.main.time.time", return_value=100.0):
+            _begin_job_lease(runtime, "safe-request-id")
+            _record_job_lease_renewal(runtime, {"lease_expires_at": "2026-10-20T16:30:00Z"})
+        self.assertEqual("renewed", runtime["job_lease"]["state"])
+        self.assertEqual(100.0, runtime["job_lease"]["last_renewed_at"])
+        self.assertEqual(1, runtime["job_lease"]["renewal_attempts"])
+        self.assertEqual("connected", runtime["transport_state"])
+        self.assertNotIn("lease_id", runtime["job_lease"])
+
+    def test_transient_lease_failure_is_not_erased_by_heartbeat(self) -> None:
+        runtime = {"transport_state": "connected", "job_phase": "executing"}
+        _begin_job_lease(runtime, "safe-request-id")
+        _record_job_lease_error(runtime, TransientDeliveryError("database url and token secret"))
+        self.assertEqual("unverified", runtime["job_lease"]["state"])
+        self.assertEqual("lease_transport_unavailable", runtime["job_lease"]["last_error_code"])
+        self.assertNotIn("secret", str(runtime["job_lease"]))
+        _mark_transport_healthy(runtime)
+        self.assertEqual("connected", runtime["transport_state"])
+        self.assertEqual("unverified", runtime["job_lease"]["state"])
+        self.assertEqual("executing", runtime["job_phase"])
+        _record_job_lease_renewal(runtime, {"lease_expires_at": "2026-10-20T16:30:00Z"})
+        self.assertEqual("renewed", runtime["job_lease"]["state"])
+        self.assertIsNone(runtime["job_lease"]["last_error_code"])
+
+    def test_fencing_loss_is_sticky_until_an_authoritative_terminal_report(self) -> None:
+        runtime = {"transport_state": "connected", "job_phase": "executing"}
+        _begin_job_lease(runtime, "safe-request-id")
+        _record_job_lease_error(runtime, RuntimeError("canonical Product transport rejected request: lease_not_active"))
+        self.assertEqual("fencing_lost", runtime["job_lease"]["state"])
+        self.assertEqual("lease_not_active", runtime["job_lease"]["last_error_code"])
+        _record_job_lease_renewal(runtime, {"lease_expires_at": "2026-10-20T16:30:00Z"})
+        _record_job_lease_renewal(runtime, {})
+        self.assertEqual("fencing_lost", runtime["job_lease"]["state"])
+        _end_job_lease(runtime, report_committed=False)
+        self.assertEqual("fencing_lost", runtime["job_lease"]["state"])
+        _end_job_lease(runtime, report_committed=True)
+        self.assertEqual("reported", runtime["job_lease"]["state"])
+        self.assertIsNone(runtime["job_lease"]["lease_expires_at"])
+
+    def test_invalid_lease_reply_never_claims_a_verified_renewal(self) -> None:
+        runtime = {}
+        _begin_job_lease(runtime, "safe-request-id")
+        _record_job_lease_renewal(runtime, {"ok": True, "lease_expires_at": None})
+        self.assertEqual("unverified", runtime["job_lease"]["state"])
+        self.assertEqual("lease_response_invalid", runtime["job_lease"]["last_error_code"])
 
     def test_non_transient_state_is_not_reported_as_recovery(self) -> None:
         runtime = {
