@@ -4,7 +4,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import sys
 import unittest
+from pathlib import Path
+
+# The packaged Windows Python prioritizes its installed runtime by default.
+# Import the checked-out source, never an older installed build.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ordax_dev_agent.models import ActionResult
 from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
