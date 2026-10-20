@@ -26,8 +26,10 @@ func TestCanonicalOwnerRetryDelay(t *testing.T) {
 func TestCanonicalOwnerIdleCadenceQueryBudget(t *testing.T) {
   // The canonical owner loop includes one heartbeat and one empty claim per
   // cycle. Keep the baseline well below the Cloudflare Free daily allowance.
-  const interval = 12 * time.Second
-  iterations := int((24*time.Hour)/interval)
+  if canonicalOwnerIdlePollInterval < 10*time.Second {
+    t.Fatal("canonical owner idle claim cadence is too aggressive")
+  }
+  iterations := int((24*time.Hour)/canonicalOwnerIdlePollInterval)
   const maxRoundTripsPerCycle = 4
   if iterations * maxRoundTripsPerCycle >= 40000 {
     t.Fatal("idle canonical owner loop consumes too many daily SQL queries")
