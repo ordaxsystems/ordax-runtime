@@ -51,6 +51,13 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('$centralNavigation.WaitForExit(30000)', smoke)
         self.assertIn('$uninstallProcess.WaitForExit(300000)', smoke)
         self.assertIn('$Process.WaitForExit(600000)', smoke)
+        self.assertIn('New-Object System.Diagnostics.ProcessStartInfo', smoke)
+        self.assertIn('New-Object System.Diagnostics.Process', smoke)
+        self.assertIn('$accountProbe.Start()', smoke)
+        self.assertIn('$accountProbe.WaitForExit(15000)', smoke)
+        self.assertIn('$accountProbe.ExitCode -ne 1', smoke)
+        self.assertIn('$accountProbe.StandardOutput.ReadToEnd()', smoke)
+        self.assertIn('$accountProbe.StandardError.ReadToEnd()', smoke)
         self.assertNotIn(' -Wait -PassThru', smoke)
         install_job = workflow.split("  install-smoke:", 1)[1].split("\n  attest-owner-dev-candidate:", 1)[0]
         self.assertIn("    timeout-minutes: 75", install_job)
