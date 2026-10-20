@@ -1,0 +1,74 @@
+"""Trusted network ingress selection for the ONE Product MCP authority.
+
+The workers.dev hostname is an existing restricted ingress to the same
+Cloudflare Worker and PostgreSQL authority, NOT a backup execution system.
+Only connection-stage errors may switch ingress: a request that reached the
+server must never be repeated merely because its response was lost.
+"""
+from __future__ import annotations
+
+import time
+from typing import Callable, TypeVar
+
+import httpx
+
+_PRIMARY = "https://mcp.ordax.com.br"
+_RESTRICTED = "https://ordax-mcp.ordaxsystems.workers.dev"
+_TRANSPORT_OPS = frozenset({
+    "heartbeat", "claim", "start", "lease", "progress",
+    "report", "recover-report",
+})
+_SESSION_PATH = "/v3/product/device/central-session"
+_T = TypeVar("_T")
+
+
+class TrustedProductIngress:
+    """Use only two pinned TLS origins, retaining the same request/fencing ID."""
+
+    def __init__(
+        self,
+        origin: str,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        reprobe_seconds: float = 120.0,
+    ) -> None:
+        self.origin = str(origin).rstrip("/")
+        self._clock = monotonic
+        if reprobe_seconds <= 0:
+            raise ValueError("Product ingress reprobe interval must be positive")
+        self._reprobe_seconds = reprobe_seconds
+        self._use_restricted_until = 0.0
+
+    @staticmethod
+    def _allowed(path: str) -> bool:
+        if path == _SESSION_PATH:
+            return True
+        prefix = "/v3/device/transport/"
+        return path.startswith(prefix) and path[len(prefix):] in _TRANSPORT_OPS
+
+    def request(self, path: str, send: Callable[[str], _T]) -> _T:
+        """send(url) must use TLS verification and reject HTTP redirects.
+
+        A connect exception occurs before a request is delivered, unlike a
+        ReadTimeout or HTTP 5xx. Never fail over the latter, including report,
+        start or claim: its side effect may have happened already.
+        """
+        if self.origin != _PRIMARY or not self._allowed(path):
+            return send(self.origin + path)
+
+        if self._clock() < self._use_restricted_until:
+            try:
+                return send(_RESTRICTED + path)
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                # This fallback is also inaccessible. Probe the primary now.
+                self._use_restricted_until = 0.0
+                return send(_PRIMARY + path)
+
+        try:
+            response = send(_PRIMARY + path)
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            response = send(_RESTRICTED + path)
+            self._use_restricted_until = self._clock() + self._reprobe_seconds
+        else:
+            self._use_restricted_until = 0.0
+        return response
