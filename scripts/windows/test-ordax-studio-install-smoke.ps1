@@ -221,7 +221,10 @@ $accountProbeOut = Join-Path $env:RUNNER_TEMP "ordax-account-probe-out.json"
 $accountProbeErr = Join-Path $env:RUNNER_TEMP "ordax-account-probe-err.txt"
 try {
   [IO.File]::WriteAllText($accountProbeIn, '{"schema":"ordax.studio-product-account-session/1","operation":"unsupported","email":"invalid","password":"synthetic"}')
-  $accountProbe = Start-Process -FilePath $privatePython -WorkingDirectory $installRoot -ArgumentList @('-I', '-u', '-m', 'ordax_studio.electron_account_session') -RedirectStandardInput $accountProbeIn -RedirectStandardOutput $accountProbeOut -RedirectStandardError $accountProbeErr -NoNewWindow -Wait -PassThru
+  $accountProbe = Start-Process -FilePath $privatePython -WorkingDirectory $installRoot -ArgumentList @('-I', '-u', '-m', 'ordax_studio.electron_account_session') -RedirectStandardInput $accountProbeIn -RedirectStandardOutput $accountProbeOut -RedirectStandardError $accountProbeErr -NoNewWindow -PassThru
+  if (-not $accountProbe.WaitForExit(15000)) {
+    throw "Installed account IPC probe exceeded 15 seconds"
+  }
   if ($accountProbe.ExitCode -ne 1) { throw "Installed account IPC did not reject invalid operation" }
   $accountReply = Get-Content -Raw -Encoding UTF8 -LiteralPath $accountProbeOut | ConvertFrom-Json
   if ($accountReply.schema -ne "ordax.studio-product-account-session/1" -or
@@ -270,7 +273,12 @@ try {
     throw "Central shortcut bypasses official Studio supervisor or lacks mode parameter"
   }
   Write-Host "ORDAX_INSTALLED_CENTRAL_SHORTCUT=PASS"
-  $centralNavigation = Start-Process -FilePath $studioExe -WorkingDirectory $installRoot -ArgumentList "--ordax-central" -Wait -PassThru
+  $centralNavigation = Start-Process -FilePath $studioExe -WorkingDirectory $installRoot -ArgumentList "--ordax-central" -PassThru
+  # Start-Process -Wait waits for descendants too; a persistent Runtime must
+  # not extend a one-shot Studio navigation into an unbounded CI wait.
+  if (-not $centralNavigation.WaitForExit(30000)) {
+    throw "Central navigation did not finish within 30 seconds"
+  }
   if ($centralNavigation.ExitCode -ne 0) {
     throw "Running Studio did not accept Central navigation request"
   }
@@ -505,7 +513,11 @@ $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @(
   "/VERYSILENT",
   "/SUPPRESSMSGBOXES",
   "/NORESTART"
-) -Wait -PassThru
+) -PassThru
+# Wait only for the uninstaller PID, not any persistent child process tree.
+if (-not $uninstallProcess.WaitForExit(300000)) {
+  throw "ORDAX Studio uninstaller exceeded 5 minutes"
+}
 if ($uninstallProcess.ExitCode -ne 0) {
   throw "ORDAX Studio silent uninstall failed: $($uninstallProcess.ExitCode)"
 }
