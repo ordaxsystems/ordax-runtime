@@ -76,6 +76,71 @@ def _mark_transport_healthy(runtime: dict) -> None:
         runtime["last_result"] = {"ok": True, "summary": "control plane connection recovered"}
 
 
+
+def _begin_job_lease(runtime: dict, job_id: str) -> None:
+    """Expose current job fencing separately from generic connectivity.
+
+    A successful heartbeat does not prove that the active job's lease renewed.
+    Never expose lease IDs or credentials through the local status endpoint.
+    """
+    runtime["job_lease"] = {
+        "request_id": job_id,
+        "state": "started",
+        "renewal_attempts": 0,
+        "last_renewed_at": None,
+        "lease_expires_at": None,
+        "last_error_code": None,
+        "last_error_at": None,
+    }
+
+
+def _record_job_lease_renewal(runtime: dict, reply: dict) -> None:
+    lease = runtime.get("job_lease")
+    if not isinstance(lease, dict):
+        return
+    lease["renewal_attempts"] += 1
+    deadline = reply.get("lease_expires_at") if isinstance(reply, dict) else None
+    if not isinstance(deadline, str) or not deadline.strip():
+        lease["state"] = "unverified"
+        lease["last_error_code"] = "lease_response_invalid"
+        lease["last_error_at"] = time.time()
+        return
+    # Fencing loss is terminal for this execution. An unrelated heartbeat
+    # or a subsequent response must not silently overwrite that evidence.
+    if lease["state"] != "fencing_lost":
+        lease["state"] = "renewed"
+        lease["last_renewed_at"] = time.time()
+        lease["lease_expires_at"] = deadline
+        lease["last_error_code"] = None
+
+
+def _record_job_lease_error(runtime: dict, error: Exception) -> None:
+    lease = runtime.get("job_lease")
+    if not isinstance(lease, dict):
+        return
+    lease["renewal_attempts"] += 1
+    from .remote_protocol import DeviceAuthorizationError, TransientDeliveryError
+    if isinstance(error, DeviceAuthorizationError):
+        state, code = "fencing_lost", "device_authorization_rejected"
+    elif "lease_not_active" in str(error):
+        state, code = "fencing_lost", "lease_not_active"
+    elif isinstance(error, TransientDeliveryError):
+        state, code = "unverified", "lease_transport_unavailable"
+    else:
+        state, code = "unverified", "lease_renewal_unexpected"
+    if lease["state"] != "fencing_lost":
+        lease["state"] = state
+        lease["last_error_code"] = code
+        lease["last_error_at"] = time.time()
+
+
+def _end_job_lease(runtime: dict, *, report_committed: bool) -> None:
+    lease = runtime.get("job_lease")
+    if isinstance(lease, dict) and report_committed:
+        lease["state"] = "reported"
+        lease["lease_expires_at"] = None
+
+
 def _agent_metadata(config: AgentConfig) -> dict:
     from .projects import load_projects
 
@@ -396,6 +461,7 @@ def main() -> int:
                 runtime["job_started_at"] = time.time()
                 runtime["job_phase"] = "executing"
                 runtime["job_timings"] = {}
+                _begin_job_lease(runtime, job.id)
                 runtime["progress"] = None
                 verbose_lifecycle = job.action in _VERBOSE_JOB_LIFECYCLE_EVENTS
                 if verbose_lifecycle:
@@ -425,10 +491,16 @@ def main() -> int:
                 def _keep_job_alive(active_job=job, stop_event=keepalive_stop) -> None:
                     while not stop_event.wait(20.0):
                         try:
-                            control.renew(active_job)
+                            lease_response = control.renew(active_job)
+                            _record_job_lease_renewal(runtime, lease_response)
                         except Exception as error:
+                            _record_job_lease_error(runtime, error)
+                            # The command may already have produced side effects.
+                            # Never redispatch or pretend that a good heartbeat
+                            # means the active job still owns its fence.
                             print(
-                                f"job keepalive error for {active_job.id}: {error}",
+                                f"job keepalive error for {active_job.id}: "
+                                f"{runtime.get('job_lease', {}).get('last_error_code')}",
                                 file=sys.stderr,
                             )
                         try:
@@ -492,6 +564,7 @@ def main() -> int:
                             # An optional progress event must not block the terminal result.
                             print(f"terminal progress event failed: {error}", file=sys.stderr)
                     control.complete(job, result)
+                    _end_job_lease(runtime, report_committed=True)
                     runtime["job_timings"]["report_seconds"] = round(time.monotonic() - report_started, 3)
                 finally:
                     registry.on_observation = None
