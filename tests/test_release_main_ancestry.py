@@ -113,11 +113,15 @@ class ReleaseMainAncestryTests(unittest.TestCase):
         self.assertNotIn('/rules/branches/main', gate)
 
         self.assertIn("$env:GITHUB_REPOSITORY", governance)
+        self.assertIn('$headers.Authorization = "Bearer $env:GH_TOKEN"', governance)
         self.assertIn('default_branch -ne "main"', governance)
         self.assertIn('/branches/main', governance)
         self.assertIn('[bool]$githubMain.protected', governance)
         self.assertIn('Blocked publication: canonical main is not protected', governance)
         self.assertIn('/rules/branches/main?per_page=100', governance)
+        # PowerShell 5.1 returns a JSON array as a single output object from
+        # Invoke-RestMethod. All four rules must be enumerated independently.
+        self.assertIn('Headers $headers | ForEach-Object { $_ }', governance)
         self.assertIn('"deletion", "non_fast_forward", "pull_request", "required_status_checks"', governance)
         self.assertIn('required_review_thread_resolution', governance)
         self.assertIn('strict_required_status_checks_policy', governance)
@@ -143,7 +147,7 @@ class ReleaseMainAncestryTests(unittest.TestCase):
         self.assertIn("assert-github-main-governance.ps1", governance)
         self.assertIn('-ExpectedMainCommit "${{ github.sha }}"', governance)
         self.assertNotIn("contents: write", governance)
-        self.assertNotIn("GH_TOKEN", governance)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", governance)
         self.assertNotIn("gh release create", governance)
 
         self.assertIn("needs: [build, governance]", publish)

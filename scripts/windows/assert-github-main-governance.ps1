@@ -21,6 +21,12 @@ $headers = @{
     "X-GitHub-Api-Version" = "2022-11-28"
     "User-Agent" = "ORDAX-Main-Governance-Gate"
 }
+# The protected-main publication check must use the GitHub Actions identity.
+# Unauthenticated public branch-rule responses can be stale or incomplete
+# immediately after merges; never weaken the four required rules instead.
+if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+    $headers.Authorization = "Bearer $env:GH_TOKEN"
+}
 $repositoryUri = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)"
 $repositoryState = Invoke-RestMethod -Method Get -Uri $repositoryUri -Headers $headers
 if (-not $repositoryState -or [string]$repositoryState.default_branch -ne "main") {
@@ -46,7 +52,10 @@ if ([string]$githubMain.commit.sha -cne $ExpectedMainCommit) {
 # rules that define the ORDAX publication trust boundary. The public endpoint
 # includes repository- and organization-level rules that apply to main.
 $rulesUri = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/rules/branches/main?per_page=100"
-$mainRules = @(Invoke-RestMethod -Method Get -Uri $rulesUri -Headers $headers)
+# Windows PowerShell 5.1 treats Invoke-RestMethod JSON arrays as a single
+# pipeline object inside @(...). Explicitly enumerate it before checking
+# mandatory rule types; otherwise four valid rules appear as one joined value.
+$mainRules = @(Invoke-RestMethod -Method Get -Uri $rulesUri -Headers $headers | ForEach-Object { $_ })
 if ($mainRules.Count -eq 0) {
     throw "Blocked publication: canonical main has no active inspectable GitHub ruleset policy"
 }
