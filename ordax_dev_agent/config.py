@@ -86,14 +86,17 @@ class AgentConfig:
                 "ORDAX_AGENT_NAME",
                 settings.get("agent_name") or socket.gethostname(),
             ),
+            # Product MCP: the free Hyperdrive query budget must not be
+            # exhausted by empty-queue polls. Keep the idle dispatch cadence
+            # configurable, but never silently restore the legacy 1s ceiling.
             poll_seconds=min(
-                1.0,
+                60.0,
                 max(
-                    0.25,
+                    8.0,
                     float(
                         os.environ.get(
                             "ORDAX_AGENT_POLL_SECONDS",
-                            settings.get("poll_seconds", 1),
+                            settings.get("poll_seconds", 12),
                         )
                     ),
                 ),
