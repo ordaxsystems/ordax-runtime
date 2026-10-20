@@ -20,14 +20,28 @@ func runCanonicalOwnerRecovery(cfg config) error {
  transport:=canonicalDeviceTransport{baseURL:cfg.ControlPlane,deviceID:cfg.DeviceID,deviceToken:cfg.DeviceToken,httpClient:c.http}
  stop:=make(chan os.Signal,1)
  signal.Notify(stop,syscall.SIGINT,syscall.SIGTERM);defer signal.Stop(stop)
+ failures:=0
  for {
   select {case <-stop:return nil;default:}
   if err:=canonicalOwnerIteration(c,transport);err!=nil{
-   if !sleepOrStop(stop,5*time.Second){return nil}
+   failures++
+   if !sleepOrStop(stop,canonicalOwnerRetryDelay(failures)){return nil}
    continue
   }
-  if !sleepOrStop(stop,3*time.Second){return nil}
+  failures=0
+  // The canonical iteration includes a heartbeat and a fenced claim.
+  // A 3s empty-queue loop consumes an unsustainable number of database
+  // statements; 12s bounds demand without changing claim/lease semantics.
+  if !sleepOrStop(stop,12*time.Second){return nil}
  }
+}
+
+// Backoff must not multiply errors if Hyperdrive is temporarily unavailable.
+func canonicalOwnerRetryDelay(failures int) time.Duration {
+ if failures<=1{return 5*time.Second}
+ if failures==2{return 10*time.Second}
+ if failures==3{return 20*time.Second}
+ return 30*time.Second
 }
 
 func canonicalOwnerIteration(c *client,transport canonicalDeviceTransport) error {
