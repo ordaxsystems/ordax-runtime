@@ -96,6 +96,9 @@ class TransportHealthRecoveryTests(unittest.TestCase):
         _end_job_lease(runtime, report_committed=True)
         self.assertEqual("reported", runtime["job_lease"]["state"])
         self.assertIsNone(runtime["job_lease"]["lease_expires_at"])
+        _record_job_lease_error(runtime, RuntimeError("late lease_not_active"))
+        _record_job_lease_renewal(runtime, {"lease_expires_at": "2026-10-20T17:30:00Z"})
+        self.assertEqual("reported", runtime["job_lease"]["state"])
 
     def test_invalid_lease_reply_never_claims_a_verified_renewal(self) -> None:
         runtime = {}
@@ -103,6 +106,10 @@ class TransportHealthRecoveryTests(unittest.TestCase):
         _record_job_lease_renewal(runtime, {"ok": True, "lease_expires_at": None})
         self.assertEqual("unverified", runtime["job_lease"]["state"])
         self.assertEqual("lease_response_invalid", runtime["job_lease"]["last_error_code"])
+        _record_job_lease_renewal(runtime, {"lease_expires_at": "bogus"})
+        self.assertEqual("unverified", runtime["job_lease"]["state"])
+        _record_job_lease_renewal(runtime, {"lease_expires_at": "2026-10-20T17:30:00"})
+        self.assertEqual("unverified", runtime["job_lease"]["state"])
 
     def test_non_transient_state_is_not_reported_as_recovery(self) -> None:
         runtime = {
