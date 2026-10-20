@@ -444,8 +444,9 @@ try {
   # The repair is also a silent upgrade. The installer must restart the
   # Runtime by itself; a manual Start-Process here would conceal regressions.
   $upgradedRuntime = Assert-SingleAutoStartedRuntime -ExecutablePath $runtimeExe -Label "ORDAX_SILENT_REPAIR_RUNTIME"
-  if ($upgradedRuntime.Id -eq $runtime.Id) {
-    throw "Repair did not replace the previously running ORDAX Runtime"
+  $upgradeRuntime.Refresh()
+  if (-not $upgradeRuntime.HasExited -or $upgradedRuntime.Id -eq $upgradeRuntime.Id) {
+    throw "Silent repair did not replace the ORDAX Runtime started by the previous upgrade"
   }
 } finally {
   if ($legacyProcess) {
