@@ -63,7 +63,7 @@ function Wait-OrdaxInstallerCompletion {
       $completed = [bool](@($tail | Where-Object { $_ -match 'Installation process succeeded\.' }).Count)
       $closed = [bool](@($tail | Where-Object { $_ -match 'Log closed\.' }).Count)
       if ($completed -and $closed) {
-        Write-Host "$Label_INSTALL_LOG_CONFIRMED"
+        Write-Host ($Label + "_INSTALL_LOG_CONFIRMED")
         return
       }
       if (@($tail | Where-Object { $_ -match 'Installation process failed\.' }).Count) {
