@@ -50,6 +50,8 @@ class WindowsProductPackagingTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/windows-product-build.yml").read_text(encoding="utf-8")
         self.assertIn('$centralNavigation.WaitForExit(30000)', smoke)
         self.assertIn('$uninstallProcess.WaitForExit(300000)', smoke)
+        self.assertIn('$uninstallProcess.StartInfo = $uninstallStart', smoke)
+        self.assertIn('$centralNavigation.StartInfo = $navigationStart', smoke)
         self.assertIn('$Process.WaitForExit(600000)', smoke)
         self.assertIn('New-Object System.Diagnostics.ProcessStartInfo', smoke)
         self.assertIn('New-Object System.Diagnostics.Process', smoke)
