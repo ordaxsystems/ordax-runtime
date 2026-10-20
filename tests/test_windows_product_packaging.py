@@ -37,6 +37,14 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertNotIn('Description: "Iniciar ORDAX Runtime"', installer)
         self.assertIn('ValueName: "ORDAX Runtime"', installer)
 
+    def test_silent_upgrade_restarts_background_runtime(self) -> None:
+        installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
+        run_section = installer.split("[Run]", 1)[1].split("[Code]", 1)[0]
+        runtime_entry = 'Filename: "{app}\\{#RuntimeExeName}"; Flags: nowait runhidden'
+        self.assertIn(runtime_entry, run_section)
+        self.assertNotIn("skipifsilent", run_section.split(runtime_entry, 1)[1].splitlines()[0])
+        self.assertLess(run_section.index(runtime_entry), run_section.index('Filename: "{app}\\{#AppExeName}"'))
+
     def test_installer_preserves_app_id_while_migrating_branding(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
         self.assertIn("AppId={{0D31F22D-8451-4CF4-9E34-F0D4D857F55F}", installer)
@@ -321,7 +329,9 @@ class WindowsProductPackagingTests(unittest.TestCase):
         smoke = (ROOT / "scripts" / "windows" / "test-ordax-studio-install-smoke.ps1").read_text(encoding="utf-8")
         self.assertIn("ordax-studio-windows-x64", workflow)
         self.assertIn("Upgrade over running ORDAX Runtime and legacy ORDAX Dev launcher", smoke)
-        self.assertIn('Wait-OrdaxReady -Label "ORDAX_UPGRADE_RUNTIME"', smoke)
+        for label in ("ORDAX_SILENT_INSTALL_RUNTIME", "ORDAX_SILENT_UPGRADE_RUNTIME", "ORDAX_SILENT_REPAIR_RUNTIME"):
+            self.assertIn(f'Assert-SingleAutoStartedRuntime -ExecutablePath $runtimeExe -Label "{label}"', smoke)
+        self.assertNotIn("Start-Process -FilePath $runtimeExe -WorkingDirectory $installRoot -PassThru", smoke)
         self.assertIn("running runtime did not exit during upgrade", smoke)
         self.assertIn("legacy ORDAX Dev process survived Studio upgrade", smoke)
         for marker in (

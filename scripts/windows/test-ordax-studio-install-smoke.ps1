@@ -41,6 +41,65 @@ function Wait-OrdaxReady {
   throw "Installed ORDAX Runtime did not reach action-ready state for $Label"
 }
 
+function Wait-OrdaxInstallerCompletion {
+  param(
+    [System.Diagnostics.Process]$Process,
+    [string]$LogPath,
+    [string]$Label
+  )
+  # Start-Process -Wait also waits for children. Since the installer now starts
+  # a persistent background Runtime, that incorrectly waits for the Runtime
+  # to exit. Wait for the installer PID, then for Inno's durable log footer.
+  if (-not $Process.WaitForExit(600000)) {
+    throw "$Label installer process exceeded 10 minutes"
+  }
+  if ($Process.ExitCode -ne 0) {
+    throw "$Label installer exited with code $($Process.ExitCode)"
+  }
+  $deadline = [DateTime]::UtcNow.AddMinutes(6)
+  do {
+    if (Test-Path -LiteralPath $LogPath -PathType Leaf) {
+      $tail = @(Get-Content -LiteralPath $LogPath -Tail 32 -ErrorAction SilentlyContinue)
+      $completed = [bool](@($tail | Where-Object { $_ -match 'Installation process succeeded\.' }).Count)
+      $closed = [bool](@($tail | Where-Object { $_ -match 'Log closed\.' }).Count)
+      if ($completed -and $closed) {
+        Write-Host ($Label + "_INSTALL_LOG_CONFIRMED")
+        return
+      }
+      if (@($tail | Where-Object { $_ -match 'Installation process failed\.' }).Count) {
+        throw "$Label installer logged a failure"
+      }
+    }
+    Start-Sleep -Milliseconds 750
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "$Label did not complete and close its installation log"
+}
+
+function Assert-SingleAutoStartedRuntime {
+  param(
+    [string]$ExecutablePath,
+    [string]$Label
+  )
+  # An HTTP reply alone could come from a stale localhost listener. Require
+  # exactly one installed process at this path and an action-ready Runtime.
+  $deadline = [DateTime]::UtcNow.AddSeconds(60)
+  do {
+    $matches = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+      $_.Path -and [IO.Path]::GetFullPath($_.Path) -ieq [IO.Path]::GetFullPath($ExecutablePath)
+    })
+    if ($matches.Count -gt 1) {
+      throw "$Label launched duplicate packaged ORDAX Runtime processes"
+    }
+    if ($matches.Count -eq 1) {
+      $null = Wait-OrdaxReady -Label $Label
+      Write-Host ($Label + "_AUTO_STARTED=PASS")
+      return $matches[0]
+    }
+    Start-Sleep -Milliseconds 750
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "$Label did not start the packaged ORDAX Runtime automatically"
+}
+
 function Assert-StudioAlias {
   param([string]$StudioExe, [string]$LegacyExe)
   foreach ($path in @($StudioExe, $LegacyExe)) {
@@ -98,7 +157,8 @@ $installProcess = Start-Process -FilePath $installer.FullName -ArgumentList @(
   "/NORESTART",
   "/DIR=$installRoot",
   "/LOG=$installLog"
-) -Wait -PassThru
+) -PassThru
+  Wait-OrdaxInstallerCompletion -Process $installProcess -LogPath $installLog -Label 'installProcess'
 if ($installProcess.ExitCode -ne 0) {
   if (Test-Path $installLog) { Get-Content $installLog -Tail 200 }
   throw "ORDAX Studio silent install failed: $($installProcess.ExitCode)"
@@ -175,7 +235,9 @@ try {
   Remove-Item -LiteralPath $accountProbeIn,$accountProbeOut,$accountProbeErr -Force -ErrorAction SilentlyContinue
 }
 
-$runtime = $null
+# Silent install must start the Runtime itself; do not let Studio mask a
+# missing post-install launch by starting it on the first UI open.
+$runtime = Assert-SingleAutoStartedRuntime -ExecutablePath $runtimeExe -Label "ORDAX_SILENT_INSTALL_RUNTIME"
 $studio = Start-Process -FilePath $studioExe -WorkingDirectory $installRoot -PassThru
 try {
   Start-Sleep -Seconds 2
@@ -339,7 +401,8 @@ try {
     "/NORESTART",
     "/DIR=$installRoot",
     "/LOG=$upgradeLog"
-  ) -Wait -PassThru
+  ) -PassThru
+  Wait-OrdaxInstallerCompletion -Process $upgradeProcess -LogPath $upgradeLog -Label 'upgradeProcess'
   if ($upgradeProcess.ExitCode -ne 0) {
     if (Test-Path $upgradeLog) { Get-Content $upgradeLog -Tail 200 }
     throw "ORDAX Studio silent upgrade failed: $($upgradeProcess.ExitCode)"
@@ -349,6 +412,10 @@ try {
   $runtime.Refresh()
   if (-not $runtime.HasExited) {
     throw "running runtime did not exit during upgrade"
+  }
+  $upgradeRuntime = Assert-SingleAutoStartedRuntime -ExecutablePath $runtimeExe -Label "ORDAX_SILENT_UPGRADE_RUNTIME"
+  if ($upgradeRuntime.Id -eq $runtime.Id) {
+    throw "Silent upgrade left the previous ORDAX Runtime in place"
   }
   $legacyProcess.Refresh()
   if (-not $legacyProcess.HasExited) {
@@ -387,7 +454,8 @@ try {
     "/NORESTART",
     "/DIR=$installRoot",
     "/LOG=$repairLog"
-  ) -Wait -PassThru
+  ) -PassThru
+  Wait-OrdaxInstallerCompletion -Process $repairProcess -LogPath $repairLog -Label 'repairProcess'
   if ($repairProcess.ExitCode -ne 0) {
     if (Test-Path $repairLog) { Get-Content $repairLog -Tail 200 }
     throw "ORDAX Studio idempotent repair install failed: $($repairProcess.ExitCode)"
@@ -410,8 +478,13 @@ try {
   }
   Assert-StudioAlias -StudioExe $studioExe -LegacyExe $legacyStudioExe
 
-  $upgradedRuntime = Start-Process -FilePath $runtimeExe -WorkingDirectory $installRoot -PassThru
-  $null = Wait-OrdaxReady -Label "ORDAX_UPGRADE_RUNTIME"
+  # The repair is also a silent upgrade. The installer must restart the
+  # Runtime by itself; a manual Start-Process here would conceal regressions.
+  $upgradedRuntime = Assert-SingleAutoStartedRuntime -ExecutablePath $runtimeExe -Label "ORDAX_SILENT_REPAIR_RUNTIME"
+  $upgradeRuntime.Refresh()
+  if (-not $upgradeRuntime.HasExited -or $upgradedRuntime.Id -eq $upgradeRuntime.Id) {
+    throw "Silent repair did not replace the ORDAX Runtime started by the previous upgrade"
+  }
 } finally {
   if ($legacyProcess) {
     Stop-Process -Id $legacyProcess.Id -Force -ErrorAction SilentlyContinue

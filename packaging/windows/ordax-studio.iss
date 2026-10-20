@@ -82,6 +82,10 @@ Name: "desktopicon"; Description: "Criar atalho do ORDAX Studio na área de trab
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ORDAX Runtime"; ValueData: """{app}\{#RuntimeExeName}"""; Flags: uninsdeletevalue
 
 [Run]
+; The Runtime is a background device agent, not a user-facing application. Start
+; it after both silent upgrades and interactive installs; the Studio launcher
+; continues to own only the optional user-facing window.
+Filename: "{app}\{#RuntimeExeName}"; Flags: nowait runhidden
 Filename: "{app}\{#AppExeName}"; Description: "Abrir ORDAX Studio"; Flags: nowait postinstall skipifsilent
 
 [Code]
