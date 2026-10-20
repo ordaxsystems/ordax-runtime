@@ -22,6 +22,7 @@ from .remote_protocol import (
     DeviceAuthorizationError,
     TransientDeliveryError,
     canonical_result,
+    postgres_safe_result,
     decode_job_payload,
     dispatch_job,
     read_secret,
@@ -316,7 +317,19 @@ class ProductDeviceControlPlane:
     def _wire_report(self, report: dict[str, Any]) -> dict[str, Any]:
         encoded = report.get("result_canonical_b64")
         digest = str(report.get("result_sha256") or "").lower()
-        if not isinstance(encoded, str):
+        if isinstance(encoded, str):
+            # Verify the saved bytes *before* any legacy repair. A malformed or
+            # tampered outbox must never be silently re-signed.
+            try:
+                raw = base64.b64decode(encoded, validate=True)
+                if hashlib.sha256(raw).hexdigest() != digest:
+                    raise ValueError("digest mismatch")
+                result = json.loads(raw.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError) as error:
+                raise RuntimeError("terminal report canonical integrity failed") from error
+            if not isinstance(result, dict):
+                raise RuntimeError("terminal report canonical result is not an object")
+        else:
             result = report.get("result")
             if not isinstance(result, dict):
                 raise RuntimeError("terminal report has no canonical result")
@@ -325,7 +338,14 @@ class ProductDeviceControlPlane:
             if digest and digest != observed:
                 raise RuntimeError("terminal report digest does not match canonical result")
             digest = observed
-            encoded = base64.b64encode(raw).decode("ascii")
+        # Previously persisted output may contain JSON-escaped U+0000. PostgreSQL
+        # JSONB cannot store it, which otherwise leaves recover-report retrying
+        # forever as HTTP 500. Only rewrite reports whose decoded data needs it.
+        safe_result = postgres_safe_result(result)
+        if safe_result != result:
+            raw = self._canonical_bytes(safe_result)
+            digest = hashlib.sha256(raw).hexdigest()
+        encoded = base64.b64encode(raw).decode("ascii")
         return {
             key: report[key] for key in (
                 "job_id", "effect_id", "attempt_id", "lease_id", "execution_epoch",
