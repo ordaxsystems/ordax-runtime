@@ -41,6 +41,31 @@ function Wait-OrdaxReady {
   throw "Installed ORDAX Runtime did not reach action-ready state for $Label"
 }
 
+function Assert-SingleAutoStartedRuntime {
+  param(
+    [string]$ExecutablePath,
+    [string]$Label
+  )
+  # An HTTP reply alone could come from a stale localhost listener. Require
+  # exactly one installed process at this path and an action-ready Runtime.
+  $deadline = [DateTime]::UtcNow.AddSeconds(60)
+  do {
+    $matches = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+      $_.Path -and [IO.Path]::GetFullPath($_.Path) -ieq [IO.Path]::GetFullPath($ExecutablePath)
+    })
+    if ($matches.Count -gt 1) {
+      throw "$Label launched duplicate packaged ORDAX Runtime processes"
+    }
+    if ($matches.Count -eq 1) {
+      $null = Wait-OrdaxReady -Label $Label
+      Write-Host ($Label + "_AUTO_STARTED=PASS")
+      return $matches[0]
+    }
+    Start-Sleep -Milliseconds 750
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "$Label did not start the packaged ORDAX Runtime automatically"
+}
+
 function Assert-StudioAlias {
   param([string]$StudioExe, [string]$LegacyExe)
   foreach ($path in @($StudioExe, $LegacyExe)) {
@@ -175,7 +200,9 @@ try {
   Remove-Item -LiteralPath $accountProbeIn,$accountProbeOut,$accountProbeErr -Force -ErrorAction SilentlyContinue
 }
 
-$runtime = $null
+# Silent install must start the Runtime itself; do not let Studio mask a
+# missing post-install launch by starting it on the first UI open.
+$runtime = Assert-SingleAutoStartedRuntime -ExecutablePath $runtimeExe -Label "ORDAX_SILENT_INSTALL_RUNTIME"
 $studio = Start-Process -FilePath $studioExe -WorkingDirectory $installRoot -PassThru
 try {
   Start-Sleep -Seconds 2
@@ -350,6 +377,10 @@ try {
   if (-not $runtime.HasExited) {
     throw "running runtime did not exit during upgrade"
   }
+  $upgradeRuntime = Assert-SingleAutoStartedRuntime -ExecutablePath $runtimeExe -Label "ORDAX_SILENT_UPGRADE_RUNTIME"
+  if ($upgradeRuntime.Id -eq $runtime.Id) {
+    throw "Silent upgrade left the previous ORDAX Runtime in place"
+  }
   $legacyProcess.Refresh()
   if (-not $legacyProcess.HasExited) {
     throw "legacy ORDAX Dev process survived Studio upgrade"
@@ -410,8 +441,12 @@ try {
   }
   Assert-StudioAlias -StudioExe $studioExe -LegacyExe $legacyStudioExe
 
-  $upgradedRuntime = Start-Process -FilePath $runtimeExe -WorkingDirectory $installRoot -PassThru
-  $null = Wait-OrdaxReady -Label "ORDAX_UPGRADE_RUNTIME"
+  # The repair is also a silent upgrade. The installer must restart the
+  # Runtime by itself; a manual Start-Process here would conceal regressions.
+  $upgradedRuntime = Assert-SingleAutoStartedRuntime -ExecutablePath $runtimeExe -Label "ORDAX_SILENT_REPAIR_RUNTIME"
+  if ($upgradedRuntime.Id -eq $runtime.Id) {
+    throw "Repair did not replace the previously running ORDAX Runtime"
+  }
 } finally {
   if ($legacyProcess) {
     Stop-Process -Id $legacyProcess.Id -Force -ErrorAction SilentlyContinue
