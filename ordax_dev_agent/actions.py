@@ -94,6 +94,20 @@ _NONBLOCKING_OBSERVATION_ACTIONS = frozenset({
 })
 
 
+def _action_error_result(action: str, error: Exception) -> ActionResult:
+    # A missing allowed computer path is an expected outcome, not an internal
+    # agent crash. Never expose machine-local exception paths to MCP clients.
+    # Other exceptions retain their existing behavior to avoid changing
+    # authorization policy or unrelated project adapters.
+    if action.startswith("computer.") and isinstance(error, FileNotFoundError):
+        return ActionResult(
+            False,
+            "computer path not found",
+            {"error_code": "computer_path_not_found"},
+        )
+    return ActionResult(False, f"{type(error).__name__}: {error}")
+
+
 class ActionRegistry(
     ObservationActions,
     ReferenceActions,
@@ -532,7 +546,7 @@ class ActionRegistry(
             try:
                 return self._execute_handler(action, handler, payload)
             except (ValueError, FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
-                return ActionResult(False, f"{type(error).__name__}: {error}")
+                return _action_error_result(action, error)
         if action in (
             "agent.status",
             "agent.component_catalog",
@@ -561,7 +575,7 @@ class ActionRegistry(
             result = self._execute_handler(action, handler, payload)
             return result
         except (ValueError, FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
-            return ActionResult(False, f"{type(error).__name__}: {error}")
+            return _action_error_result(action, error)
         finally:
             process_lock.release()
             self._execution_lock.release()

@@ -86,6 +86,18 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
         self.assertFalse(blocked.ok)
         self.assertIn("outside local ORDAX computer access roots", blocked.summary)
 
+    def test_missing_allowed_paths_return_bounded_structured_errors(self):
+        # A missing path must remain a normal negative result. No absolute
+        # Windows path or raw FileNotFoundError escapes through remote MCP.
+        missing = self.allowed / "file-that-never-existed.txt"
+        for action in ("computer.file_stat", "computer.text_read", "computer.directory_list"):
+            with self.subTest(action=action):
+                result = self.registry.execute(action, {"path": str(missing)})
+                self.assertFalse(result.ok)
+                self.assertEqual(result.summary, "computer path not found")
+                self.assertEqual(result.data.get("error_code"), "computer_path_not_found")
+                self.assertNotIn(str(missing), result.summary)
+
     def test_read_write_patch_move_search_and_remove(self):
         file = self.allowed / "notes.txt"
         created = self.registry.execute(
