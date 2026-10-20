@@ -13,6 +13,9 @@ import (
  "time"
 )
 
+// Canonical idle-claim cadence: a heartbeat and empty claim are each SQL-backed.
+const canonicalOwnerIdlePollInterval = 12 * time.Second
+
 // runCanonicalOwnerRecovery owns the *entire* execution lifecycle. It must
 // never connect to the legacy D1 WebSocket or process its separate outbox.
 func runCanonicalOwnerRecovery(cfg config) error {
@@ -32,7 +35,7 @@ func runCanonicalOwnerRecovery(cfg config) error {
   // The canonical iteration includes a heartbeat and a fenced claim.
   // A 3s empty-queue loop consumes an unsustainable number of database
   // statements; 12s bounds demand without changing claim/lease semantics.
-  if !sleepOrStop(stop,12*time.Second){return nil}
+  if !sleepOrStop(stop,canonicalOwnerIdlePollInterval){return nil}
  }
 }
 
