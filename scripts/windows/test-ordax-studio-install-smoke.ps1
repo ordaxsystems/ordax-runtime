@@ -217,25 +217,48 @@ if ($LASTEXITCODE -ne 0) { throw "Retired WebView2/pywebview Python host survive
 # Verify the actual installed Python supports the canonical Electron login pipe
 # in isolated (-I) mode, and rejects a synthetic request before network/login.
 $accountProbeIn = Join-Path $env:RUNNER_TEMP "ordax-account-probe-in.json"
-$accountProbeOut = Join-Path $env:RUNNER_TEMP "ordax-account-probe-out.json"
-$accountProbeErr = Join-Path $env:RUNNER_TEMP "ordax-account-probe-err.txt"
+$accountProbe = $null
 try {
   [IO.File]::WriteAllText($accountProbeIn, '{"schema":"ordax.studio-product-account-session/1","operation":"unsupported","email":"invalid","password":"synthetic"}')
-  $accountProbe = Start-Process -FilePath $privatePython -WorkingDirectory $installRoot -ArgumentList @('-I', '-u', '-m', 'ordax_studio.electron_account_session') -RedirectStandardInput $accountProbeIn -RedirectStandardOutput $accountProbeOut -RedirectStandardError $accountProbeErr -NoNewWindow -PassThru
+  # Start-Process -PassThru may return an unowned PID-based process wrapper
+  # if the child exits immediately; its ExitCode is then unavailable. Own the
+  # process handle directly and enforce an exact bounded wait instead.
+  $probeStart = New-Object System.Diagnostics.ProcessStartInfo
+  $probeStart.FileName = $privatePython
+  $probeStart.WorkingDirectory = $installRoot
+  $probeStart.Arguments = "-I -u -m ordax_studio.electron_account_session"
+  $probeStart.UseShellExecute = $false
+  $probeStart.CreateNoWindow = $true
+  $probeStart.RedirectStandardInput = $true
+  $probeStart.RedirectStandardOutput = $true
+  $probeStart.RedirectStandardError = $true
+  $accountProbe = New-Object System.Diagnostics.Process
+  $accountProbe.StartInfo = $probeStart
+  if (-not $accountProbe.Start()) { throw "Installed account IPC probe failed to start" }
+  $accountProbe.StandardInput.Write([IO.File]::ReadAllText($accountProbeIn))
+  $accountProbe.StandardInput.Close()
   if (-not $accountProbe.WaitForExit(15000)) {
+    $accountProbe.Kill()
+    $null = $accountProbe.WaitForExit(5000)
     throw "Installed account IPC probe exceeded 15 seconds"
   }
-  if ($accountProbe.ExitCode -ne 1) { throw "Installed account IPC did not reject invalid operation" }
-  $accountReply = Get-Content -Raw -Encoding UTF8 -LiteralPath $accountProbeOut | ConvertFrom-Json
+  # Invalid requests yield only a single small bounded JSON line.
+  $accountOut = $accountProbe.StandardOutput.ReadToEnd()
+  $accountErr = $accountProbe.StandardError.ReadToEnd()
+  if ($accountProbe.ExitCode -ne 1) {
+    throw "Installed account IPC did not reject invalid operation (exit $($accountProbe.ExitCode))"
+  }
+  $accountReply = $accountOut | ConvertFrom-Json
   if ($accountReply.schema -ne "ordax.studio-product-account-session/1" -or
       $accountReply.ok -ne $false -or $accountReply.error -ne "account_auth_failed" -or
       $accountReply.PSObject.Properties.Name -contains "access_token" -or
-      -not [string]::IsNullOrWhiteSpace((Get-Content -Raw -Encoding UTF8 -LiteralPath $accountProbeErr))) {
+      -not [string]::IsNullOrWhiteSpace($accountErr)) {
     throw "Installed Product account IPC violated the fail-closed response contract"
   }
   Write-Host "ORDAX_INSTALLED_ACCOUNT_PIPE_FAIL_CLOSED=PASS"
 } finally {
-  Remove-Item -LiteralPath $accountProbeIn,$accountProbeOut,$accountProbeErr -Force -ErrorAction SilentlyContinue
+  if ($accountProbe) { $accountProbe.Dispose() }
+  Remove-Item -LiteralPath $accountProbeIn -Force -ErrorAction SilentlyContinue
 }
 
 # Silent install must start the Runtime itself; do not let Studio mask a
