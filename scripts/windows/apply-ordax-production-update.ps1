@@ -141,19 +141,50 @@ function Read-InstalledVersion {
 function Invoke-Installer {
     param([string]$Path, [string]$LogName)
     $logPath = Join-Path $transactionRootPath $LogName
+    # Transaction journals are single-use. Never accept a log left by a
+    # previous attempt as proof that the current installer succeeded.
+    if (Test-Path -LiteralPath $logPath) {
+        throw 'ORDAX installer log already exists for this transaction'
+    }
+    # Start-Process -Wait follows descendants. The Inno post-install step
+    # launches the persistent Runtime, so waiting for the whole process tree
+    # can block an otherwise successful installation indefinitely.
     $process = Start-Process -FilePath $Path -ArgumentList @(
         '/VERYSILENT',
         '/SUPPRESSMSGBOXES',
         '/NORESTART',
         "/DIR=$installRootPath",
         "/LOG=$logPath"
-    ) -Wait -PassThru
-    if ($process.ExitCode -ne 0) {
-        $tail = ''
-        if (Test-Path -LiteralPath $logPath -PathType Leaf) {
-            $tail = (Get-Content -LiteralPath $logPath -Tail 80) -join "`n"
+    ) -PassThru
+    try {
+        if (-not $process.WaitForExit(600000)) {
+            # The installer may still be writing to the install tree. Its
+            # timeout must never launch a competing rollback installer.
+            throw [System.TimeoutException]::new('ORDAX installer process exceeded 10 minutes')
         }
-        throw "ORDAX installer exited with code $($process.ExitCode). $tail"
+        if ($process.ExitCode -ne 0) {
+            throw "ORDAX installer exited with code $($process.ExitCode)"
+        }
+        # Require Inno's terminal record after the installer PID exits. This
+        # also rejects truncated logs and incomplete installs, before health
+        # verification or any committed / rolled-back journal state.
+        $deadline = [DateTime]::UtcNow.AddMinutes(6)
+        do {
+            if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+                $tail = @(Get-Content -LiteralPath $logPath -Tail 40)
+                if (@($tail | Where-Object { $_ -match 'Installation process failed\.' }).Count) {
+                    throw 'ORDAX installer reported failure in its Inno log'
+                }
+                if (@($tail | Where-Object { $_ -match 'Installation process succeeded\.' }).Count -and
+                    @($tail | Where-Object { $_ -match 'Log closed\.' }).Count) {
+                    return
+                }
+            }
+            Start-Sleep -Milliseconds 750
+        } while ([DateTime]::UtcNow -lt $deadline)
+        throw 'ORDAX installer did not produce a completed and closed Inno log'
+    } finally {
+        $process.Dispose()
     }
 }
 
@@ -259,6 +290,12 @@ try {
             throw
         }
         $targetError = $_.Exception.Message
+        if ($_.Exception -is [System.TimeoutException]) {
+            # A live or unconfirmed installer is not safe to roll back over.
+            # Preserve the uncertainty and require a deliberate recovery.
+            Write-TransactionPhase -Phase 'recovery-required' -Detail ('Target installer may still be active: ' + $targetError)
+            exit 20
+        }
         Write-TransactionPhase -Phase 'rolling-back' -Detail $targetError
         try {
             Assert-StagedInstaller -Path $RollbackInstaller -ExpectedSha256 $RollbackSha256

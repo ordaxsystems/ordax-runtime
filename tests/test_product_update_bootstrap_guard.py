@@ -22,6 +22,29 @@ BOOTSTRAP = ROOT / "scripts" / "windows" / "apply-ordax-production-update.ps1"
 
 @unittest.skipUnless(os.name == "nt", "Windows PowerShell bootstrap is Windows-only")
 class ProductUpdateBootstrapGuardTests(unittest.TestCase):
+    def test_in_flight_installer_timeout_never_starts_competing_rollback(self) -> None:
+        content = BOOTSTRAP.read_text(encoding="utf-8")
+        self.assertIn("throw [System.TimeoutException]::new(", content)
+        guard = content.index("if ($_.Exception -is [System.TimeoutException])")
+        recovery = content.index("Write-TransactionPhase -Phase 'recovery-required'", guard)
+        rollback = content.index("Write-TransactionPhase -Phase 'rolling-back'", guard)
+        self.assertLess(guard, recovery)
+        self.assertLess(recovery, rollback)
+        self.assertIn("exit 20", content[recovery:rollback])
+
+    def test_installer_pid_completion_contract(self) -> None:
+        # The existing Windows packaging CI already runs this unittest class.
+        # This isolated fixture never executes an Inno installer or modifies
+        # the real ORDAX installation; it exercises the executor's real function.
+        script = ROOT / "scripts" / "windows" / "test-updater-installer-completion.ps1"
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ORDAX_INSTALLER_COMPLETION_CONTRACT=PASS", result.stdout)
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

@@ -37,6 +37,7 @@ manual file replacement or alternative update pathway.
 6. Hand off to a staged Windows PowerShell bootstrap outside the installed Runtime tree so the current Runtime can be quiesced safely.
 7. Quiesce only packaged ORDAX processes using the existing cooperative shutdown and scoped process verifier.
 8. Run the canonical Inno Setup installer. Preserve device identity, projects, journals, profiles and credentials.
+   The bootstrap waits for the **installer PID** (bounded to 10 minutes), not its persistent Runtime descendants; it then requires both Inno `Installation process succeeded.` and `Log closed.` records from a fresh transaction log before checking Runtime health. Absent, truncated, reused or failed logs cannot authorize `committed` or `rolled-back`. If the installer PID fails to exit within the bound, the target state becomes `recovery-required` **without starting rollback concurrently**; an Owner must first establish that no install remains active. The isolated Windows completion contract is `scripts/windows/test-updater-installer-completion.ps1`.
 9. Start Runtime and verify installed manifest/version plus bounded local action-ready health.
 10. If target installation or health cannot be proven, execute the already staged and verified previous production installer. Record `rolled-back` only after the previous version is healthy; otherwise record `recovery-required` instead of claiming success.
 
