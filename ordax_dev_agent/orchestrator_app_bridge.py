@@ -25,6 +25,7 @@ from typing import Any, BinaryIO, Callable
 SCHEMA = "ordax.orchestrator-host/1"
 READ_CAPABILITY = "orchestrator.app_read"
 APP_ID = "br.com.ordax.orchestrator.lab"
+LEASE_RENEWAL = "hmac-sha256-key-rotation/1"
 _CONTRACT_BYTES = files("ordax_dev_agent.assets").joinpath("orchestrator_app_contract.json").read_bytes()
 _CONTRACT = json.loads(_CONTRACT_BYTES)
 READ_OPERATIONS = frozenset(tool["operation"] for tool in _CONTRACT["tools"] if tool["readOnly"])
@@ -196,6 +197,7 @@ class OrchestratorAppReadClient:
             if not isinstance(reply, dict) or reply.get("schema") != SCHEMA or reply.get("type") != "ready" or reply.get("ok") is not True or reply.get("sessionId") != self._session_id or reply.get("sourceCommit") != expected.source_commit or reply.get("contentDigest") != expected.content_digest or reply.get("profileFingerprint") != expected.profile_fingerprint or reply.get("capability") != READ_CAPABILITY or not isinstance(reply.get("operations"), list) or frozenset(reply["operations"]) != READ_OPERATIONS:
                 raise OrchestratorBridgeUnavailable("host_app_identity_mismatch")
             self._require_same_authorization()
+            self._can_renew = reply.get("leaseRenewal") == LEASE_RENEWAL
         except Exception:
             self.close()
             raise OrchestratorBridgeUnavailable("host_bootstrap_unconfirmed") from None
@@ -204,7 +206,11 @@ class OrchestratorAppReadClient:
         return require_orchestrator_read_authorization(self._authorize, self._clock)
 
     def _require_same_authorization(self) -> VerifiedOrchestratorReadAuthorization:
+        if self._closed:
+            raise OrchestratorBridgeUnavailable("host_session_closed")
         current = self._require_authorization()
+        if self._closed:
+            raise OrchestratorBridgeUnavailable("host_session_closed")
         previous = self._authorization
         if (current.subject_id, current.client_id, current.device_id, current.grant_id) != (previous.subject_id, previous.client_id, previous.device_id, previous.grant_id):
             raise OrchestratorBridgeUnavailable("host_authority_changed")
@@ -216,6 +222,55 @@ class OrchestratorAppReadClient:
         self._closed = True
         for index in range(len(self._key)):
             self._key[index] = 0
+
+    def renew(self) -> int:
+        """Extend an unexpired lease using fresh same-caller Product authority.
+
+        Explicit host operation, never a tool or automatic retry. A missing or
+        uncertain acknowledgement permanently closes this client. Key rotation
+        lets the App bound replay memory across arbitrarily many leases.
+        """
+        if self._closed:
+            raise OrchestratorBridgeUnavailable("host_session_closed")
+        if not self._lock.acquire(blocking=False):
+            raise OrchestratorBridgeUnavailable("host_exchange_busy")
+        next_key = bytearray()
+        try:
+            authorization = self._require_same_authorization()
+            if not self._can_renew:
+                raise OrchestratorBridgeUnavailable("host_renewal_unsupported")
+            now = self._clock()
+            expires_at = min(authorization.expires_at_ms, now + 300000)
+            if expires_at <= self._expires_at:
+                raise OrchestratorBridgeUnavailable("host_lease_extension_required")
+            next_key = bytearray(secrets.token_bytes(32))
+            import base64
+            request = {"schema": SCHEMA, "sessionId": self._session_id,
+                       "id": str(uuid.uuid4()), "operation": "$lease_renew",
+                       "input": {"key": base64.b64encode(next_key).decode("ascii"),
+                                 "expiresAt": expires_at},
+                       "issuedAt": now,
+                       "expiresAt": min(now + 30000, self._expires_at, authorization.expires_at_ms)}
+            request["signature"] = hmac.new(self._key, _canonical(request), hashlib.sha256).hexdigest()
+            reply = self._exchange(request)
+            current = self._require_same_authorization()
+            if self._clock() >= request["expiresAt"] or current.expires_at_ms < expires_at:
+                raise OrchestratorBridgeUnavailable("host_renewal_expired")
+            if (type(reply) is not dict or reply.get("schema") != SCHEMA
+                    or reply.get("id") != request["id"] or reply.get("ok") is not True
+                    or type(reply.get("result")) is not dict
+                    or reply["result"] != {"leaseRenewal": LEASE_RENEWAL, "expiresAt": expires_at}):
+                raise OrchestratorBridgeUnavailable("host_renewal_unconfirmed")
+            self._key[:] = next_key
+            self._expires_at = expires_at
+            return expires_at
+        except Exception:
+            self.close()
+            raise OrchestratorBridgeUnavailable("host_renewal_unavailable") from None
+        finally:
+            for index in range(len(next_key)):
+                next_key[index] = 0
+            self._lock.release()
 
     def read(self, operation: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         if self._closed:
@@ -248,3 +303,4 @@ class OrchestratorAppReadClient:
             raise OrchestratorBridgeUnavailable("host_read_unavailable") from None
         finally:
             self._lock.release()
+

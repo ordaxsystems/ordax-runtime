@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import uuid
+from dataclasses import replace
 from unittest.mock import patch
 
 from ordax_dev_agent.orchestrator_app_bridge import ExpectedOrchestratorIdentity, VerifiedOrchestratorReadAuthorization
@@ -46,6 +47,15 @@ def run():
                 projects = session.read('projects_list')
                 if status['autonomousExecution'] is not False or status['coordinatorAvailable'] is not False or projects['projects'] != []:
                     raise RuntimeError('managed_fixture_state_mismatch')
+                original_pid, original_session = session.pid, session._client._session_id
+                old_key = bytes(session._client._key)
+                authorization = replace(authorization, expires_at_ms=int(time.time()*1000)+600000)
+                renewed_until = session.renew()
+                if (renewed_until <= int(time.time()*1000) or session.pid != original_pid
+                        or session._client._session_id != original_session
+                        or bytes(session._client._key) == old_key
+                        or session.read('projects_list')['projects'] != []):
+                    raise RuntimeError('managed_fixture_renewal_mismatch')
                 session.close()
                 if session._child.poll() is not None:
                     raise RuntimeError('managed_fixture_closed_human_app')
@@ -53,6 +63,8 @@ def run():
                     'pythonRuntimeClient':True, 'packagedElectron':True, 'allBundleFilesPinned':True,
                     'kernelPeerPidVerified':True, 'freshProfileVerified':True,
                     'humanAppPreservedOnClose':True, 'authorizationFixture':True,
+                    'authenticatedLeaseRenewal':True, 'sameProcessAndSession':True,
+                    'ephemeralKeyRotated':True,
                     'liveProductGrant':False, 'providerMessagesSent':0}))
             finally:
                 if session is not None:

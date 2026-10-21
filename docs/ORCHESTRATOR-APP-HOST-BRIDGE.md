@@ -117,13 +117,41 @@ Still required before remote availability: installation-registry/provenance
 binding, Platform capability/profile and canonical live grant resolver, public
 MCP projection, and live account/device E2E. No production action is registered.
 
+## Authenticated lease renewal candidate — 2026-10-21
+
+App alpha.3 advertises `leaseRenewal: hmac-sha256-key-rotation/1` during
+bootstrap. `OrchestratorAppReadClient.renew()` and the managed session extend
+only an unexpired session after resolving the same subject/client/device/grant
+again, before exchange and after acknowledgement. Each extension is at most
+five minutes and bounded by the current grant. The host initiates renewal;
+there is no background timer, public tool, automatic resend or grant issuer.
+
+The signed internal `$lease_renew` frame carries a fresh ephemeral key and
+expiry over the existing private pipe. App keeps the original identities and
+read-only scope, refuses renewal during an active read, erases the old key and
+then resets bounded replay IDs. Old-key frames remain invalid after reset.
+An expired session cannot be resurrected. Missing/late/uncertain acknowledgement,
+revocation or explicit close poisons the client and erases its key; never retry
+the frame or bootstrap. An older App can still serve reads but cannot renew.
+
+Local validation: 28 focused Python tests (five Windows-only skips), 350 App
+tests and 38 bootstrap tests. `scripts/orchestrator/bridge_lease_e2e.py` exercises
+the real Python client against the companion JavaScript bridge with 361 key
+rotations and 24 hours of virtual time, including old-key replay and revocation.
+This is protocol evidence, NOT 24 hours of real autonomy, live OAuth or an
+installed App. The Windows managed E2E additionally requires renewal and a
+post-renewal read in the same packaged Electron process/session.
+
+Installation/provenance registration, Platform live grants, public MCP and
+the continuous supervisor remain pending. No production capability is enabled.
+
 Windows API sources: [pipe security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights),
 [peer PID](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid),
 [overlapped I/O](https://learn.microsoft.com/en-us/windows/win32/sync/synchronization-and-overlapped-input-and-output).
 
 The current read lease is still at most five minutes. Continuous 24h supervision
-requires an explicit authenticated renewal/rotation contract without restarting
-an active human App, plus stop conditions and scheduler policy. The candidate
+now has an explicit authenticated renewal/rotation candidate without restarting
+an active human App; stop conditions, scheduler policy and live authority binding remain pending. The candidate
 neither silently relaunches an App on expiry nor converts a read grant to sends.
 Installation/update owners must drain read sessions and release bundle pins
 before changing installed files; this launcher does not become an updater.

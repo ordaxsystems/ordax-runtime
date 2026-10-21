@@ -120,6 +120,17 @@ class ManagedOrchestratorSession:
             self._pins.close()
             # Closing remote read access must not kill the human App.
 
+    def renew(self):
+        if self._closed:
+            raise OrchestratorBridgeUnavailable("host_session_closed")
+        try:
+            if self._child.poll() is not None:
+                raise OrchestratorBridgeUnavailable("host_app_exited")
+            return self._client.renew()
+        except Exception:
+            self.close()
+            raise
+
 
 def launch_verified_orchestrator(*, installation: VerifiedOrchestratorInstallation,
         authorize: Callable[[], VerifiedOrchestratorReadAuthorization | None],
@@ -162,3 +173,4 @@ def launch_verified_orchestrator(*, installation: VerifiedOrchestratorInstallati
         if pins is not None:
             pins.close()
         raise OrchestratorBridgeUnavailable("host_managed_launch_unavailable") from None
+
