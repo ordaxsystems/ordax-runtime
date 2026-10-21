@@ -86,6 +86,19 @@ class IndependentNativeAbiTests(unittest.TestCase):
             "embedded-python-runtime-closure-unverified"
         ])
 
+    def test_pyinstaller_cookie_may_be_farther_than_last_512_bytes(self):
+        artifact = bytearray(fake_elf())
+        artifact.extend(b"\\0" * 2048)
+        artifact[-1800:-1792] = b"MEI\\x0c\\x0b\\x0a\\x0b\\x0e"
+        result = module.inspect_elf(bytes(artifact), "FROM scratch\\n")
+        self.assertFalse(result["independent_base_abi_ready"])
+        self.assertIn("embedded-python-runtime-closure-unverified", result["blockers"])
+
+    def test_recipe_declaring_pyinstaller_requires_closure_verification(self):
+        result = module.inspect_elf(fake_elf(), "FROM scratch\\nRUN python -m PyInstaller app.py\\n")
+        self.assertFalse(result["independent_base_abi_ready"])
+        self.assertIn("embedded-python-runtime-closure-unverified", result["blockers"])
+
     def test_corrupt_program_header_must_never_count_as_static(self):
         artifact = bytearray(fake_elf())
         struct.pack_into("<H", artifact, 54, 55)
