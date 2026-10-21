@@ -18,6 +18,15 @@ identity, studio_version as the Studio component identity and runtime_version
 separately. The Studio launcher VERSIONINFO keeps the Studio version; Inno Setup
 registration and installer filenames use the distribution version.
 
+The Windows manifest also records `runtime_source_commit` (the immutable HEAD
+of `ordaxsystems/ordax-runtime`) and `runtime_source_dirty`. CI rejects a dirty
+Runtime packaging checkout and a mismatch with `GITHUB_SHA`; the Windows
+installation smoke verifies that the installed manifest matches the exact
+source revision. The installer format/version is advanced whenever its payload
+changes, so a previously attested distribution version is never silently
+reissued with different Runtime bytes. Neither this source metadata nor a
+matching version proves the installed 0.15.9 rollback is byte-equivalent.
+
 This is NOT permission to install an unsigned candidate. Authenticode, protected
 release provenance and verified rollback requirements remain mandatory; no
 manual file replacement or alternative update pathway.

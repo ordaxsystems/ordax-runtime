@@ -6,6 +6,32 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+# A distribution version identifies the upgrade order, not the exact Runtime
+# build. Record the immutable Runtime revision separately from the Studio lock.
+$runtimeGitRoot = (& git -C $repoRoot rev-parse --show-toplevel)
+if ($LASTEXITCODE -ne 0 -or -not $runtimeGitRoot -or
+    [IO.Path]::GetFullPath($runtimeGitRoot.Trim()) -ine [IO.Path]::GetFullPath($repoRoot)) {
+    throw 'Windows Runtime package source must be the canonical Git checkout'
+}
+$runtimeSourceCommit = (& git -C $repoRoot rev-parse HEAD)
+if ($LASTEXITCODE -ne 0 -or [string]$runtimeSourceCommit -cnotmatch '^[0-9a-f]{40}$') {
+    throw 'Windows Runtime source commit must be immutable'
+}
+$runtimeSourceCommit = [string]$runtimeSourceCommit
+if ($env:GITHUB_ACTIONS -eq 'true' -and $env:GITHUB_SHA -and
+    $runtimeSourceCommit -cne $env:GITHUB_SHA) {
+    throw 'Windows Runtime checkout differs from GitHub Actions source identity'
+}
+# Ignore the separately pinned .ordax/apps checkout while still catching
+# tracked edits and untracked files under packaging/runtime source roots.
+$runtimeTrackedChanges = @(& git -C $repoRoot status --porcelain --untracked-files=no)
+if ($LASTEXITCODE -ne 0) { throw 'Windows Runtime tracked source status is unavailable' }
+$runtimeUntrackedSources = @(& git -C $repoRoot ls-files --others --exclude-standard -- ordax_connector ordax_core ordax_device_agent ordax_dev_agent ordax_studio native packaging scripts tests mcp_blender_unity)
+if ($LASTEXITCODE -ne 0) { throw 'Windows Runtime untracked source status is unavailable' }
+$runtimeSourceDirty = ($runtimeTrackedChanges.Count -gt 0 -or $runtimeUntrackedSources.Count -gt 0)
+if ($env:GITHUB_ACTIONS -eq 'true' -and $runtimeSourceDirty) {
+    throw 'Windows CI refuses dirty Runtime package sources'
+}
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repoRoot "dist\windows"
 }
@@ -444,6 +470,8 @@ $manifest = [ordered]@{
         legacy_studio_alias_byte_identical = $true
     }
     studio_source_commit = [string]$sourceLock.commit
+    runtime_source_commit = $runtimeSourceCommit
+    runtime_source_dirty = [bool]$runtimeSourceDirty
     presentation_host = "electron"
     control_plane = "https://mcp.ordax.com.br"
     built_at = [DateTimeOffset]::UtcNow.ToString("o")
@@ -478,6 +506,7 @@ if (-not $setup) {
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup.FullName).Hash.ToLowerInvariant()
 Write-Output "ORDAX_STUDIO_VERSION=$studioComponentVersion"
 Write-Output "ORDAX_WINDOWS_DISTRIBUTION_VERSION=$Version"
+Write-Output "ORDAX_RUNTIME_SOURCE_COMMIT=$runtimeSourceCommit"
 Write-Output "ORDAX_STUDIO_VERSION_SOURCE=ordax-apps-lock"
 Write-Output "ORDAX_WINDOWS_DISTRIBUTION_VERSION_SOURCE=$versionSource"
 Write-Output "ORDAX_STUDIO_SETUP=$($setup.FullName)"

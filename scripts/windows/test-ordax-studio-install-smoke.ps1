@@ -194,6 +194,17 @@ foreach ($required in @($studioExe, $legacyStudioExe, $runtimeExe, $presentation
 }
 Assert-StudioAlias -StudioExe $studioExe -LegacyExe $legacyStudioExe
 
+# Runtime revision and distribution version are independently verifiable.
+$installedManifest = Get-Content -LiteralPath (Join-Path $installRoot "product-manifest.json") -Raw | ConvertFrom-Json
+$runtimeRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$runtimeGitHead = (& git -C $runtimeRepoRoot rev-parse HEAD)
+if ($LASTEXITCODE -ne 0 -or $runtimeGitHead -cnotmatch '^[0-9a-f]{40}$' -or
+    [string]$installedManifest.runtime_source_commit -cne [string]$runtimeGitHead -or
+    $installedManifest.runtime_source_dirty -ne $false) {
+    throw 'Installed Runtime source identity differs from exact canonical build source'
+}
+Write-Host "ORDAX_RUNTIME_BUILD_IDENTITY=PASS"
+
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $autoStart = (Get-ItemProperty -Path $runKey -Name "ORDAX Runtime" -ErrorAction Stop)."ORDAX Runtime"
 if (-not $autoStart -or $autoStart -notlike "*$runtimeExe*") {

@@ -229,7 +229,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertEqual(lock["authority"], "none")
         self.assertEqual(lock["studio_component_version"], source["version"])
         self.assertEqual(lock["studio_source_commit"], source["commit"])
-        self.assertEqual(lock["version"], "0.15.10")
+        self.assertEqual(lock["version"], "0.15.11")
         self.assertIn('Join-Path $repoRoot "windows-distribution.lock.json"', build)
         self.assertIn('$distributionVersion = [string]$distributionLock.version', build)
         self.assertIn('$Version = $distributionVersion', build)
@@ -240,6 +240,18 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('AppVersion={#AppVersion}', installer)
         self.assertIn('OutputBaseFilename=ORDAX-Studio-Setup-{#AppVersion}-x64', installer)
         self.assertNotIn('$Version = $canonicalVersion', build)
+
+    def test_runtime_build_identity_is_recorded_independently_of_distribution(self) -> None:
+        build = (ROOT / "scripts/windows/build-ordax-studio-product.ps1").read_text(encoding="utf-8")
+        smoke = (ROOT / "scripts/windows/test-ordax-studio-install-smoke.ps1").read_text(encoding="utf-8")
+        self.assertIn("git -C $repoRoot rev-parse HEAD", build)
+        self.assertIn("runtime_source_commit = $runtimeSourceCommit", build)
+        self.assertIn("runtime_source_dirty = [bool]$runtimeSourceDirty", build)
+        self.assertIn("Windows CI refuses dirty Runtime package sources", build)
+        self.assertIn("$runtimeSourceCommit -cne $env:GITHUB_SHA", build)
+        self.assertIn("$installedManifest.runtime_source_commit", smoke)
+        self.assertIn("$installedManifest.runtime_source_dirty", smoke)
+        self.assertIn("ORDAX_RUNTIME_BUILD_IDENTITY=PASS", smoke)
 
     def test_installed_electron_verifier_uses_component_not_distribution_version(self) -> None:
         verify = (ROOT / "scripts/windows/assert-installed-studio-ux.ps1").read_text(encoding="utf-8")
