@@ -214,6 +214,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('Write-Output "ORDAX_STUDIO_VERSION=$studioComponentVersion"', build)
         self.assertIn('Write-Output "ORDAX_STUDIO_VERSION_SOURCE=ordax-apps-lock"', build)
         self.assertIn('Write-Output "ORDAX_WINDOWS_DISTRIBUTION_VERSION=$Version"', build)
+        self.assertIn("r['by_id']['studio']['version'] == '$studioComponentVersion'", build)
         self.assertIn('Write-Output "ORDAX_WINDOWS_DISTRIBUTION_VERSION_SOURCE=$versionSource"', build)
 
     def test_distribution_version_is_independent_and_pinned_to_studio_source(self) -> None:

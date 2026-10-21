@@ -286,7 +286,7 @@ $runtimePackageAssertion = Join-Path $repoRoot "scripts\windows\assert-runtime-p
 if ($LASTEXITCODE -ne 0) {
     throw "Private ORDAX Python runtime import smoke failed"
 }
-& $privatePython -c "from ordax_dev_agent.application_intelligence_actions import load_app_intelligence_registry; r = load_app_intelligence_registry(); assert r['available'] and r['by_id']['studio']['version'] == '$Version'; print('ORDAX_APP_INTELLIGENCE_REGISTRY_OK')"
+& $privatePython -c "from ordax_dev_agent.application_intelligence_actions import load_app_intelligence_registry; r = load_app_intelligence_registry(); assert r['available'] and r['by_id']['studio']['version'] == '$studioComponentVersion'; print('ORDAX_APP_INTELLIGENCE_REGISTRY_OK')"
 if ($LASTEXITCODE -ne 0) {
     throw "Packaged App Intelligence registry validation failed"
 }
