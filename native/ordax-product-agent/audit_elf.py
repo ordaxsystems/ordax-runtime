@@ -130,10 +130,6 @@ def inspect_elf(binary: bytes, recipe: str = "") -> dict:
         # A static bootloader could still extract dynamically linked .so files.
         # A complete frozen-library closure audit is required independently.
         blockers.append("embedded-python-runtime-closure-unverified")
-    if not interp and not dynamic and not pyinstaller_archive and not alpine_recipe:
-        # A freestanding/static kernel ABI is a necessary property, not device
-        # signature, remote attestation, or a proof of physical compatibility.
-        pass
     return {
         "schema": "ordax.native-elf-independence-audit/1",
         "architecture": "x86_64",
