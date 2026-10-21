@@ -1,0 +1,54 @@
+name: Native Product Runtime Candidate
+
+on:
+  pull_request:
+    paths:
+      - "ordax_dev_agent/**"
+      - "ordax_core/**"
+      - "ordax_connector/**"
+      - "mcp_blender_unity/**"
+      - "native/ordax-product-agent/**"
+      - "tests/test_native_product_package.py"
+      - "pyproject.toml"
+      - ".github/workflows/native-product-agent.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ordax_dev_agent/**"
+      - "ordax_core/**"
+      - "ordax_connector/**"
+      - "mcp_blender_unity/**"
+      - "native/ordax-product-agent/**"
+      - "tests/test_native_product_package.py"
+      - "pyproject.toml"
+      - ".github/workflows/native-product-agent.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-product-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build the pinned native executable candidate
+        run: docker build --platform linux/amd64 -f native/ordax-product-agent/Dockerfile -t ordax-native-product-candidate .
+      - name: Exercise the executable without network or an installed Python
+        run: |
+          mkdir -p out
+          docker run --rm --network none --read-only --tmpfs /tmp:exec \
+            ordax-native-product-candidate --self-test > out/self-test.json
+          container=$(docker create ordax-native-product-candidate --self-test)
+          trap 'docker rm "$container" >/dev/null' EXIT
+          docker cp "$container:/output/ordax-product-agent" out/ordax-product-agent
+          python3 native/ordax-product-agent/provenance.py --source-commit "$GITHUB_SHA" --output out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ordax-native-product-candidate-${{ github.sha }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14

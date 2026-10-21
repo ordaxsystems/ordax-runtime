@@ -55,3 +55,8 @@ computer-control handlers remain Windows-specific; Linux graphical control is
 not claimed by this change. The source integration test executes a real file
 action with isolated transport and verifies local denial, shutdown and no token
 duplication; it is not evidence of a command executed on a physical notebook.
+
+The [native executable recipe](native/ordax-product-agent/README.md) builds an
+unsigned Owner USB candidate with pinned build inputs and an offline executable
+probe. It bundles the Python executor; no device-side Python or Bash installation
+is required. Candidate creation does not install or activate the OS Runtime.

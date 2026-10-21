@@ -645,6 +645,8 @@ class DeveloperActions:
                 return ActionResult(False, "command is too long or invalid")
             if sys.platform == "win32":
                 command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command_raw]
+            elif getattr(sys, "_ordax_native_runtime", False):
+                command = ["/bin/sh", "-c", command_raw]
             else:
                 command = ["/bin/bash", "-lc", command_raw]
         else:

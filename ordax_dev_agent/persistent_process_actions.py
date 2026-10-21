@@ -340,7 +340,8 @@ class PersistentProcessActions:
         runtime = Path(__file__).with_name("persistent_process_runtime.py").resolve()
         manager_command = [
             sys.executable,
-            str(runtime),
+            *(["--persistent-process-worker"] if getattr(sys, "_ordax_native_runtime", False)
+              and getattr(sys, "frozen", False) else [str(runtime)]),
             "--state", str(state_path),
             "--log", str(log_path),
             "--stdin-file", str(stdin_path),
@@ -385,6 +386,9 @@ class PersistentProcessActions:
         temp.replace(state_path)
 
         try:
+            manager_environment = None
+            if getattr(sys, "_ordax_native_runtime", False) and getattr(sys, "frozen", False):
+                manager_environment = {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"}
             manager = subprocess.Popen(
                 manager_command,
                 cwd=str(project.root),
@@ -394,6 +398,7 @@ class PersistentProcessActions:
                 shell=False,
                 creationflags=creationflags,
                 start_new_session=start_new_session,
+                env=manager_environment,
             )
             handles = getattr(self, "_persistent_process_handles", None)
             if handles is None:
