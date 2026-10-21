@@ -26,6 +26,7 @@ $script:scenario = ''
 $script:startCount = 0
 $script:waitChecked = $false
 $script:disposeCount = 0
+$script:lastFailureType = ''
 
 function Start-Process {
     param(
@@ -75,7 +76,10 @@ function Assert-Fails {
     param([string]$ExpectedMessage)
     $failure = $null
     try { Invoke-Installer -Path 'fixture-installer' -LogName 'case.log' }
-    catch { $failure = $_.Exception.Message }
+    catch {
+        $failure = $_.Exception.Message
+        $script:lastFailureType = $_.Exception.GetType().FullName
+    }
     if (-not $failure -or $failure -notlike "*$ExpectedMessage*") {
         throw "Expected installer failure '$ExpectedMessage', got '$failure'"
     }
@@ -99,6 +103,9 @@ try {
 
     $script:scenario = 'timeout'
     Assert-Fails -ExpectedMessage 'exceeded 10 minutes'
+    if ($script:lastFailureType -ne 'System.TimeoutException') {
+        throw 'Unfinished installer did not propagate typed timeout to rollback guard'
+    }
 
     $startsBeforeReplay = $script:startCount
     [IO.File]::WriteAllText((Join-Path $transactionRootPath 'case.log'), "Installation process succeeded.`r`nLog closed.`r`n")

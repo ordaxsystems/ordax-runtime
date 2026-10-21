@@ -158,7 +158,9 @@ function Invoke-Installer {
     ) -PassThru
     try {
         if (-not $process.WaitForExit(600000)) {
-            throw 'ORDAX installer process exceeded 10 minutes'
+            # The installer may still be writing to the install tree. Its
+            # timeout must never launch a competing rollback installer.
+            throw [System.TimeoutException]::new('ORDAX installer process exceeded 10 minutes')
         }
         if ($process.ExitCode -ne 0) {
             throw "ORDAX installer exited with code $($process.ExitCode)"
@@ -288,6 +290,12 @@ try {
             throw
         }
         $targetError = $_.Exception.Message
+        if ($_.Exception -is [System.TimeoutException]) {
+            # A live or unconfirmed installer is not safe to roll back over.
+            # Preserve the uncertainty and require a deliberate recovery.
+            Write-TransactionPhase -Phase 'recovery-required' -Detail ('Target installer may still be active: ' + $targetError)
+            exit 20
+        }
         Write-TransactionPhase -Phase 'rolling-back' -Detail $targetError
         try {
             Assert-StagedInstaller -Path $RollbackInstaller -ExpectedSha256 $RollbackSha256
