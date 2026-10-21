@@ -53,6 +53,7 @@ class OrchestratorHostTests(unittest.TestCase):
         lock = json.loads((root / "contracts/orchestrator-app.lock.json").read_text())
         self.assertEqual(lock["repository"], "ordaxsystems/ordax-apps")
         self.assertEqual(lock["projectionSha256"], CONTRACT_SHA256)
+        self.assertNotIn(b"\r\n", (root / "ordax_dev_agent/assets/orchestrator_app_contract.json").read_bytes())
         self.assertEqual(len(READ_OPERATIONS), 7)
         self.assertNotIn("work_send", READ_OPERATIONS)
         self.assertNotIn("orchestrator_chat", READ_OPERATIONS)
