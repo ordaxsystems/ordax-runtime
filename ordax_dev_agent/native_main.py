@@ -21,6 +21,7 @@ def native_config(state: Path, workspace: Path, device_id: str) -> AgentConfig:
         hordax_path=workspace / ".unused-project",
         bridge_path=workspace / ".unused-bridge",
         projects={}, default_project="", workspace_root=workspace,
+        protected_roots=(state,),
         device_id=device_id, product_mcp_url=DEFAULT_PRODUCT_MCP_URL,
     )
 

@@ -275,6 +275,7 @@ def load_computer_access_policy(config) -> ComputerAccessPolicy:
             config.state_dir.resolve(),
             config.agent_repo_path.resolve(),
             Path(__file__).resolve().parents[1],
+            *(root.resolve() for root in getattr(config, "protected_roots", ())),
         ),
     )
 

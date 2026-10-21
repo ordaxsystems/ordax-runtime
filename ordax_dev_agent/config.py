@@ -25,6 +25,8 @@ class AgentConfig:
     device_id: str | None = None
     product_mcp_url: str | None = DEFAULT_PRODUCT_MCP_URL
     workspace_root: Path | None = None
+    # Trusted host-owned authority paths; never loaded from remote payloads.
+    protected_roots: tuple[Path, ...] = ()
 
     @classmethod
     def from_env(cls) -> "AgentConfig":

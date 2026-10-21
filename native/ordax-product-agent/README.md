@@ -51,5 +51,7 @@ To refresh Python locks, use the canonical pyproject plus build-only inputs:
 uv pip compile pyproject.toml native/ordax-product-agent/build-requirements.in --python-version 3.12 --generate-hashes -o native/ordax-product-agent/requirements.lock
 ```
 
-`bootstrap.lock` contains the same hashed setuptools/wheel entries, installed
-before the compiler-backed PyInstaller build with build isolation disabled.
+Refresh `bootstrap.lock` from the build-only dependency graph with
+`--no-emit-package pyinstaller`. It contains hashed build backend/tooling entries,
+installed before the compiler-backed PyInstaller build with build isolation
+disabled. The remaining Runtime dependencies are installed from the full lock.

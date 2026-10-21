@@ -46,6 +46,7 @@ class NativeProductPackageTests(unittest.TestCase):
             self.assertEqual(config.projects, {})
             self.assertEqual(config.state_dir, root / "private/product-runtime")
             self.assertEqual(config.workspace_root, root / "workspace")
+            self.assertEqual(config.protected_roots, (root / "private",))
             self.assertEqual(list(root.iterdir()), [])
 
     def test_os_identity_owner_is_loaded_without_token_copy_and_rejects_unsafe_source(self):
@@ -61,6 +62,24 @@ class NativeProductPackageTests(unittest.TestCase):
             module.chmod(0o666)
             with self.assertRaises(ValueError):
                 identity_store(root / "system", root / "private")
+
+    def test_full_filesystem_policy_keeps_os_owned_private_state_protected(self):
+        from ordax_dev_agent.actions import ActionRegistry
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            private = root / "private"
+            config = native_config(private, root, "22222222-2222-4222-8222-222222222222")
+            config.state_dir.mkdir(parents=True)
+            (config.state_dir / "agent-settings.json").write_text(json.dumps({
+                "computer_access": {"enabled": True, "full_access": True, "full_filesystem": True},
+            }))
+            credential = private / "device-agent/product-device.json"
+            credential.parent.mkdir()
+            credential.write_text("private-state-probe")
+            registry = ActionRegistry(config, computer_adapter={})
+            result = registry.execute("computer.text_read", {"path": str(credential)})
+            self.assertFalse(result.ok)
+            self.assertNotIn("private-state-probe", json.dumps(result.data))
 
     def test_missing_native_credential_never_starts_transport(self):
         with patch("ordax_dev_agent.native_main.identity_store") as owner:
