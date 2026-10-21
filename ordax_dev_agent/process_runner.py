@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from .models import ActionResult
+from .process_environment import external_process_environment
 
 
 def run_command(
@@ -28,9 +29,10 @@ def run_command(
         start_new_session = True
 
     process_env = None
-    if env is not None:
-        process_env = os.environ.copy()
-        process_env.update({str(key): str(value) for key, value in env.items()})
+    if env is not None or (getattr(sys, "frozen", False) and sys.platform == "linux"):
+        process_env = external_process_environment(
+            {str(key): str(value) for key, value in env.items()} if env else None,
+        )
 
     process = subprocess.Popen(
         command,

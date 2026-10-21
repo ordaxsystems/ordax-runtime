@@ -174,6 +174,9 @@ class ProcessRuntime:
             start_new_session = True
         child_env = os.environ.copy()
         child_env.update(self.env)
+        if getattr(sys, "frozen", False) and sys.platform == "linux":
+            from ordax_dev_agent.process_environment import external_process_environment
+            child_env = external_process_environment(self.env)
         with self.log_path.open("a", encoding="utf-8", errors="replace", buffering=1) as log:
             log.write(f"\n[ORDAX] starting: {self.command!r}\n")
             try:
