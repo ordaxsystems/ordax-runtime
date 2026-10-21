@@ -454,6 +454,18 @@ try {
   Start-Sleep -Milliseconds 750
   $runtime.Refresh()
   if (-not $runtime.HasExited) {
+    # Fail closed. The installer reported success, but the original launcher
+    # survived. Report identity and the Inno Setup log for root-cause proof.
+    $survivor = Get-CimInstance Win32_Process -Filter "ProcessId = $($runtime.Id)" -ErrorAction SilentlyContinue
+    if ($survivor) {
+      Write-Host ("ORDAX_UPGRADE_SURVIVOR pid={0} parent={1} executable={2} created={3}" -f
+        $survivor.ProcessId, $survivor.ParentProcessId, $survivor.ExecutablePath, $survivor.CreationDate)
+    }
+    if (Test-Path -LiteralPath $upgradeLog -PathType Leaf) {
+      Write-Host "ORDAX_UPGRADE_INNO_LOG_BEGIN"
+      Get-Content -LiteralPath $upgradeLog -Tail 150 | Write-Host
+      Write-Host "ORDAX_UPGRADE_INNO_LOG_END"
+    }
     throw "running runtime did not exit during upgrade"
   }
   $upgradeRuntime = Assert-SingleAutoStartedRuntime -ExecutablePath $runtimeExe -Label "ORDAX_SILENT_UPGRADE_RUNTIME"

@@ -4,6 +4,24 @@
 
 The installed Windows product must update in place without source-tree copies, parallel runtimes, screen automation or manual binary replacement.
 
+## Independent Windows distribution version
+
+windows-distribution.lock.json is the canonical source for the Windows installer
+version. It is independent of the Studio component version pinned by
+studio-source.lock.json and the packaged Runtime version. A Runtime-only fix
+advances the Windows distribution without changing the Studio source identity.
+
+The lock pins the Studio source commit and component version. Builds and signed
+release provenance gates require the exact lock and tag v<distribution-version>.
+The installed product-manifest.json uses version as the distribution and updater
+identity, studio_version as the Studio component identity and runtime_version
+separately. The Studio launcher VERSIONINFO keeps the Studio version; Inno Setup
+registration and installer filenames use the distribution version.
+
+This is NOT permission to install an unsigned candidate. Authenticode, protected
+release provenance and verified rollback requirements remain mandatory; no
+manual file replacement or alternative update pathway.
+
 ## Channels
 
 - **Dev/Owner:** Git-first delivery from canonical repositories. A dirty checkout, changed install contract or failed targeted tests blocks promotion.

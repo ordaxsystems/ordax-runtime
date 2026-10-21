@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "windows" / "assert-release-provenance.ps1"
 SOURCE_LOCK = ROOT / "studio-source.lock.json"
+DISTRIBUTION_LOCK = ROOT / "windows-distribution.lock.json"
 
 
 @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
@@ -22,10 +23,12 @@ class ReleaseProvenanceTests(unittest.TestCase):
         self.folder = Path(self.temp.name)
         self.lock = json.loads(SOURCE_LOCK.read_text(encoding="utf-8"))
         self.lock_file = self.folder / "studio-source.lock.json"
+        self.dist = json.loads(DISTRIBUTION_LOCK.read_text(encoding="utf-8"))
+        self.dist_file = self.folder / "windows-distribution.lock.json"
         self.write_lock()
         self.artifacts = self.folder / "artifacts"
         self.artifacts.mkdir()
-        self.name = f"ORDAX-Studio-Setup-{self.lock['version']}-x64.exe"
+        self.name = f"ORDAX-Studio-Setup-{self.dist['version']}-x64.exe"
         self.exe = self.artifacts / self.name
         self.exe.write_bytes(b"ordax-test-installer-bytes")
         self.hash = hashlib.sha256(self.exe.read_bytes()).hexdigest()
@@ -34,6 +37,7 @@ class ReleaseProvenanceTests(unittest.TestCase):
 
     def write_lock(self) -> None:
         self.lock_file.write_text(json.dumps(self.lock), encoding="utf-8")
+        self.dist_file.write_text(json.dumps(self.dist), encoding="utf-8")
 
     def verify(self, *, tag: str | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -44,9 +48,11 @@ class ReleaseProvenanceTests(unittest.TestCase):
                 "-File",
                 str(SCRIPT),
                 "-Tag",
-                tag if tag is not None else f"v{self.lock['version']}",
+                tag if tag is not None else f"v{self.dist['version']}",
                 "-SourceLock",
                 str(self.lock_file),
+                "-DistributionLock",
+                str(self.dist_file),
                 "-ArtifactDirectory",
                 str(self.artifacts),
             ],
@@ -65,6 +71,21 @@ class ReleaseProvenanceTests(unittest.TestCase):
         result = self.verify(tag="v0.0.0")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Release tag does not match", result.stdout + result.stderr)
+
+    def test_component_version_may_remain_unchanged(self) -> None:
+        self.assertNotEqual(self.lock["version"], self.dist["version"])
+        self.assertEqual(self.dist["studio_component_version"], self.lock["version"])
+        self.assertEqual(self.dist["studio_source_commit"], self.lock["commit"])
+        result = self.verify()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ORDAX_WINDOWS_DISTRIBUTION_RELEASE_VERSION=", result.stdout)
+
+    def test_distribution_component_mismatch_is_rejected(self) -> None:
+        self.dist["studio_component_version"] = "0.0.0"
+        self.write_lock()
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not match canonical Studio provenance", result.stdout + result.stderr)
 
     def test_checksum_tamper_fails_closed(self) -> None:
         self.exe.write_bytes(b"changed-during-transfer")

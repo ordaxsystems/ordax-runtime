@@ -172,19 +172,33 @@ if ($studioAppSource) {
 }
 
 
-# The application manifest in the pinned checkout is the only release-version
-# authority. A tag, pyproject or explicit argument cannot silently replace it.
+# Studio and Windows distribution versions have distinct, reviewed sources.
+# A Runtime-only change advances the distribution, not the Studio app.
+$studioComponentVersion = [string]$canonicalVersion
+$distributionLockPath = Join-Path $repoRoot "windows-distribution.lock.json"
+if (-not (Test-Path -LiteralPath $distributionLockPath -PathType Leaf)) {
+    throw "Windows distribution version lock is missing"
+}
+$distributionLock = Get-Content -LiteralPath $distributionLockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if (
+    $distributionLock.schema -ne "ordax.windows-distribution-lock/1" -or
+    $distributionLock.product -ne "ORDAX Studio" -or
+    $distributionLock.authority -ne "none" -or
+    [string]$distributionLock.studio_component_version -ne $studioComponentVersion -or
+    [string]$distributionLock.studio_source_commit -cne [string]$sourceLock.commit
+) {
+    throw "Windows distribution lock disagrees with canonical Studio source lock"
+}
+$distributionVersion = [string]$distributionLock.version
+if ($distributionVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    throw "Windows distribution lock requires stable MAJOR.MINOR.PATCH version"
+}
 $Version = $Version.Trim()
-if ($Version -and $Version -ne $canonicalVersion) {
-    throw "ORDAX Studio version mismatch: explicit version '$Version' differs from canonical version '$canonicalVersion'"
+if ($Version -and $Version -ne $distributionVersion) {
+    throw "Windows distribution version mismatch: explicit version '$Version' differs from lock '$distributionVersion'"
 }
-$Version = $canonicalVersion
-$versionSource = "ordax-apps-lock"
-
-
-if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
-    throw "ORDAX Studio version is not valid semantic version syntax: $Version"
-}
+$Version = $distributionVersion
+$versionSource = "windows-distribution-lock"
 
 $hostVersion = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
 $targetMinor = ($PythonVersion -split '\.')[0..1] -join '.'
@@ -272,7 +286,7 @@ $runtimePackageAssertion = Join-Path $repoRoot "scripts\windows\assert-runtime-p
 if ($LASTEXITCODE -ne 0) {
     throw "Private ORDAX Python runtime import smoke failed"
 }
-& $privatePython -c "from ordax_dev_agent.application_intelligence_actions import load_app_intelligence_registry; r = load_app_intelligence_registry(); assert r['available'] and r['by_id']['studio']['version'] == '$Version'; print('ORDAX_APP_INTELLIGENCE_REGISTRY_OK')"
+& $privatePython -c "from ordax_dev_agent.application_intelligence_actions import load_app_intelligence_registry; r = load_app_intelligence_registry(); assert r['available'] and r['by_id']['studio']['version'] == '$studioComponentVersion'; print('ORDAX_APP_INTELLIGENCE_REGISTRY_OK')"
 if ($LASTEXITCODE -ne 0) {
     throw "Packaged App Intelligence registry validation failed"
 }
@@ -362,7 +376,7 @@ $studioRc = Join-Path $buildRoot "ordax-studio-version.rc"
 $studioRes = Join-Path $buildRoot "ordax-studio-version.res"
 $runtimeRc = Join-Path $buildRoot "ordax-runtime-version.rc"
 $runtimeRes = Join-Path $buildRoot "ordax-runtime-version.res"
-Write-LauncherVersionResource $studioRc $Version "ORDAX Studio launcher" "ORDAX Studio" "ORDAX Studio.exe"
+Write-LauncherVersionResource $studioRc $studioComponentVersion "ORDAX Studio launcher" "ORDAX Studio" "ORDAX Studio.exe"
 Write-LauncherVersionResource $runtimeRc $runtimeVersion "ORDAX Runtime launcher" "ORDAX Runtime" "ORDAX Runtime.exe"
 
 Push-Location $buildRoot
@@ -386,8 +400,8 @@ if (-not (Test-Path $studioExe) -or -not (Test-Path $runtimeExe)) {
     throw "Native ORDAX launchers were not produced"
 }
 $studioVersionInfo = (Get-Item -LiteralPath $studioExe).VersionInfo
-if ($studioVersionInfo.FileVersion -ne $Version -or $studioVersionInfo.ProductVersion -ne $Version) {
-    throw "ORDAX Studio launcher VERSIONINFO does not match canonical Studio version $Version"
+if ($studioVersionInfo.FileVersion -ne $studioComponentVersion -or $studioVersionInfo.ProductVersion -ne $studioComponentVersion) {
+    throw "ORDAX Studio launcher VERSIONINFO does not match canonical Studio version $studioComponentVersion"
 }
 $runtimeVersionInfo = (Get-Item -LiteralPath $runtimeExe).VersionInfo
 if ($runtimeVersionInfo.FileVersion -ne $runtimeVersion -or $runtimeVersionInfo.ProductVersion -ne $runtimeVersion) {
@@ -412,8 +426,10 @@ $manifest = [ordered]@{
     version = $Version
     version_provenance = @{
         source = $versionSource
-        canonical_version_asserted = [bool]$canonicalVersion
+        canonical_version_asserted = $true
+        studio_component_source = "ordax-apps-lock"
     }
+    studio_version = $studioComponentVersion
     runtime_version = $runtimeVersion
     architecture = "x64"
     python = $PythonVersion
@@ -460,7 +476,9 @@ if (-not $setup) {
     throw "Installer output was not produced"
 }
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup.FullName).Hash.ToLowerInvariant()
-Write-Output "ORDAX_STUDIO_VERSION=$Version"
-Write-Output "ORDAX_STUDIO_VERSION_SOURCE=$versionSource"
+Write-Output "ORDAX_STUDIO_VERSION=$studioComponentVersion"
+Write-Output "ORDAX_WINDOWS_DISTRIBUTION_VERSION=$Version"
+Write-Output "ORDAX_STUDIO_VERSION_SOURCE=ordax-apps-lock"
+Write-Output "ORDAX_WINDOWS_DISTRIBUTION_VERSION_SOURCE=$versionSource"
 Write-Output "ORDAX_STUDIO_SETUP=$($setup.FullName)"
 Write-Output "ORDAX_STUDIO_SETUP_SHA256=$hash"
