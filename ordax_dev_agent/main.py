@@ -11,6 +11,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Callable
+from collections.abc import Mapping
 
 from . import __version__
 from .config import AgentConfig
@@ -287,6 +288,8 @@ def run(
     config: AgentConfig,
     *,
     device_credential_provider: Callable[[], dict[str, str] | None] | None = None,
+    computer_adapter: Mapping | None = None,
+    status_port: int = 8765,
 ) -> int:
     """Run the canonical lifecycle with host-owned configuration and identity.
 
@@ -295,6 +298,8 @@ def run(
     scheduler, grant authority, credential file or command transport.
     Call from the owning process's main thread (signal handlers are installed).
     """
+    if type(status_port) is not int or not 0 <= status_port <= 65535:
+        raise ValueError("Runtime status port is invalid")
     if device_credential_provider is not None:
         if not callable(device_credential_provider):
             raise TypeError("Device credential provider must be callable")
@@ -302,6 +307,10 @@ def run(
             raise ValueError("Native Runtime requires an enrolled Product device and origin")
         if str(config.control_plane_protocol).strip().lower() != "cloudflare-v3":
             raise ValueError("Native Runtime requires the canonical Product transport")
+        # A native host must not advertise Windows-only handlers. An absent
+        # adapter means no graphical capability, not a fallback to Win32.
+        if computer_adapter is None:
+            computer_adapter = {}
     started_monotonic = time.monotonic()
     _startup_log(config, f"RUN_ENTER pid={os.getpid()} version={__version__}")
     _startup_log(config, "CONFIG_READY")
@@ -349,12 +358,14 @@ def run(
             },
         }
 
-    status_server = start_status_server(status_payload, health_provider=health_payload)
-    _startup_log(config, "STATUS_SERVER_READY port=8765")
+    status_server = start_status_server(
+        status_payload, port=status_port, health_provider=health_payload,
+    )
+    _startup_log(config, f"STATUS_SERVER_READY port={status_server.server_port}")
 
     from .actions import ActionRegistry
     _startup_log(config, "ACTION_REGISTRY_IMPORT_OK")
-    registry = ActionRegistry(config)
+    registry = ActionRegistry(config, computer_adapter=computer_adapter)
     _startup_log(config, f"ACTION_REGISTRY_READY actions={len(registry.names)}")
 
     watchdog_process = _start_local_watchdog(config)

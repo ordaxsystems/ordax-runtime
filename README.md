@@ -40,6 +40,14 @@ token. It uses the same dispatch loop, Product transport, Central attestation,
 lease renewal and terminal-result recovery as the existing CLI. Local policy and
 remote device grants still apply; this API does not authorize itself.
 
+The host may choose `status_port=0` for an OS-assigned loopback port, keeping the
+Runtime status listener separate from the Native Surface listener. Native calls
+exclude Win32 graphical actions by default. `computer_adapter` may supply a
+mapping of implemented graphical action names to typed handlers; only the
+existing graphical contracts can be replaced, and shared local policy and
+dispatch locking apply before those handlers run. Unsupported actions are not
+advertised and cannot fall back to Windows handlers.
+
 This is a source composition seam, not an installed OS Runtime. Native activation
 still requires OS-owned packaging and lifecycle (one heartbeat owner), native
 policy, device-scoped grants and device verification. The existing graphical
