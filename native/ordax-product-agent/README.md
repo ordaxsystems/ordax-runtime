@@ -13,14 +13,55 @@ docker build --platform linux/amd64 -f native/ordax-product-agent/Dockerfile -t 
 docker run --rm --network none --read-only --tmpfs /tmp:exec ordax-native-product-candidate --self-test
 ```
 
-The base images are pinned by digest, direct compiler packages by exact version,
-and Python dependencies by version and hashes. The minimal proof image has no
-Python installation. The executable probe performs real temporary filesystem,
+The current recipe **still uses Alpine only as a build/proof container**,
+not as OrdaX OS userspace. Pinning its image and dependencies does **not** make
+the resulting ELF independent of Alpine's musl/zlib toolchain. The minimal
+container proof image has no Python installation, but the actual executable
+contains a frozen Python runtime and may need a Linux dynamic loader and
+native shared libraries. The executable probe performs real temporary filesystem,
 terminal and supervised-process operations without network or device credentials.
 The CI artifact includes executable SHA-256/size, exact source SHA, dependency
 lock/recipe hashes and the offline proof. Byte-for-byte reproducibility has not
 been established. This is an unsigned candidate, not an installable signed OS
 component or evidence of physical notebook execution.
+
+## Independent Base / kernel-only ABI gate
+
+The OrdaX OS Independent Base uses a **Buildroot-built static musl** userspace.
+That base does not promise an Alpine loader, APK or a dynamic libz. The
+existing Alpine-produced ELF is **not ready for it**. Building and executing
+an ELF inside Alpine proves neither kernel-only compatibility nor the
+portability of its frozen Python shared-object closure.
+
+The canonical `provenance.py` records `elf_interpreter`,
+`elf_needed_libraries`, `independent_base_abi_ready` and
+`independent_base_abi_blockers` in the **same candidate.json**. The auditor
+parses ELF segments and dynamic tags directly, without running the artifact,
+using Alpine or relying on `ldd`. CI prints the report for the actual
+compiled executable.
+
+To inspect without authorizing or installing anything:
+
+```sh
+python3 native/ordax-product-agent/audit_elf.py \
+  --binary out/ordax-product-agent \
+  --recipe native/ordax-product-agent/Dockerfile
+```
+
+The release-gate form `--require-independent` exits nonzero if the ELF
+needs an external interpreter or shared library, the build recipe is Alpine,
+or a PyInstaller archive has no audited extracted-library closure. A
+candidate's normal CI build may remain green while these **explicit** blockers
+exist; `installation_authorized_by_candidate=false` is still mandatory.
+
+Do **not** fix this by adding an Alpine minirootfs, creating a loader symlink,
+copying `/lib/ld-musl-...` from an Alpine image or replacing Alpine with a
+Debian/glibc runtime. The actual next build must use the canonical
+Independent Base toolchain or an equivalently reproducible OrdaX-owned
+userspace ABI, prove the **whole** bundled interpreter/native-module closure,
+and pass the strict gate before any signing/install/health proof. The
+Independent Base integration remains owned by `ordax-os#1860`; this repo
+owns the single Runtime implementation and its candidate provenance.
 
 The OS must supervise a single instance and replace its discovery-only presence
 owner before activation. A future verified installation may invoke:
