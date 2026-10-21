@@ -119,6 +119,23 @@ MCP projection, and live account/device E2E. No production action is registered.
 
 ## Authenticated lease renewal candidate — 2026-10-21
 
+### Canonical Product authority port
+
+`ProductDeviceControlPlane.orchestrator_read_authorizer(job)` supplies the
+existing bridge callback from the authenticated device transport. It requires
+the exact registered `AgentJob` instance for `orchestrator.app_read`, freezes
+its seven execution fences and rechecks them before/after every HTTP response.
+No subject/client/grant fields are read from job payloads. The Platform RPC
+derives those identities from the running task and revalidates current account,
+OAuth consent/client, canonical grant, device and execution lease on each call.
+Replies must match the device, App/capability and bounded typed expiry.
+
+This is an authority port, not an installed App, production action registration
+or local grant issuer. The launcher still independently requires verified
+installation provenance. Platform source/migration must be applied/deployed
+before this callback can be wired to an actual Product executor. No fallback
+or cached previous authority is available after denial or task completion.
+
 App alpha.3 advertises `leaseRenewal: hmac-sha256-key-rotation/1` during
 bootstrap. `OrchestratorAppReadClient.renew()` and the managed session extend
 only an unexpired session after resolving the same subject/client/device/grant

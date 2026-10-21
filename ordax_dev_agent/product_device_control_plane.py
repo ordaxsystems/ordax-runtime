@@ -311,6 +311,47 @@ class ProductDeviceControlPlane:
             "lease_seconds": 120,
         })
 
+    def orchestrator_read_authorizer(self, job: AgentJob):
+        """Live Product authority for one claimed, exactly fenced App-read job.
+
+        This port neither registers an action nor launches an App. Installation
+        provenance remains an independent prerequisite of the managed launcher.
+        The model cannot supply subject/client/grant or a serialized receipt.
+        """
+        from .orchestrator_app_bridge import (
+            OrchestratorBridgeUnavailable, VerifiedOrchestratorReadAuthorization,
+            require_orchestrator_read_authorization,
+        )
+        fields = frozenset({"job_id", "effect_id", "attempt_id", "lease_id",
+                            "execution_epoch", "agent_instance_id", "boot_id"})
+        def fence():
+            if (not isinstance(job, AgentJob) or self._jobs.get(job.id) is not job
+                    or job.action != "orchestrator.app_read" or job.project_slug is not None):
+                raise OrchestratorBridgeUnavailable("host_product_action_required")
+            return {key: value for key, value in self._execution_context(job).items() if key in fields}
+        expected_fence = fence()
+        expected_device = self.device_id
+        def authorize():
+            if self.device_id != expected_device or fence() != expected_fence:
+                raise OrchestratorBridgeUnavailable("host_product_action_changed")
+            reply = self._post("orchestrator-read-authorization", dict(expected_fence))
+            if self.device_id != expected_device or fence() != expected_fence:
+                raise OrchestratorBridgeUnavailable("host_product_action_changed")
+            value = reply.get("authorization")
+            expected_keys = {"schema", "subject_id", "client_id", "device_id", "grant_id",
+                             "app_id", "capability", "expires_at_ms"}
+            now = int(time.time() * 1000)
+            if (reply.get("ok") is not True or type(value) is not dict
+                    or set(value) != expected_keys
+                    or value.get("schema") != "ordax.orchestrator-read-authorization/1"
+                    or value.get("device_id") != expected_device
+                    or type(value.get("expires_at_ms")) is not int
+                    or value["expires_at_ms"] > now + 300000):
+                raise OrchestratorBridgeUnavailable("host_product_authorization_invalid")
+            authority = VerifiedOrchestratorReadAuthorization(**{key: item for key, item in value.items() if key != "schema"})
+            return require_orchestrator_read_authorization(lambda: authority, lambda: now)
+        return authorize
+
     @staticmethod
     def _canonical_bytes(body: dict[str, Any]) -> bytes:
         return json.dumps(body, sort_keys=True, separators=(",", ":"),
