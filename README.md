@@ -31,3 +31,19 @@ Device-only presence uses the existing [Product presence client](docs/PRODUCT-DE
 with a verified canonical UUID/credential, bounded receipts and a total deadline.
 It rejects inherited account authentication. The normal legacy heartbeat is not
 rewired automatically; production cutover remains a separate coordinated gate.
+
+Native OS composition can call `ordax_dev_agent.main.run(config,
+device_credential_provider=identity_store.read_enrolled_credential)` in the owning
+process's main thread. `config` is an explicit `AgentConfig` supplied by the OS;
+this entry does not read Windows environment defaults or create a second device
+token. It uses the same dispatch loop, Product transport, Central attestation,
+lease renewal and terminal-result recovery as the existing CLI. Local policy and
+remote device grants still apply; this API does not authorize itself.
+
+This is a source composition seam, not an installed OS Runtime. Native activation
+still requires OS-owned packaging and lifecycle (one heartbeat owner), native
+policy, device-scoped grants and device verification. The existing graphical
+computer-control handlers remain Windows-specific; Linux graphical control is
+not claimed by this change. The source integration test executes a real file
+action with isolated transport and verifies local denial, shutdown and no token
+duplication; it is not evidence of a command executed on a physical notebook.
