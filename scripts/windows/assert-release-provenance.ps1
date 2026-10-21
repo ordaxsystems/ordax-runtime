@@ -4,6 +4,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
     [Parameter(Mandatory = $true)][string]$SourceLock,
+    [Parameter(Mandatory = $true)][string]$DistributionLock,
     [Parameter(Mandatory = $true)][string]$ArtifactDirectory
 )
 
@@ -11,6 +12,9 @@ $ErrorActionPreference = "Stop"
 
 if (-not (Test-Path -LiteralPath $SourceLock -PathType Leaf)) {
     throw "Canonical Studio source lock is missing"
+}
+if (-not (Test-Path -LiteralPath $DistributionLock -PathType Leaf)) {
+    throw "Canonical Windows distribution lock is missing"
 }
 if (-not (Test-Path -LiteralPath $ArtifactDirectory -PathType Container)) {
     throw "Validated Windows artifact directory is missing"
@@ -24,13 +28,21 @@ if ($lock.schema -cne "ordax.studio-source-lock/1" -or
     [string]$lock.commit -cnotmatch '^[a-f0-9]{40}$') {
     throw "Canonical Studio source lock identity/provenance is invalid"
 }
-$version = [string]$lock.version
-if ($version -cnotmatch '^\d+\.\d+\.\d+$') {
-    throw "Canonical Studio version must be a stable three-part version"
+$distribution = Get-Content -LiteralPath $DistributionLock -Raw | ConvertFrom-Json
+if ($distribution.schema -cne "ordax.windows-distribution-lock/1" -or
+    $distribution.product -cne "ORDAX Studio" -or
+    $distribution.authority -cne "none" -or
+    [string]$distribution.studio_component_version -cne [string]$lock.version -or
+    [string]$distribution.studio_source_commit -cne [string]$lock.commit) {
+    throw "Windows distribution lock does not match canonical Studio provenance"
+}
+$version = [string]$distribution.version
+if ($version -cnotmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    throw "Windows distribution requires stable MAJOR.MINOR.PATCH"
 }
 $expectedTag = "v$version"
 if ($Tag -cne $expectedTag) {
-    throw "Release tag does not match canonical Studio version ($expectedTag)"
+    throw "Release tag does not match canonical Windows distribution version ($expectedTag)"
 }
 
 $expectedName = "ORDAX-Studio-Setup-$version-x64.exe"
@@ -76,5 +88,6 @@ if ($actualHash -cne $expectedHash) {
 }
 
 Write-Host "ORDAX_RELEASE_PROVENANCE_VALID"
-Write-Host "ORDAX_STUDIO_RELEASE_VERSION=$version"
+Write-Host "ORDAX_WINDOWS_DISTRIBUTION_RELEASE_VERSION=$version"
+Write-Host "ORDAX_STUDIO_RELEASE_VERSION=$($lock.version)"
 Write-Host "ORDAX_STUDIO_RELEASE_SOURCE_COMMIT=$($lock.commit)"
