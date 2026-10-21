@@ -1,8 +1,10 @@
 # OrdaX Owner Linux Recovery Agent
 
 This directory owns the **portable Linux transport** for the internal
-`owner-development` USB. It reuses the existing Cloudflare v3 Device Agent
-protocol but intentionally exposes only a tiny typed recovery surface.
+`owner-development` USB. It uses only the canonical PostgreSQL-backed Product MCP device transport
+at `/v3/device/transport/*`, with a tiny typed recovery surface.
+The old D1/WebSocket execution path is not compiled or available.
+Transport overrides are rejected; no fallback authority is permitted.
 
 It is not a second Device Agent and it is not a Stable/MVP component.
 
