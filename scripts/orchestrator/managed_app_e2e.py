@@ -59,7 +59,40 @@ def run():
                 session.close()
                 if session._child.poll() is not None:
                     raise RuntimeError('managed_fixture_closed_human_app')
+                # A second disposable profile exercises the Product task executor,
+                # real live-authority parser and real verified launcher together.
+                from ordax_dev_agent.models import AgentJob
+                from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
+                from ordax_dev_agent.orchestrator_product_execution import execute_orchestrator_app_status
+                with tempfile.TemporaryDirectory(prefix='ordax-product-app-ci-', ignore_cleanup_errors=True) as product_profile:
+                    fingerprint = hashlib.sha256(str(Path(product_profile) / 'OrdaX/OrchestratorLab').lower().encode()).hexdigest()
+                    product_installation = replace(installation, expected=replace(expected, profile_fingerprint=fingerprint))
+                    plane = ProductDeviceControlPlane.__new__(ProductDeviceControlPlane)
+                    plane.device_id = str(uuid.uuid4())
+                    plane.runtime_kind, plane.agent_version = 'desktop-agent', 'ci-fixture'
+                    job = AgentJob(id=str(uuid.uuid4()), action='orchestrator.app_read',
+                        effect_id=str(uuid.uuid4()), attempt_id=str(uuid.uuid4()), lease_token=str(uuid.uuid4()),
+                        execution_epoch=1, agent_instance_id=str(uuid.uuid4()), boot_id='ci-fixture-boot')
+                    plane._jobs = {job.id: job}
+                    calls = []
+                    subject_id, grant_id = str(uuid.uuid4()), str(uuid.uuid4())
+                    def product_post(operation, body):
+                        calls.append(operation)
+                        return {'ok': True, 'authorization': {
+                            'schema': 'ordax.orchestrator-read-authorization/1',
+                            'subject_id': subject_id, 'client_id': 'oauth-managed-ci-fixture',
+                            'device_id': plane.device_id, 'grant_id': grant_id,
+                            'app_id': 'br.com.ordax.orchestrator.lab', 'capability': 'orchestrator.app_read',
+                            'expires_at_ms': int(time.time()*1000)+120000}}
+                    plane._post = product_post
+                    with patch.dict(os.environ, {'LOCALAPPDATA': product_profile}), patch(
+                            'ordax_dev_agent.orchestrator_app_launcher.subprocess.Popen', side_effect=capture):
+                        result = execute_orchestrator_app_status(plane, job,
+                            installation_provider=lambda: product_installation)
+                    if not result.ok or result.data['status']['engine'] != 'app-owned' or len(calls) < 4:
+                        raise RuntimeError('managed_fixture_product_execution_mismatch')
                 print(json.dumps({'schema':'ordax.orchestrator-managed-app-e2e/1', 'ok':True,
+                    'productTaskExecutor':True, 'freshProductAuthorization':True,
                     'pythonRuntimeClient':True, 'packagedElectron':True, 'allBundleFilesPinned':True,
                     'kernelPeerPidVerified':True, 'freshProfileVerified':True,
                     'humanAppPreservedOnClose':True, 'authorizationFixture':True,

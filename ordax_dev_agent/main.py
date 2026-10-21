@@ -290,6 +290,7 @@ def run(
     device_credential_provider: Callable[[], dict[str, str] | None] | None = None,
     computer_adapter: Mapping | None = None,
     status_port: int = 8765,
+    orchestrator_installation_provider: Callable | None = None,
 ) -> int:
     """Run the canonical lifecycle with host-owned configuration and identity.
 
@@ -300,6 +301,8 @@ def run(
     """
     if type(status_port) is not int or not 0 <= status_port <= 65535:
         raise ValueError("Runtime status port is invalid")
+    if orchestrator_installation_provider is not None and not callable(orchestrator_installation_provider):
+        raise TypeError("Orchestrator installation provider must be host-owned and callable")
     if device_credential_provider is not None:
         if not callable(device_credential_provider):
             raise TypeError("Device credential provider must be callable")
@@ -366,6 +369,10 @@ def run(
     from .actions import ActionRegistry
     _startup_log(config, "ACTION_REGISTRY_IMPORT_OK")
     registry = ActionRegistry(config, computer_adapter=computer_adapter)
+    # Host composition owns App installation provenance; never advertise a
+    # capability that this host cannot connect to an installed App.
+    host_actions = sorted({*registry.names, *({"orchestrator.app_read"}
+        if callable(orchestrator_installation_provider) else set())})
     _startup_log(config, f"ACTION_REGISTRY_READY actions={len(registry.names)}")
 
     watchdog_process = _start_local_watchdog(config)
@@ -446,7 +453,7 @@ def run(
     while not stop and not runtime["paired"]:
         try:
             paired_now = control.pair_if_needed(
-                registry.names,
+                host_actions,
                 agent_version=__version__,
                 metadata=_agent_metadata(config),
             )
@@ -490,7 +497,7 @@ def run(
 
                 if now >= next_heartbeat:
                     control.heartbeat(
-                        registry.names,
+                        host_actions,
                         agent_version=__version__,
                         metadata=_agent_metadata(config),
                     )
@@ -567,7 +574,7 @@ def run(
                                 file=sys.stderr,
                             )
                         try:
-                            control.heartbeat(registry.names, agent_version=__version__,
+                            control.heartbeat(host_actions, agent_version=__version__,
                                               status="busy")
                             runtime["last_heartbeat_at"] = time.time()
                         except Exception as error:
@@ -586,7 +593,11 @@ def run(
                             PRODUCT_REMOTE_CAPABILITY,
                             PRODUCT_REMOTE_LEGACY_CAPABILITY,
                         )
-                        if job.action in {PRODUCT_REMOTE_CAPABILITY, PRODUCT_REMOTE_LEGACY_CAPABILITY}:
+                        if job.action == "orchestrator.app_read":
+                            from .orchestrator_product_execution import execute_orchestrator_app_status
+                            result = execute_orchestrator_app_status(control, job,
+                                installation_provider=orchestrator_installation_provider)
+                        elif job.action in {PRODUCT_REMOTE_CAPABILITY, PRODUCT_REMOTE_LEGACY_CAPABILITY}:
                             from .product_remote import execute_product_invocation
                             result = execute_product_invocation(
                                 registry,
@@ -666,7 +677,7 @@ def run(
         runtime["state"] = "stopping"
         try:
             control.heartbeat(
-                registry.names,
+                host_actions,
                 agent_version=__version__,
                 metadata=_agent_metadata(config),
                 status="offline",

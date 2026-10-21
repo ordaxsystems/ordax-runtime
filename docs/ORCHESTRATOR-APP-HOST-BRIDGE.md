@@ -172,3 +172,18 @@ an active human App; stop conditions, scheduler policy and live authority bindin
 neither silently relaunches an App on expiry nor converts a read grant to sends.
 Installation/update owners must drain read sessions and release bundle pins
 before changing installed files; this launcher does not become an updater.
+
+## Public status task composition
+
+The public `orchestrator_lab_status` action uses only `orchestrator.app_read`,
+empty action arguments and a dedicated read grant. Runtime dispatch resolves live
+Product authority before installation access, launches through the verified private
+channel, reads only `status`, reauthorizes and closes the channel. Model input cannot
+supply installation paths, receipts, identities or another service operation.
+
+Host composition must provide the verified installation provider before Runtime
+advertises this capability. Without it, execution returns
+`orchestrator_installation_unverified`; CI artifacts do not create installation trust.
+The Windows fixture additionally exercises Product task execution against packaged
+Electron with disposable installation/authority fixtures. This is not a live grant
+or evidence of installation on a customer device.

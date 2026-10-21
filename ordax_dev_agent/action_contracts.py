@@ -37,7 +37,7 @@ class DispatchedAction:
 
 def is_device_owned_capability(capability: str) -> bool:
     """Return whether a capability belongs to the Device Agent action surface."""
-    return capability.startswith(DEVICE_ACTION_PREFIXES)
+    return capability == "orchestrator.app_read" or capability.startswith(DEVICE_ACTION_PREFIXES)
 
 
 def dispatch_device_capability(

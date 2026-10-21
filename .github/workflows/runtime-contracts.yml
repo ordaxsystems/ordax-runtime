@@ -29,6 +29,7 @@ jobs:
           tests.test_terminal_outbox
           tests.test_orchestrator_app_bridge
           tests.test_orchestrator_product_authority
+          tests.test_orchestrator_product_execution
           tests.test_orchestrator_app_launcher
           tests.test_canonical_control_plane_defaults
           tests.test_ordax_device_agent_alias
@@ -101,6 +102,7 @@ jobs:
           tests.test_product_gateway
           tests.test_orchestrator_app_bridge
           tests.test_orchestrator_product_authority
+          tests.test_orchestrator_product_execution
           tests.test_orchestrator_app_launcher
           tests.test_application_intelligence_actions
           tests.test_product_mcp
