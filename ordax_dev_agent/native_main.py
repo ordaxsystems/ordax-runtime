@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import importlib.util
 import json
 import os
+import time
 from pathlib import Path
 import stat
 import sys
@@ -90,6 +92,62 @@ def self_test() -> dict:
                 "probes": ["filesystem", "terminal", "supervised-process"]}
 
 
+def acquire_native_product_instance_lock(
+    runtime_state: Path, *, timeout_seconds: float = 6.0,
+) -> int:
+    """Acquire the same owner-development lock used by OS discovery reports.
+
+    ProductDevicePresenceClient briefly locks this existing Runtime instance
+    file while a device-authenticated online/offline report is in flight.
+    Retry that bounded contention, but never run beside another Runtime.
+    No separate lock, owner registry, bus, probe or new credential is created.
+    """
+    if (not isinstance(runtime_state, Path) or not runtime_state.is_absolute()
+            or not 0 <= timeout_seconds <= 10):
+        raise ValueError("invalid native Runtime singleton lock configuration")
+    directory_fd = None
+    descriptor = None
+    try:
+        directory_fd = os.open(
+            runtime_state,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        directory = os.fstat(directory_fd)
+        if (not stat.S_ISDIR(directory.st_mode)
+                or directory.st_uid != os.geteuid()
+                or stat.S_IMODE(directory.st_mode) != 0o700):
+            raise RuntimeError("native_product_runtime_state_unsafe")
+        descriptor = os.open(
+            "instance.lock",
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600, dir_fd=directory_fd,
+        )
+        owner = os.fstat(descriptor)
+        if (not stat.S_ISREG(owner.st_mode)
+                or owner.st_uid != os.geteuid()
+                or owner.st_nlink != 1
+                or stat.S_IMODE(owner.st_mode) != 0o600):
+            raise RuntimeError("native_product_runtime_instance_lock_unsafe")
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                owned = descriptor
+                descriptor = None
+                return owned
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("native_product_runtime_instance_busy") from None
+                time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
 def main(argv: list[str] | None = None) -> int:
     sys._ordax_native_runtime = True
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -128,12 +186,12 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("native_product_identity_or_visibility_unavailable")
     config = native_config(args.state_root, args.workspace, credential["device_id"])
     config.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    # The OS lifecycle owner holds this lock before launching. This second
-    # process-wide guard also rejects accidental direct duplicate launches.
-    import fcntl
-    lock = os.open(config.state_dir / "instance.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    # The OS lifecycle owner must still verify and install the signed
+    # executable. The same cross-process singleton lock is shared with
+    # discovery so one in-flight presence report can complete before Runtime
+    # takes over, without permitting two simultaneous agents.
+    lock = acquire_native_product_instance_lock(config.state_dir)
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         from .main import run
         return run(config, device_credential_provider=store.read_enrolled_credential,
                    computer_adapter={}, status_port=args.status_port)
