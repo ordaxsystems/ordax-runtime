@@ -43,6 +43,38 @@ O `ProductRemoteClient` do Runtime é o único cliente HTTP, usando:
 PostgreSQL/Platform permanece autoridade final, inclusive revogação.
 `device-native-terminal` e `full-computer-control` exigem Full Access ativado na política local. Ambos passam pela autoridade canônica PostgreSQL/Platform, com OAuth Owner explícito. O primeiro concede somente execução de terminal no dispositivo, sem GitHub/Space, e não habilita outras famílias de ações.
 
+## Ativação explícita para desenvolvimento (sem abrir MCP público)
+
+No **próprio notebook OrdaX**, com o Runtime atualizado a partir do repositório
+e o `device_id` da instalação validado, execute:
+
+```powershell
+& '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli dev-enable --device 0a563924-e4d1-4328-bcb0-f73820c92e1b --client <CLIENTE_OAUTH_CONSENTIDO> --days 30
+```
+
+O comando usa **um único login Owner OAuth PKCE** e:
+1. Confirma que o dispositivo solicitado é exatamente o dispositivo instalado,
+   nunca o desktop de administração ou outro computador.
+2. Ativa `computer_access.enabled`, `full_access` e `full_filesystem`
+   na política local usando o escritor atômico com revisão SHA-256.
+3. Solicita `full-computer-control` ao Control Plane para o cliente OAuth
+   consentido, dispositivo exato e prazo de validade informado.
+4. Informa que prontidão local e concessão **não** comprovam execução MCP;
+   o teste real ainda exige sessão confiável atestada pelo Runtime.
+
+Isso libera o conjunto de ações de computador implementadas no Runtime, inclusive
+terminal e processos, mas **não** elimina o proprietário autenticado, revogação,
+auditoria, controles do host, escopos de Projects, nem proteções de integridade
+das credenciais e fontes executáveis do próprio Runtime. O modo não é ativado
+automaticamente por deploy ou pela simples presença do notebook.
+
+Se o Control Plane negar o grant depois que a política local for salva, essa
+política continuará configurada para desenvolvimento. A ação remota seguirá
+negada até existir um grant Owner válido; examine o retorno, ajuste o cliente
+consentido e só então repita o comando. Para desativar o modo local, use o
+controle de acesso Owner da instalação; para revogar a autorização remota, use
+`ordax-owner-grants revoke`. Não remova a credencial do dispositivo.
+
 ## Diagnóstico de prontidão para substituir o Remote
 
 `diagnose` usa o mesmo OAuth Owner e apenas **GET /v3/owner/remote-authority**.
