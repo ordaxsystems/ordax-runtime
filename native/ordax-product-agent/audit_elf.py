@@ -118,7 +118,7 @@ def inspect_elf(binary: bytes, recipe: str = "") -> dict:
     alpine_recipe = bool(re.search(
         r"(?im)^\s*(?:FROM\s+[^\n]*alpine|RUN\s+[^\n]*\bapk\s+add\b)", recipe
     ))
-    pyinstaller_archive = b"MEI\x0c\x0b\x0a\x0b\x0e" in binary[-512:]
+    pyinstaller_archive = (\n        b"MEI\x0c\x0b\x0a\x0b\x0e" in binary[-16384:]\n        or bool(re.search(r"(?i)\\bpyinstaller\\b", recipe))\n    )
     blockers = []
     if interpreter:
         blockers.append("external-dynamic-elf-interpreter")
