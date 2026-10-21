@@ -9,6 +9,7 @@ on:
       - "mcp_blender_unity/**"
       - "native/ordax-product-agent/**"
       - "tests/test_native_product_package.py"
+      - "tests/test_native_product_abi.py"
       - "pyproject.toml"
       - ".github/workflows/native-product-agent.yml"
   push:
@@ -20,6 +21,7 @@ on:
       - "mcp_blender_unity/**"
       - "native/ordax-product-agent/**"
       - "tests/test_native_product_package.py"
+      - "tests/test_native_product_abi.py"
       - "pyproject.toml"
       - ".github/workflows/native-product-agent.yml"
   workflow_dispatch:
@@ -52,9 +54,9 @@ jobs:
           # successful container self-test. Do not confuse CI green with
           # kernel-only activation readiness. This report is diagnostic until
           # the signed Independent Base can consume the exact native artifact.
-          python3 native/ordax-product-agent/audit_elf.py \\
-            --binary out/ordax-product-agent \\
-            --recipe native/ordax-product-agent/Dockerfile \\
+          python3 native/ordax-product-agent/audit_elf.py \
+            --binary out/ordax-product-agent \
+            --recipe native/ordax-product-agent/Dockerfile \
             > "$RUNNER_TEMP/ordax-native-abi.json"
           python3 - <<'PY'
           import json
