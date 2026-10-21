@@ -6,6 +6,7 @@ import re
 from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Callable
+from collections.abc import Mapping
 
 from .config import AgentConfig
 from .models import ActionResult
@@ -67,6 +68,16 @@ from .adapter_contracts import (
 
 
 Action = Callable[[dict[str, Any]], ActionResult]
+
+# Platform implementations may replace only these existing action contracts.
+# Policy, dispatch locking and remote authorization stay in the shared core.
+COMPUTER_GRAPHICAL_ACTIONS = frozenset({
+    "computer.windows", "computer.active_window", "computer.screenshot",
+    "computer.screen_info", "computer.mouse_move", "computer.drag",
+    "computer.clipboard_read", "computer.clipboard_write", "computer.launch_app",
+    "computer.focus_window", "computer.click", "computer.type",
+    "computer.hotkey", "computer.scroll",
+})
 
 _COMPUTER_OWNER_STATUS_ACTIONS = frozenset({
     "computer.access_status",
@@ -158,7 +169,16 @@ class ActionRegistry(
 ):
     """Canonical typed action registry for local and remote ORDAX capabilities."""
 
-    def __init__(self, config: AgentConfig):
+    def __init__(
+        self, config: AgentConfig, *,
+        computer_adapter: Mapping[str, Action] | None = None,
+    ):
+        if computer_adapter is not None:
+            if not isinstance(computer_adapter, Mapping):
+                raise TypeError("Computer adapter must be an action mapping")
+            if any(name not in COMPUTER_GRAPHICAL_ACTIONS or not callable(handler)
+                   for name, handler in computer_adapter.items()):
+                raise ValueError("Computer adapter contains an invalid graphical action")
         self.desktop_coordinate_space = ensure_physical_desktop_coordinates()
         self.config = config
         self.projects = load_projects(config)
@@ -458,6 +478,10 @@ class ActionRegistry(
             "blender.version": self.blender_version,
             "blender.run_python": self.blender_run_python,
         }
+        if computer_adapter is not None:
+            for name in COMPUTER_GRAPHICAL_ACTIONS:
+                self._actions.pop(name, None)
+            self._actions.update(computer_adapter)
         self._adapter_contracts = builtin_adapter_contracts()
         available = {entry.name: entry for entry in entry_points(group="ordax_dev_agent.adapters")}
         for name in config.adapters:

@@ -15,6 +15,8 @@ from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.control_plane import build_control_plane
 from ordax_dev_agent.main import run
 from ordax_dev_agent.models import AgentJob
+from ordax_dev_agent.models import ActionResult
+from ordax_dev_agent.actions import ActionRegistry, COMPUTER_GRAPHICAL_ACTIONS
 
 
 DEVICE = "22222222-2222-4222-8222-222222222222"
@@ -64,6 +66,21 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                     run(config, device_credential_provider=self.provider)
                 server.assert_not_called()
 
+    def test_native_graphics_register_only_supplied_handlers_under_shared_policy(self):
+        (self.state / "agent-settings.json").write_text(json.dumps({"computer_access": {"enabled": False}}))
+        handler = Mock(return_value=ActionResult(True, "native screen ready", {"width": 1280}))
+        registry = ActionRegistry(self.config, computer_adapter={"computer.screen_info": handler})
+        self.assertEqual(COMPUTER_GRAPHICAL_ACTIONS.intersection(registry.names), {"computer.screen_info"})
+        self.assertFalse(registry.execute("computer.screen_info", {}).ok)
+        handler.assert_not_called()
+        (self.state / "agent-settings.json").write_text(json.dumps({"computer_access": {"enabled": True}}))
+        self.assertTrue(registry.execute("computer.screen_info", {}).ok)
+        handler.assert_called_once_with({})
+        self.assertFalse(registry.execute("computer.click", {"x": 1, "y": 1}).ok)
+        for adapter in ({"computer.text_write": handler}, {"computer.screen_info": None}):
+            with self.assertRaises(ValueError):
+                ActionRegistry(self.config, computer_adapter=adapter)
+
     def test_denied_native_identity_stops_status_service_without_claiming_work(self):
         with (
             patch("ordax_dev_agent.main.start_status_server") as server,
@@ -108,8 +125,9 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                     patch("ordax_dev_agent.main.signal.signal", side_effect=lambda kind, handler: handlers.__setitem__(kind, handler)),
                     redirect_stdout(io.StringIO()),
                 ):
-                    self.assertEqual(run(self.config, device_credential_provider=self.provider), 0)
+                    self.assertEqual(run(self.config, device_credential_provider=self.provider, status_port=0), 0)
                     factory.assert_called_once_with(self.config, device_credential_provider=self.provider)
+                    self.assertEqual(server.call_args.kwargs["port"], 0)
                     server.return_value.shutdown.assert_called_once_with()
                 self.assertEqual(len(results), 1)
                 self.assertEqual(results[0].ok, enabled, results[0].summary)
@@ -117,6 +135,7 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                 if enabled:
                     self.assertEqual(path.read_text(), "native runtime integration\n")
                 self.assertEqual(plane.heartbeat.call_args.kwargs["status"], "offline")
+                self.assertFalse(COMPUTER_GRAPHICAL_ACTIONS.intersection(plane.heartbeat.call_args.args[0]))
                 self.assertFalse((self.state / "device-token.cloudflare-v3.txt").exists())
 
 
