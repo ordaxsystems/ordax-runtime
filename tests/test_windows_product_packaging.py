@@ -241,6 +241,14 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn('OutputBaseFilename=ORDAX-Studio-Setup-{#AppVersion}-x64', installer)
         self.assertNotIn('$Version = $canonicalVersion', build)
 
+    def test_installed_electron_verifier_uses_component_not_distribution_version(self) -> None:
+        verify = (ROOT / "scripts/windows/assert-installed-studio-ux.ps1").read_text(encoding="utf-8")
+        self.assertIn("$inventory.version -ne $product.studio_version", verify)
+        self.assertIn("$hostPackage.version -ne $product.studio_version", verify)
+        self.assertNotIn("$inventory.version -ne $product.version", verify)
+        self.assertNotIn("$hostPackage.version -ne $product.version", verify)
+        self.assertIn("Installed Studio UI provenance, owner, version or entrypoint diverged", verify)
+
     def test_windows_installer_refuses_stale_runtime_studio_fallback(self) -> None:
         build = (ROOT / "scripts" / "windows" / "build-ordax-studio-product.ps1").read_text(encoding="utf-8")
         lock = (ROOT / "studio-source.lock.json").read_text(encoding="utf-8")

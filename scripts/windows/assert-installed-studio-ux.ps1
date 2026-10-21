@@ -97,8 +97,8 @@ if ($product.schema -ne "ordax.windows-product/1" -or
     $inventory.sourceRepository -ne "ordaxsystems/ordax-apps" -or
     $inventory.entrypoint -ne "apps/studio/conversation/src/index.html" -or
     $inventory.candidate -ne $true -or
-    $inventory.version -ne $product.version -or
-    $hostPackage.version -ne $product.version -or
+    $inventory.version -ne $product.studio_version -or
+    $hostPackage.version -ne $product.studio_version -or
     $hostPackage.main -ne "tools/assistant-host/native/main.cjs") {
     throw "Installed Studio UI provenance, owner, version or entrypoint diverged"
 }
