@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from ordax_dev_agent.native_main import identity_store, main, native_config, self_test
+from ordax_dev_agent.native_main import (acquire_native_product_instance_lock, identity_store, main, native_config, self_test)
 from ordax_dev_agent.process_environment import external_process_environment
 
 
@@ -80,6 +80,56 @@ class NativeProductPackageTests(unittest.TestCase):
             result = registry.execute("computer.text_read", {"path": str(credential)})
             self.assertFalse(result.ok)
             self.assertNotIn("private-state-probe", json.dumps(result.data))
+
+    def test_native_runtime_uses_canonical_exclusive_heartbeat_file_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary) / "product-runtime"
+            state.mkdir(mode=0o700)
+            descriptor = acquire_native_product_instance_lock(state)
+            self.assertTrue((state / "instance.lock").is_file())
+            try:
+                # A duplicate agent cannot run concurrently even when started
+                # on the same host as the OS discovery loop.
+                with self.assertRaisesRegex(RuntimeError, "native_product_runtime_instance_busy"):
+                    acquire_native_product_instance_lock(state, timeout_seconds=0)
+            finally:
+                os.close(descriptor)
+            retried = acquire_native_product_instance_lock(state, timeout_seconds=0)
+            os.close(retried)
+
+    def test_transient_native_discovery_report_contention_can_finish(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary) / "product-runtime"
+            state.mkdir(mode=0o700)
+            with patch("ordax_dev_agent.native_main.fcntl.flock",
+                       side_effect=[BlockingIOError(), None]) as acquire, patch(
+                           "ordax_dev_agent.native_main.time.sleep") as sleep:
+                descriptor = acquire_native_product_instance_lock(state, timeout_seconds=6)
+                os.close(descriptor)
+                self.assertEqual(acquire.call_count, 2)
+                sleep.assert_called_once()
+
+    def test_native_runtime_rejects_unsafe_lock_file_and_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary) / "product-runtime"
+            state.mkdir(mode=0o700)
+            lock = state / "instance.lock"
+            lock.write_text("owner")
+            lock.chmod(0o666)
+            with self.assertRaisesRegex(RuntimeError, "native_product_runtime_instance_lock_unsafe"):
+                acquire_native_product_instance_lock(state, timeout_seconds=0)
+            lock.chmod(0o600)
+            state.chmod(0o755)
+            with self.assertRaisesRegex(RuntimeError, "native_product_runtime_state_unsafe"):
+                acquire_native_product_instance_lock(state, timeout_seconds=0)
+            state.chmod(0o700)
+            lock.unlink()
+            external = Path(temporary) / "external"
+            external.write_text("not a Runtime lock")
+            lock.symlink_to(external)
+            with self.assertRaises(OSError):
+                acquire_native_product_instance_lock(state, timeout_seconds=0)
+            self.assertEqual(external.read_text(), "not a Runtime lock")
 
     def test_missing_native_credential_never_starts_transport(self):
         with patch("ordax_dev_agent.native_main.identity_store") as owner:
