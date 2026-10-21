@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 
 from . import __version__
 from .config import AgentConfig
@@ -278,9 +279,31 @@ def _upload_result_artifacts(
 
 
 def main() -> int:
-    started_monotonic = time.monotonic()
     _startup_log(None, f"MAIN_ENTER pid={os.getpid()} version={__version__}")
-    config = AgentConfig.from_env()
+    return run(AgentConfig.from_env())
+
+
+def run(
+    config: AgentConfig,
+    *,
+    device_credential_provider: Callable[[], dict[str, str] | None] | None = None,
+) -> int:
+    """Run the canonical lifecycle with host-owned configuration and identity.
+
+    Native hosts pass their existing identity-store reader directly. The CLI
+    retains its Windows configuration path. Neither path creates another
+    scheduler, grant authority, credential file or command transport.
+    Call from the owning process's main thread (signal handlers are installed).
+    """
+    if device_credential_provider is not None:
+        if not callable(device_credential_provider):
+            raise TypeError("Device credential provider must be callable")
+        if not config.device_id or not config.product_mcp_url:
+            raise ValueError("Native Runtime requires an enrolled Product device and origin")
+        if str(config.control_plane_protocol).strip().lower() != "cloudflare-v3":
+            raise ValueError("Native Runtime requires the canonical Product transport")
+    started_monotonic = time.monotonic()
+    _startup_log(config, f"RUN_ENTER pid={os.getpid()} version={__version__}")
     _startup_log(config, "CONFIG_READY")
     config.write_public_status()
 
@@ -374,7 +397,13 @@ def main() -> int:
     from .control_plane import build_control_plane
     from .models import ActionResult
     _startup_log(config, "CONTROL_PLANE_IMPORT_OK")
-    control = build_control_plane(config)
+    try:
+        control = build_control_plane(
+            config, device_credential_provider=device_credential_provider,
+        )
+    except Exception:
+        status_server.shutdown()
+        raise
     _startup_log(config, "CONTROL_PLANE_READY")
 
 
