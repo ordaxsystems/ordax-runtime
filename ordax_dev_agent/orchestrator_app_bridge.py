@@ -229,6 +229,8 @@ class OrchestratorAppReadClient:
             request["signature"] = hmac.new(self._key, encoded, hashlib.sha256).hexdigest()
             reply = self._exchange(request)
             self._require_same_authorization()
+            if self._clock() >= request["expiresAt"]:
+                raise OrchestratorBridgeUnavailable("host_request_expired")
             if type(reply) is not dict or len(_canonical(reply)) > 524288 or reply.get("schema") != SCHEMA or reply.get("id") != request["id"] or reply.get("ok") is not True or type(reply.get("result")) is not dict:
                 raise OrchestratorBridgeUnavailable("host_read_unconfirmed")
             return reply["result"]

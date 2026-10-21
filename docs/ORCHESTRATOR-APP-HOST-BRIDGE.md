@@ -7,6 +7,10 @@ Owner host transport/client: `ordax-runtime`; owner App service/protocol:
 The dedicated channel uses inherited stdin/stdout of an App child that the
 managed launcher starts and verifies. It never opens a network listener, reads
 App SQLite, searches for a window or converts actions to terminal commands.
+On Windows the managed launcher must supply child handles opened for overlapped
+I/O (`FILE_FLAG_OVERLAPPED`) as required by Electron/libuv. Ordinary synchronous
+`subprocess.PIPE` handles must not be assumed compatible with the packaged App.
+The pipe adapter accepts already-created handles; it does not implement that launcher.
 No product grant is minted by an App role, bootstrap message or ephemeral key.
 
 ## Contract and authority

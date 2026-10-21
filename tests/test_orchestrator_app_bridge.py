@@ -116,6 +116,25 @@ class OrchestratorHostTests(unittest.TestCase):
             client.read("projects_list")
         self.assertTrue(client._closed)
 
+    def test_reply_after_request_deadline_is_withheld_even_while_session_is_valid(self):
+        for elapsed in (30000, 30001):
+            with self.subTest(elapsed=elapsed):
+                self.now = 100000
+                before = len(self.calls)
+                def late(frame):
+                    reply = self.exchange(frame)
+                    if frame.get("type") != "bootstrap":
+                        self.now += elapsed
+                    return reply
+                client = self.client(late)
+                with self.assertRaisesRegex(OrchestratorBridgeUnavailable, "^host_read_unavailable$"):
+                    client.read("status")
+                self.assertLess(self.now, client._expires_at)
+                self.assertEqual(bytes(client._key), b"\0" * 32)
+                with self.assertRaises(OrchestratorBridgeUnavailable):
+                    client.read("status")
+                self.assertEqual(len(self.calls) - before, 2)
+
     def test_uncertain_exchange_is_not_retried_and_secret_does_not_appear_in_error(self):
         def fail(frame):
             if frame.get("type") == "bootstrap":
