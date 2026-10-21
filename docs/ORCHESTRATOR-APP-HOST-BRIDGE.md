@@ -59,9 +59,53 @@ revocation after a reply, missing authority, no replay, mismatched response,
 secret erasure and a real inherited subprocess-pipe timeout. They are included
 in Linux native and Windows Runtime contract jobs. No paid API or GPT send.
 
-**Not yet delivered:** managed App launcher/installation registration,
+**Not yet delivered:** trusted installation registration/provenance binding,
 canonical Platform capability/profile migration, remote tool projection, grant
 resolver binding to this client and live OAuth/device E2E. A callable Python
 client does not make `orchestrator.app_read` a published or available grant.
 Do not add a route that accepts serialized VerifiedAuthorization from the model.
 Only enable the canonical path after these owners are integrated and tested.
+
+## Managed Windows launcher candidate — 2026-10-21
+
+`orchestrator_app_launcher.py` accepts a typed installation-owner result with
+an independently verified inventory of **all** bundle files and expected App
+identity. It never reads a serialized receipt or executable path from tool
+arguments, persists a registry, or treats App-authored hashes as provenance.
+It rejects path aliases, traversal, alternate streams, case duplicates,
+missing/extra files, hash mismatches and reparse points. Windows file/directory
+handles deny replacement; bundle files deny writes while the session is open.
+The installation owner remains responsible for a protected root and publisher
+provenance. The source candidate does not manufacture that authority.
+
+For Python-to-Electron on Windows the launcher creates a fresh local named
+pipe before starting the exact verified executable. Its protected DACL admits
+only the current Windows user; remote clients are rejected. Windows reports
+the connecting client's PID, which must equal the still-live Popen child before
+any bootstrap secret is written. This is not a TCP/HTTP endpoint or App server.
+The App connects as a client via the explicit `--ordax-runtime-bridge-pipe` mode;
+there is no fallback from missing descriptors or lookup by window/process name.
+The earlier fd 3/4 transport remains an explicit separate inherited-pipe mode.
+
+Connect/write/read use cancellable overlapped I/O with a finite total deadline.
+Authorization is resolved before verification, immediately before launch, and
+again through the existing client before bootstrap/read/result disclosure.
+Node injection/debug/model-key environment variables are removed; the supervisor
+is disabled. The exact default profile fingerprint must match the receipt.
+Session closure releases transport/file pins without terminating the human App.
+An existing human instance is not silently attached, restarted or killed.
+
+Tests include actual Windows pipe I/O, PID rejection, cancellation deadlines,
+DACL inspection and file mutation/replacement denial. The disposable CI helper
+`scripts/orchestrator/managed_app_e2e.py` constructs **synthetic installation and
+authorization fixtures** only under Windows CI; it is not a registry importer.
+It checks the actual Python client against the built Electron App on a new
+profile. Consult the workflow result before claiming that E2E passed.
+
+Still required before remote availability: installation-registry/provenance
+binding, Platform capability/profile and canonical live grant resolver, public
+MCP projection, and live account/device E2E. No production action is registered.
+
+Windows API sources: [pipe security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights),
+[peer PID](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid),
+[overlapped I/O](https://learn.microsoft.com/en-us/windows/win32/sync/synchronization-and-overlapped-input-and-output).

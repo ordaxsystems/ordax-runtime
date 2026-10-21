@@ -88,6 +88,16 @@ class ExpectedOrchestratorIdentity:
     profile_fingerprint: str
 
 
+def require_orchestrator_read_authorization(authorize, clock) -> VerifiedOrchestratorReadAuthorization:
+    try:
+        value = authorize()
+    except Exception:
+        raise OrchestratorBridgeUnavailable("host_authorization_required") from None
+    if not isinstance(value, VerifiedOrchestratorReadAuthorization) or value.capability != READ_CAPABILITY or value.app_id != APP_ID or not all(_uuid(v) for v in (value.subject_id, value.device_id, value.grant_id)) or not isinstance(value.client_id, str) or not 8 <= len(value.client_id) <= 160 or not value.client_id[0].isascii() or not value.client_id[0].isalnum() or any(not(c.isascii() and (c.isalnum() or c in "._:-")) for c in value.client_id) or type(value.expires_at_ms) is not int or value.expires_at_ms <= clock():
+        raise OrchestratorBridgeUnavailable("host_authorization_required")
+    return value
+
+
 class InheritedOrchestratorPipe:
     """Exchange on a child created and byte-pinned by the owning launcher.
 
@@ -191,13 +201,7 @@ class OrchestratorAppReadClient:
             raise OrchestratorBridgeUnavailable("host_bootstrap_unconfirmed") from None
 
     def _require_authorization(self) -> VerifiedOrchestratorReadAuthorization:
-        try:
-            value = self._authorize()
-        except Exception:
-            raise OrchestratorBridgeUnavailable("host_authorization_required") from None
-        if not isinstance(value, VerifiedOrchestratorReadAuthorization) or value.capability != READ_CAPABILITY or value.app_id != APP_ID or not all(_uuid(v) for v in (value.subject_id, value.device_id, value.grant_id)) or not isinstance(value.client_id, str) or not 8 <= len(value.client_id) <= 160 or not value.client_id[0].isascii() or not value.client_id[0].isalnum() or any(not(c.isascii() and (c.isalnum() or c in "._:-")) for c in value.client_id) or type(value.expires_at_ms) is not int or value.expires_at_ms <= self._clock():
-            raise OrchestratorBridgeUnavailable("host_authorization_required")
-        return value
+        return require_orchestrator_read_authorization(self._authorize, self._clock)
 
     def _require_same_authorization(self) -> VerifiedOrchestratorReadAuthorization:
         current = self._require_authorization()
