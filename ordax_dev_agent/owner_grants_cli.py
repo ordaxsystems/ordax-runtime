@@ -13,7 +13,10 @@ from typing import Any
 
 from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code, exchange_owner_code
 from ordax_dev_agent.config import AgentConfig
-from ordax_dev_agent.computer_filesystem_actions import computer_access_management_status
+from ordax_dev_agent.computer_filesystem_actions import (
+    computer_access_management_status,
+    update_computer_access_policy,
+)
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 
@@ -48,7 +51,7 @@ def _days(value: str) -> int:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="ordax-owner-grants", description="Manage authorized OrdaX MCP grants without the Studio UI")
     commands = parser.add_subparsers(dest="operation", required=True)
-    for name in ("list", "authorize", "revoke", "diagnose"):
+    for name in ("list", "authorize", "revoke", "diagnose", "dev-enable"):
         sub = commands.add_parser(name)
         sub.add_argument("--device", required=True, type=_uuid)
         if name != "list":
@@ -57,6 +60,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             sub.add_argument("--profile", required=True, type=_profile)
             sub.add_argument("--space", type=_uuid)
             sub.add_argument("--project", type=_uuid)
+        if name in {"authorize", "dev-enable"}:
             sub.add_argument("--days", type=_days, default=30)
         if name == "revoke":
             sub.add_argument("--group", type=_uuid, required=True)
@@ -177,7 +181,9 @@ def diagnose_owner_mcp_readiness(
 
 
 def perform(args: argparse.Namespace, token: str, remote: ProductRemoteClient,
-            *, policy_checker=computer_access_management_status, config: AgentConfig | None = None) -> dict[str, Any]:
+            *, policy_checker=computer_access_management_status,
+            policy_updater=update_computer_access_policy,
+            config: AgentConfig | None = None) -> dict[str, Any]:
     authority = remote.owner_remote_authority(token, device_id=args.device)
     if args.operation == "list":
         return {"device_id": args.device, "clients": authority["clients"], "grant_groups": authority["grant_groups"]}
@@ -185,6 +191,48 @@ def perform(args: argparse.Namespace, token: str, remote: ProductRemoteClient,
     if args.operation == "diagnose":
         return diagnose_owner_mcp_readiness(authority, client, policy_checker(
             config if config is not None else AgentConfig.from_env()))
+    if args.operation == "dev-enable":
+        # Local opt-in only: an authenticated owner cannot remotely flip the
+        # filesystem policy of an unrelated device. Use its own installed Runtime.
+        local = config if config is not None else AgentConfig.from_env()
+        local_device_id = str(local.device_id or "").lower()
+        if local_device_id != args.device:
+            raise ValueError("development_access_must_run_on_target_device")
+        previous = policy_checker(local)
+        revision = previous.get("revision") if isinstance(previous, dict) else None
+        if not isinstance(revision, str) or not revision:
+            raise ValueError("computer_access_revision_unavailable")
+        updated = policy_updater(local, {
+            "enabled": True,
+            "full_access": True,
+            "full_filesystem": True,
+            "expected_revision": revision,
+        })
+        if not isinstance(updated, dict) or any(
+            updated.get(key) is not True
+            for key in ("enabled", "full_access", "full_filesystem")
+        ):
+            raise ValueError("development_local_access_not_enabled")
+        # No independent authority: the exact OAuth client and already
+        # authenticated Owner still pass through the canonical grant API.
+        expires = (datetime.now(timezone.utc) + timedelta(days=args.days)).isoformat()
+        grant = remote.replace_owner_remote_grant_group(
+            token, client_id=client, device_id=args.device,
+            profile_key="full-computer-control",
+            space_id=None, project_id=None, valid_until=expires,
+        )
+        return {
+            "ok": grant.get("ok") is True,
+            "device_id": args.device,
+            "profile_key": "full-computer-control",
+            "valid_until": expires,
+            "local_policy": {
+                key: updated.get(key)
+                for key in ("enabled", "full_access", "full_filesystem")
+            },
+            "grant": grant,
+            "end_to_end_proven": False,
+        }
     if args.operation == "authorize":
         if args.profile in {"full-computer-control", "device-native-terminal", "device-native-process"}:
             policy = policy_checker(config if config is not None else AgentConfig.from_env())
