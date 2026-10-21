@@ -4,18 +4,15 @@ Status: source candidate, not registered or activated in Product MCP.
 Owner host transport/client: `ordax-runtime`; owner App service/protocol:
 `ordax-apps/prototypes/ordax-orchestrator/product`.
 
-The dedicated channel uses inherited descriptors of an App child that the
-managed launcher starts and verifies: fd 3 is host-to-App and fd 4 is App-to-host.
-Stdin/stdout/stderr are reserved for diagnostics, never protocol data. It never opens a network listener, reads
-App SQLite, searches for a window or converts actions to terminal commands.
-On Windows the managed launcher must supply child handles opened for overlapped
-I/O (`FILE_FLAG_OVERLAPPED`) as required by Electron/libuv. Ordinary synchronous
-`subprocess.PIPE` handles must not be assumed compatible with the packaged App.
-`InheritedOrchestratorPipe` requires the launcher-owned `request_pipe` and
-`response_pipe` explicitly. It never assumes these are child stdin/stdout,
-accepts paths from a model, or implements the managed launcher. A standalone
-Python subprocess fixture tests deadlines only; it does not certify Electron
-handle creation or Product authorization.
+Two explicit transports carry the same App-owned frames. The Node-host scenario
+uses inherited fd 3 (host-to-App) and fd 4 (App-to-host), with overlapped child
+handles on Windows. The Python managed launcher uses a Windows named pipe
+restricted to this user and verifies the connecting child's exact kernel PID.
+Neither mode transports protocol data on stdin/stdout/stderr or discovers an
+App visually. Neither mode falls back to the other.
+`InheritedOrchestratorPipe` takes explicit launcher-owned request/response
+streams; it does not implement handle creation. `WindowsOrchestratorPipe`
+implements the managed Windows mode described below.
 No product grant is minted by an App role, bootstrap message or ephemeral key.
 
 ## Contract and authority
@@ -100,7 +97,21 @@ DACL inspection and file mutation/replacement denial. The disposable CI helper
 `scripts/orchestrator/managed_app_e2e.py` constructs **synthetic installation and
 authorization fixtures** only under Windows CI; it is not a registry importer.
 It checks the actual Python client against the built Electron App on a new
-profile. Consult the workflow result before claiming that E2E passed.
+profile. The actual E2E passed on App source
+`92c510f8f587e6efbf3fbe81aa8d4b1d427e1b56` with this Runtime source
+`23601f3f9764ea8c4ed226155adac6c3bb84f6f8`:
+[App workflow 39647922343](https://github.com/ordaxsystems/ordax-apps/actions/runs/39647922343),
+job `119388302215`, receipt `ordax.orchestrator-managed-app-e2e/1` with `ok:true`.
+The real Python client launched packaged Electron, pinned its entire bundle,
+verified kernel peer PID and a fresh empty profile, and read status/projects.
+Session closure preserved the App process. The separate native forms/MCP and
+inherited-fd scenarios also passed, with 346/346 Windows App tests. These are
+isolated CI profiles, not the user's installed App.
+
+[Runtime contracts 39647724264](https://github.com/ordaxsystems/ordax-runtime/actions/runs/39647724264)
+passed 301 Windows tests with one preexisting skip; all five new native Windows
+checks ran. Linux composition and minimum MCP SDK jobs also passed. Local Linux:
+47 focused tests, five expected Windows-only skips.
 
 Still required before remote availability: installation-registry/provenance
 binding, Platform capability/profile and canonical live grant resolver, public
@@ -109,3 +120,10 @@ MCP projection, and live account/device E2E. No production action is registered.
 Windows API sources: [pipe security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights),
 [peer PID](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid),
 [overlapped I/O](https://learn.microsoft.com/en-us/windows/win32/sync/synchronization-and-overlapped-input-and-output).
+
+The current read lease is still at most five minutes. Continuous 24h supervision
+requires an explicit authenticated renewal/rotation contract without restarting
+an active human App, plus stop conditions and scheduler policy. The candidate
+neither silently relaunches an App on expiry nor converts a read grant to sends.
+Installation/update owners must drain read sessions and release bundle pins
+before changing installed files; this launcher does not become an updater.
