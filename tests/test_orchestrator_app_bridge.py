@@ -169,7 +169,8 @@ class OrchestratorHostTests(unittest.TestCase):
         code = "import sys,time; sys.stdin.buffer.readline(); time.sleep(2)"
         child = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         try:
-            pipe = InheritedOrchestratorPipe(child, timeout_seconds=0.02)
+            pipe = InheritedOrchestratorPipe(child, request_pipe=child.stdin,
+                response_pipe=child.stdout, timeout_seconds=0.02)
             started = time.monotonic()
             with self.assertRaises(OrchestratorBridgeUnavailable):
                 pipe({"test": True})

@@ -20,7 +20,7 @@ import subprocess
 import threading
 import time
 import uuid
-from typing import Any, Callable
+from typing import Any, BinaryIO, Callable
 
 SCHEMA = "ordax.orchestrator-host/1"
 READ_CAPABILITY = "orchestrator.app_read"
@@ -92,13 +92,16 @@ class InheritedOrchestratorPipe:
     """Exchange on a child created and byte-pinned by the owning launcher.
 
     No executable, endpoint, process ID or path is accepted from a tool. This
-    object holds actual inherited handles of a Popen object, not a discovered
-    process. On timeout it is permanently poisoned; the host owns child disposal.
+    object holds the dedicated data-pipe ends supplied by that launcher and the
+    actual Popen child, not a discovered process. The packaged App reads fd 3
+    and writes fd 4; its stdin/stdout/stderr are never protocol transports. On timeout it is permanently poisoned; the host owns child disposal.
     """
-    def __init__(self, child: subprocess.Popen, *, timeout_seconds: float = 30.0) -> None:
-        if not isinstance(child, subprocess.Popen) or child.stdin is None or child.stdout is None or child.poll() is not None or type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= 30:
+    def __init__(self, child: subprocess.Popen, *, request_pipe: BinaryIO,
+                 response_pipe: BinaryIO, timeout_seconds: float = 30.0) -> None:
+        if not isinstance(child, subprocess.Popen) or not callable(getattr(request_pipe, "write", None)) or not callable(getattr(request_pipe, "flush", None)) or not callable(getattr(response_pipe, "readline", None)) or child.poll() is not None or type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= 30:
             raise OrchestratorBridgeUnavailable("host_private_pipe_required")
         self._child = child
+        self._request_pipe, self._response_pipe = request_pipe, response_pipe
         self._timeout = timeout_seconds
         self._closed = False
         self._lock = threading.Lock()
@@ -117,9 +120,9 @@ class InheritedOrchestratorPipe:
             result: queue.Queue = queue.Queue(maxsize=1)
             def exchange() -> None:
                 try:
-                    self._child.stdin.write(encoded)
-                    self._child.stdin.flush()
-                    raw = self._child.stdout.readline(524289)
+                    self._request_pipe.write(encoded)
+                    self._request_pipe.flush()
+                    raw = self._response_pipe.readline(524289)
                     if not raw.endswith(b"\n") or len(raw) > 524288:
                         raise ValueError("invalid frame")
                     decoded = json.loads(raw.decode("utf-8", errors="strict"))

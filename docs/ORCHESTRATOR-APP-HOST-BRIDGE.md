@@ -4,13 +4,18 @@ Status: source candidate, not registered or activated in Product MCP.
 Owner host transport/client: `ordax-runtime`; owner App service/protocol:
 `ordax-apps/prototypes/ordax-orchestrator/product`.
 
-The dedicated channel uses inherited stdin/stdout of an App child that the
-managed launcher starts and verifies. It never opens a network listener, reads
+The dedicated channel uses inherited descriptors of an App child that the
+managed launcher starts and verifies: fd 3 is host-to-App and fd 4 is App-to-host.
+Stdin/stdout/stderr are reserved for diagnostics, never protocol data. It never opens a network listener, reads
 App SQLite, searches for a window or converts actions to terminal commands.
 On Windows the managed launcher must supply child handles opened for overlapped
 I/O (`FILE_FLAG_OVERLAPPED`) as required by Electron/libuv. Ordinary synchronous
 `subprocess.PIPE` handles must not be assumed compatible with the packaged App.
-The pipe adapter accepts already-created handles; it does not implement that launcher.
+`InheritedOrchestratorPipe` requires the launcher-owned `request_pipe` and
+`response_pipe` explicitly. It never assumes these are child stdin/stdout,
+accepts paths from a model, or implements the managed launcher. A standalone
+Python subprocess fixture tests deadlines only; it does not certify Electron
+handle creation or Product authorization.
 No product grant is minted by an App role, bootstrap message or ephemeral key.
 
 ## Contract and authority
