@@ -35,6 +35,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Audit Independent Base kernel-only ELF contract
+        run: python3 -m unittest tests.test_native_product_abi -v
       - name: Build the pinned native executable candidate
         run: docker build --platform linux/amd64 -f native/ordax-product-agent/Dockerfile -t ordax-native-product-candidate .
       - name: Exercise the executable without network or an installed Python
@@ -46,6 +48,28 @@ jobs:
           trap 'docker rm "$container" >/dev/null' EXIT
           docker cp "$container:/output/ordax-product-agent" out/ordax-product-agent
           python3 native/ordax-product-agent/provenance.py --source-commit "$GITHUB_SHA" --output out
+          # Prove the actual binary's ELF dependencies independently of its
+          # successful container self-test. Do not confuse CI green with
+          # kernel-only activation readiness. This report is diagnostic until
+          # the signed Independent Base can consume the exact native artifact.
+          python3 native/ordax-product-agent/audit_elf.py \\
+            --binary out/ordax-product-agent \\
+            --recipe native/ordax-product-agent/Dockerfile \\
+            > "$RUNNER_TEMP/ordax-native-abi.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          report = json.loads((Path(os.environ["RUNNER_TEMP"]) / "ordax-native-abi.json").read_text())
+          manifest = json.loads(Path("out/candidate.json").read_text())
+          assert manifest["independent_base_abi_ready"] is report["independent_base_abi_ready"]
+          assert manifest["independent_base_abi_blockers"] == report["blockers"]
+          assert manifest["elf_interpreter"] == report["interpreter"]
+          assert manifest["elf_needed_libraries"] == report["needed_libraries"]
+          assert manifest["installation_authorized_by_candidate"] is False
+          print("INDEPENDENT_BASE_NATIVE_ABI_READY=" + ("YES" if report["independent_base_abi_ready"] else "NO"))
+          print("ABI_BLOCKERS=" + ",".join(report["blockers"]))
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ordax-native-product-candidate-${{ github.sha }}
