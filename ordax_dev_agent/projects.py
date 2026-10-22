@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .git_readonly import readonly_git_environment
+
 
 _GITHUB_REPOSITORY_RE = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$"
@@ -80,12 +82,14 @@ def project_repository_full_name(project: Project) -> str | None:
         return None
     try:
         completed = subprocess.run(
-            ["git", "-C", str(project.root), "remote", "get-url", "origin"],
+            ["git", "-C", str(project.root), "--no-optional-locks",
+             "-c", "core.fsmonitor=false", "remote", "get-url", "origin"],
             check=False,
             capture_output=True,
             text=True,
             timeout=5,
             shell=False,
+            env=readonly_git_environment(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
