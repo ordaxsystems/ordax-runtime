@@ -1,7 +1,7 @@
 {
   "schema": "ordax.windows-distribution-lock/1",
   "product": "ORDAX Studio",
-  "version": "0.15.11",
+  "version": "0.15.12",
   "studio_component_version": "0.15.9",
   "studio_source_commit": "a297b691d5a91ea0370d80f32533931596dfe5f6",
   "authority": "none"
