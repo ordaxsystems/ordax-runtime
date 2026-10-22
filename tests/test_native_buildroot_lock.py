@@ -113,6 +113,39 @@ class BuildrootNativeLockTests(unittest.TestCase):
         with self.assertRaisesRegex(audit.RuntimeBuildrootAuditError, "duplicate"):
             self.check()
 
+    def test_reject_unparsed_lock_requirements_and_download_directives(self):
+        for injected in (
+            "untracked-package>=2.0",
+            "--extra-index-url https://packages.invalid/simple",
+            "-r extra-requirements.lock",
+            "httpx==0.28.1;python_version>='3.14'",
+            "    --hash=sha512:" + H,
+        ):
+            with self.subTest(injected=injected):
+                self.lock(self.req, {"httpx": "0.28.1"})
+                with self.req.open("a") as stream:
+                    stream.write(injected + "\n")
+                with self.assertRaisesRegex(
+                    audit.RuntimeBuildrootAuditError, "unrecognized requirement lock line"
+                ):
+                    self.check()
+
+    def test_hash_comment_does_not_satisfy_pinned_requirement(self):
+        self.req.write_text(
+            "# uv --python-version 3.12\n"
+            "httpx==0.28.1\n"
+            "# --hash=sha256:" + H + "\n"
+        )
+        with self.assertRaisesRegex(audit.RuntimeBuildrootAuditError, "unhashed"):
+            self.check()
+
+    def test_conflicting_python_targets_fail_closed(self):
+        self.lock(self.req, {"httpx": "0.28.1"})
+        with self.req.open("a") as stream:
+            stream.write("# extra uv --python-version 3.14\n")
+        with self.assertRaisesRegex(audit.RuntimeBuildrootAuditError, "conflicting Python ABI"):
+            self.check()
+
     def test_runtime_lock_is_parsed_without_guessing_native_wheels(self):
         lock = ROOT / "native/ordax-product-agent/requirements.lock"
         bootstrap = ROOT / "native/ordax-product-agent/bootstrap.lock"

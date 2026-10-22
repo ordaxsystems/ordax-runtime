@@ -44,21 +44,35 @@ def read_requirements(path: Path, *, lock: bool) -> tuple[dict[str, str], str | 
         raise RuntimeBuildrootAuditError("canonical requirement file unavailable")
     data = path.read_text(encoding="utf-8")
     requirements = {}
+    # Every non-comment line must be accounted for by the pinned-lock grammar.
+    # Best-effort finditer would silently omit a newly introduced dependency.
+    for line in data.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        pin = PIN.match(line)
+        if pin and not line[pin.end():].strip() and ";" not in pin.group(2):
+            continue
+        if re.fullmatch(r"\s+--hash=sha256:[0-9a-f]{64}\s*\\?", line):
+            continue
+        raise RuntimeBuildrootAuditError("unrecognized requirement lock line")
     entries = list(PIN.finditer(data))
     for i, match in enumerate(entries):
         name, version = normalize(match.group(1)), match.group(2)
         if name in requirements:
             raise RuntimeBuildrootAuditError("duplicate requirement: " + name)
         block = data[match.end():entries[i+1].start() if i+1 < len(entries) else len(data)]
-        if lock and not re.search(r"--hash=sha256:[0-9a-f]{64}\b", block):
+        if lock and not any(re.fullmatch(r"\s+--hash=sha256:[0-9a-f]{64}\s*\\?", line)
+                            for line in block.splitlines()):
             raise RuntimeBuildrootAuditError("unhashed requirement: " + name)
         requirements[name] = version
     if not requirements:
         raise RuntimeBuildrootAuditError("canonical requirement file is empty")
-    target = LOCK_PYTHON.search(data)
-    if lock and not target:
+    python_targets = set(LOCK_PYTHON.findall(data))
+    if len(python_targets) > 1:
+        raise RuntimeBuildrootAuditError("conflicting Python ABI targets in requirement lock")
+    if lock and not python_targets:
         raise RuntimeBuildrootAuditError("requirement lock has no Python ABI target")
-    return requirements, target.group(1) if target else None
+    return requirements, next(iter(python_targets)) if python_targets else None
 
 
 def read_build_only_requirements(path: Path) -> set[str]:
