@@ -66,6 +66,63 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                     run(config, device_credential_provider=self.provider)
                 server.assert_not_called()
 
+    def test_native_switch_deny_by_default_and_fails_closed(self):
+        from ordax_dev_agent.main import _native_local_access_granted
+        self.assertTrue(_native_local_access_granted(None))
+        self.assertTrue(_native_local_access_granted(lambda: True))
+        for unsafe in (False, None, 1, "true"):
+            self.assertFalse(_native_local_access_granted(lambda unsafe=unsafe: unsafe))
+        self.assertFalse(_native_local_access_granted(lambda: 1 / 0))
+
+        with patch("ordax_dev_agent.main.start_status_server") as server:
+            with self.assertRaisesRegex(TypeError, "OS-owned local Connector policy"):
+                run(self.config, device_credential_provider=self.provider)
+            with self.assertRaisesRegex(RuntimeError, "native_local_connector_disabled"):
+                run(self.config, device_credential_provider=self.provider,
+                    native_access_enabled=lambda: False)
+            server.assert_not_called()
+
+    def test_native_switch_revoked_after_claim_refuses_file_mutation(self):
+        target = self.root / "revoked.txt"
+        (self.state / "agent-settings.json").write_text(json.dumps({
+            "computer_access": {"enabled": True, "full_access": True,
+                                "allowed_roots": [str(self.root)]},
+        }))
+        job = AgentJob("revoked-local-job", "computer.text_write", {
+            "path": str(target), "content": "should never be written", "create": True,
+        })
+        plane = Mock()
+        plane.recover_pending_reports.return_value = 0
+        plane.pair_if_needed.return_value = False
+        plane.claim_next_job.return_value = job
+        handlers = {}
+        results = []
+
+        def complete(completed, result):
+            self.assertIs(completed, job)
+            results.append(result)
+            handlers[signal.SIGTERM]()
+
+        plane.complete.side_effect = complete
+        # Startup, pairing and claim succeed; local setting changes before dispatch.
+        switch = Mock(side_effect=[True, True, True, True, False])
+        with (
+            patch("ordax_dev_agent.control_plane.build_control_plane", return_value=plane),
+            patch("ordax_dev_agent.main.start_status_server") as server,
+            patch("ordax_dev_agent.main._start_local_watchdog", return_value=None),
+            patch("ordax_dev_agent.main.signal.signal",
+                  side_effect=lambda kind, handler: handlers.__setitem__(kind, handler)),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(run(self.config, device_credential_provider=self.provider,
+                                 native_access_enabled=switch, status_port=0), 0)
+            server.return_value.shutdown.assert_called_once_with()
+        self.assertEqual(len(results), 1)
+        self.assertFalse(results[0].ok)
+        self.assertEqual(results[0].summary, "native_local_connector_disabled")
+        self.assertFalse(target.exists())
+        plane.complete.assert_called_once()
+
     def test_native_graphics_register_only_supplied_handlers_under_shared_policy(self):
         (self.state / "agent-settings.json").write_text(json.dumps({"computer_access": {"enabled": False}}))
         handler = Mock(return_value=ActionResult(True, "native screen ready", {"width": 1280}))
@@ -89,7 +146,8 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
             redirect_stdout(io.StringIO()),
         ):
             with self.assertRaisesRegex(RuntimeError, "identity mismatch"):
-                run(self.config, device_credential_provider=lambda: None)
+                run(self.config, device_credential_provider=lambda: None,
+                    native_access_enabled=lambda: True)
             server.return_value.shutdown.assert_called_once_with()
 
     def test_existing_loop_executes_native_file_action_and_respects_policy(self):
@@ -125,7 +183,8 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                     patch("ordax_dev_agent.main.signal.signal", side_effect=lambda kind, handler: handlers.__setitem__(kind, handler)),
                     redirect_stdout(io.StringIO()),
                 ):
-                    self.assertEqual(run(self.config, device_credential_provider=self.provider, status_port=0), 0)
+                    self.assertEqual(run(self.config, device_credential_provider=self.provider,
+                                         native_access_enabled=lambda: True, status_port=0), 0)
                     factory.assert_called_once_with(self.config, device_credential_provider=self.provider)
                     self.assertEqual(server.call_args.kwargs["port"], 0)
                     server.return_value.shutdown.assert_called_once_with()
