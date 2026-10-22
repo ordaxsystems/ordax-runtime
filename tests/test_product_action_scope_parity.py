@@ -224,5 +224,110 @@ class ProjectWorkspacePortContractTests(unittest.TestCase):
         self.assertEqual(self.lookups, 2)
 
 
+class ProjectWorkspaceRegisteredRootContractTests(unittest.TestCase):
+    """The canonical project allow-list must not be replaced with an App registry."""
+
+    def setUp(self):
+        import dataclasses
+        import tempfile
+        from datetime import datetime, timedelta, timezone
+        from types import SimpleNamespace
+        from ordax_dev_agent.project_workspace_port import (
+            VerifiedProjectResource, WorkspaceActor,
+        )
+        self.dataclasses = dataclasses
+        self.temp = tempfile.TemporaryDirectory(prefix="ordax-registered-workspace-")
+        self.addCleanup(self.temp.cleanup)
+        # Match the canonical real path already retained by Runtime load_projects.
+        self.root = Path(self.temp.name).resolve()
+        self.actor = WorkspaceActor("owner", "client", "session", "project")
+        self.device = "device_fixture"
+        self.resource = "resource_registry_test123"
+        self.config = SimpleNamespace(projects={"test": {"path": str(self.root)}},
+                                      hordax_path=self.root)
+        import subprocess
+        subprocess.run(["git", "-C", str(self.root), "init", "-q"], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(self.root), "remote", "add", "origin",
+                        "https://github.com/ordaxsystems/example-project.git"],
+                       check=True, capture_output=True)
+        # A repository without a first commit has no HEAD for Git metadata.
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=CI",
+                        "-c", "user.email=ci@example.invalid", "commit",
+                        "--allow-empty", "-qm", "initial"], check=True,
+                       capture_output=True)
+        info = self.root.stat()
+        self.grant = VerifiedProjectResource(
+            actor_id=self.actor.actor_id, client_id=self.actor.client_id,
+            workspace_session_id=self.actor.workspace_session_id,
+            project_id=self.actor.project_id, device_id=self.device,
+            resource_id=self.resource, root=self.root,
+            root_device=info.st_dev, root_inode=info.st_ino,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            allowed_actions=frozenset({"read"}),
+        )
+
+    def bind(self, **changes):
+        from ordax_dev_agent.project_workspace_registry_binding import (
+            bind_workspace_to_registered_project,
+        )
+        args = dict(config=self.config,
+                    repository_full_name="ordaxsystems/example-project",
+                    actor=self.actor, device_id=self.device,
+                    resource_id=self.resource, live_grant=self.grant)
+        args.update(changes)
+        return bind_workspace_to_registered_project(**args)
+
+    def test_valid_existing_registered_project_root(self):
+        self.assertEqual(self.bind(), self.grant)
+        from ordax_dev_agent.project_workspace_port import ProjectWorkspacePort
+        verified = self.bind()
+        port = ProjectWorkspacePort(device_id=self.device,
+                                    grants=lambda *_: verified,
+                                    local_policy=lambda p: p == self.root)
+        self.assertTrue(port.verify_binding(self.actor,self.device,self.resource)["authorized"])
+        self.assertEqual(port.snapshot(self.actor,self.device,self.resource)["fileCount"], 0)
+
+    def test_no_local_registration_or_wrong_repository_is_denied(self):
+        from ordax_dev_agent.project_workspace_port import ProjectWorkspaceDenied
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "registered_project_unavailable"):
+            self.bind(repository_full_name="ordaxsystems/another-project")
+        self.config.projects={}
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "registered_project_unavailable"):
+            self.bind()
+
+    def test_wrong_root_identity_is_not_rebound_to_registered_project(self):
+        from ordax_dev_agent.project_workspace_port import ProjectWorkspaceDenied
+        another = self.root / "another"
+        another.mkdir()
+        forged = self.dataclasses.replace(self.grant, root=another)
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "project_root_mismatch"):
+            self.bind(live_grant=forged)
+        forged = self.dataclasses.replace(self.grant, root_inode=-1)
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "root_changed"):
+            self.bind(live_grant=forged)
+
+    def test_other_actor_client_session_project_device_or_resource_denied(self):
+        from ordax_dev_agent.project_workspace_port import ProjectWorkspaceDenied
+        for field in ("actor_id", "client_id", "workspace_session_id", "project_id"):
+            changed = self.dataclasses.replace(self.actor, **{field: "another"})
+            with self.subTest(field=field), self.assertRaisesRegex(
+                ProjectWorkspaceDenied, "grant_scope_mismatch"
+            ):
+                self.bind(actor=changed)
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "grant_scope_mismatch"):
+            self.bind(device_id="other_device")
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "grant_scope_mismatch"):
+            self.bind(resource_id="resource_elsewhere123")
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "grant_missing"):
+            self.bind(live_grant=None)
+
+    def test_duplicate_registered_roots_do_not_choose_arbitrarily(self):
+        from ordax_dev_agent.project_workspace_port import ProjectWorkspaceDenied
+        self.config.projects={"first":{"path":str(self.root)}, "second":{"path":str(self.root)}}
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "registered_project_unavailable"):
+            self.bind()
+
+
 if __name__ == "__main__":
     unittest.main()

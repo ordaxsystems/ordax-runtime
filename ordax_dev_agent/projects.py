@@ -50,6 +50,11 @@ def canonical_github_repository_full_name(value: str) -> str | None:
     if not raw:
         return None
 
+    # Platform Product authority already provides canonical owner/repository.
+    # Accept that exact form without relaxing URL/hostname validation.
+    if _GITHUB_REPOSITORY_RE.fullmatch(raw):
+        return raw.lower()
+
     candidate: str | None = None
     if raw.startswith("git@github.com:"):
         candidate = raw[len("git@github.com:"):]
