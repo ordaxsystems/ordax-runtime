@@ -55,7 +55,14 @@ decompression and strict path/size checks. `candidate.json` now binds
 aggregated exact member-hash fingerprint, declared library requirements and
 names not supplied by frozen members. This is a **diagnostic inventory**, not
 proof that the target loader can resolve names, execute extensions or satisfy
-Python's import-time ABI. The preceding upstream artifact contained 90
+Python's import-time ABI. The same CArchive cookie is now checked for an exact
+embedded Python major/minor version and matching `libpython` shared-library
+name; `embedded_python_version` and `embedded_python_library` are reported in
+the existing `embedded_elf_inventory` manifest section. Inconsistent or
+malformed cookie metadata fails closed. A match only identifies the Python
+runtime bundled into this executable; it does **not** imply the host Buildroot
+Python (if any) must have the same minor version, nor that the frozen interpreter
+or extensions can load against the target libc. No new ABI authority is created. The preceding upstream artifact contained 90
 frozen ELF members; its native dependency names included unresolved
 `libc.musl-x86_64.so.1` and `libc.so` when compared with frozen member
 basenames. That finding cannot be fixed by copying Alpine's libc into the OS.
