@@ -93,21 +93,18 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         self.assertFalse(_wait_for_native_access(10, stopped, lambda: True))
 
         enabled = [True]
+        test_case = self
 
         class RevokingWait:
             def is_set(self):
                 return False
 
             def wait(self, seconds):
-                self_seconds = seconds
-                self_owner = enabled
-                self_owner[0] = False
-                self.test_case.assertLessEqual(self_seconds, 1.0)
+                test_case.assertLessEqual(seconds, 1.0)
+                enabled[0] = False
                 return False
 
-        wait = RevokingWait()
-        wait.test_case = self
-        self.assertFalse(_wait_for_native_access(8, wait, lambda: enabled[0]))
+        self.assertFalse(_wait_for_native_access(8, RevokingWait(), lambda: enabled[0]))
         self.assertFalse(enabled[0])
 
     def test_native_switch_revoked_after_claim_refuses_file_mutation(self):
