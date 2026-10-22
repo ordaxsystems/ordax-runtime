@@ -60,6 +60,9 @@ def reconcile(receipt_path: Path, os_source_path: Path, lock_path: Path) -> dict
             or not isinstance(inputs, dict)
             or inputs.get("component") != COMPONENT
             or inputs.get("source_owner") != OWNER
+            or inputs.get("buildroot_sha256") != buildroot["sha256"]
+            or inputs.get("component_artifact_authorized") is not False
+            or inputs.get("device_install_authorized") is not False
             or not all(SHA.fullmatch(str(inputs.get(k, "")))
                        for k in ("base_defconfig_sha256", "fragment_sha256"))):
         raise ProofError("private Python proof is not bound to canonical OS source")
