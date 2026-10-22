@@ -350,7 +350,9 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
     def test_limits_and_native_host_provenance_are_mandatory(self):
         with self.assertRaises(ValueError):
             WorkspaceResourceSelection(config=self.config, device_id=self.device,
-                choose_directory=None, confirm_owner=lambda *_: True,live_authority=self.live)
+                choose_directory=None, confirm_owner=lambda *_: True,
+                canonical_project_scope=self.canonical_scope,
+                live_authority=self.live)
         with self.assertRaises(ValueError):
             WorkspaceResourceSelection(config=self.config, device_id="device",
                 choose_directory=lambda *_: self.root,
