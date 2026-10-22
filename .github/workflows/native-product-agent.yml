@@ -11,7 +11,9 @@ on:
       - "tests/test_native_product_package.py"
       - "tests/test_native_product_abi.py"
       - "tests/test_native_buildroot_lock.py"
+      - "tests/test_native_private_python_proof.py"
       - "tools/ci/audit_buildroot_lock.py"
+      - "tools/ci/audit_independent_python_proof.py"
       - "pyproject.toml"
       - ".github/workflows/native-product-agent.yml"
   push:
@@ -25,7 +27,9 @@ on:
       - "tests/test_native_product_package.py"
       - "tests/test_native_product_abi.py"
       - "tests/test_native_buildroot_lock.py"
+      - "tests/test_native_private_python_proof.py"
       - "tools/ci/audit_buildroot_lock.py"
+      - "tools/ci/audit_independent_python_proof.py"
       - "pyproject.toml"
       - ".github/workflows/native-product-agent.yml"
   workflow_dispatch:
@@ -42,7 +46,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Audit Independent Base ELF and exact dependency locks
-        run: python3 -m unittest tests.test_native_product_abi tests.test_native_buildroot_lock -v
+        run: python3 -m unittest tests.test_native_product_abi tests.test_native_buildroot_lock tests.test_native_private_python_proof -v
       - name: Build the pinned native executable candidate
         run: docker build --platform linux/amd64 -f native/ordax-product-agent/Dockerfile -t ordax-native-product-candidate .
       - name: Exercise the executable without network or an installed Python
