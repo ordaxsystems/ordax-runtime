@@ -6,7 +6,7 @@ import os
 import signal
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -65,6 +65,58 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     run(config, device_credential_provider=self.provider)
                 server.assert_not_called()
+
+    def test_native_local_access_status_reuses_os_identity_without_side_effects(self):
+        from ordax_dev_agent.native_main import main as native_entrypoint
+        argv = [
+            "--local-access-status", "--distribution-profile", "owner-development",
+            "--product-mode", "usb", "--system-root", str(self.root),
+            "--state-root", str(self.state), "--workspace", str(self.root),
+        ]
+        store = Mock()
+        store.read_enrolled_credential.return_value = {
+            "device_id": DEVICE, "device_token": "b" * 64,
+        }
+        for policy, expected, code in ((True, "ENABLED", 0),
+                                       (False, "DISABLED", 3),
+                                       (None, "DISABLED", 3)):
+            store.development_visibility_enabled.return_value = policy
+            with (
+                patch("ordax_dev_agent.native_main.identity_store", return_value=store) as factory,
+                patch("ordax_dev_agent.native_main.sys.platform", "linux"),
+                redirect_stdout(io.StringIO()) as stdout,
+            ):
+                self.assertEqual(native_entrypoint(argv), code)
+            self.assertEqual(stdout.getvalue(), "NATIVE_PRODUCT_LOCAL_ACCESS=" + expected + "\n")
+            self.assertNotIn("b" * 64, stdout.getvalue())
+            factory.assert_called_once_with(self.root, self.state)
+        self.assertFalse((self.state / "product-runtime").exists())
+
+        store.development_visibility_enabled.side_effect = OSError("policy unreadable")
+        with (
+            patch("ordax_dev_agent.native_main.identity_store", return_value=store),
+            patch("ordax_dev_agent.native_main.sys.platform", "linux"),
+            redirect_stdout(io.StringIO()) as stdout,
+        ):
+            self.assertEqual(native_entrypoint(argv), 3)
+        self.assertEqual(stdout.getvalue(), "NATIVE_PRODUCT_LOCAL_ACCESS=DISABLED\n")
+        store.read_enrolled_credential.return_value = None
+        store.development_visibility_enabled.reset_mock()
+        with (
+            patch("ordax_dev_agent.native_main.identity_store", return_value=store),
+            patch("ordax_dev_agent.native_main.sys.platform", "linux"),
+            redirect_stdout(io.StringIO()) as stdout,
+        ):
+            self.assertEqual(native_entrypoint(argv), 3)
+        store.development_visibility_enabled.assert_not_called()
+
+        with (
+            patch("ordax_dev_agent.native_main.sys.platform", "linux"),
+            redirect_stderr(io.StringIO()),
+        ):
+            with self.assertRaises(SystemExit) as rejected:
+                native_entrypoint(argv + ["--full-access"])
+        self.assertEqual(rejected.exception.code, 2)
 
     def test_native_switch_deny_by_default_and_fails_closed(self):
         from ordax_dev_agent.main import _native_local_access_granted
