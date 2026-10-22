@@ -87,16 +87,42 @@ def self_test() -> dict:
         if not terminal.ok or terminal.data.get("stdout") != "native-terminal-probe":
             raise RuntimeError("native_package_terminal_probe_failed")
         started = registry.execute("computer.process_start", {
-            "argv": ["/bin/sh", "-c", "printf native-process-probe; sleep 30"],
+            "argv": ["/bin/sh", "-c",
+                     "printf native-process-probe; IFS= read -r line; printf ':%s' \"$line\"; sleep 30"],
             "cwd": str(root), "wait_seconds": 1,
         })
         process_id = started.data.get("process_id")
         try:
             if not started.ok or not process_id:
                 raise RuntimeError("native_package_process_start_probe_failed")
-            status = registry.execute("computer.process_status", {"process_id": process_id})
-            if not status.ok or not status.data.get("ownership_valid"):
-                raise RuntimeError("native_package_process_ownership_probe_failed")
+            # The frozen supervisor must prove *all* published process I/O
+            # operations, not just its ability to start and stop a child.
+            deadline = time.monotonic() + 6
+            while True:
+                status = registry.execute("computer.process_status", {"process_id": process_id})
+                if status.ok and status.data.get("ownership_valid") and status.data.get("running"):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("native_package_process_ownership_probe_failed")
+                time.sleep(0.05)
+            listed = registry.execute("computer.process_list", {})
+            if not listed.ok or not any(
+                    item.get("process_id") == process_id and item.get("ownership_valid")
+                    for item in listed.data.get("processes", [])):
+                raise RuntimeError("native_package_process_list_probe_failed")
+            queued = registry.execute("computer.process_write_stdin", {
+                "process_id": process_id, "text": "native-stdin-probe", "newline": True,
+            })
+            if not queued.ok or queued.data.get("queued_bytes") != len("native-stdin-probe"):
+                raise RuntimeError("native_package_process_stdin_probe_failed")
+            deadline = time.monotonic() + 6
+            while True:
+                logs = registry.execute("computer.process_logs", {"process_id": process_id})
+                if logs.ok and "native-process-probe:native-stdin-probe" in logs.data.get("tail", ""):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("native_package_process_logs_probe_failed")
+                time.sleep(0.05)
         finally:
             if process_id:
                 stopped = registry.execute("computer.process_stop", {"process_id": process_id})
@@ -105,6 +131,7 @@ def self_test() -> dict:
         return {"ok": True, "profile": "owner-development-usb", "network_used": False,
                 "device_credential_used": False, "graphical_actions": [],
                 "registered_action_count": len(registry.names),
+                "supervised_process_actions": ["start", "status", "list", "write_stdin", "logs", "stop"],
                 "probes": ["filesystem", "terminal", "supervised-process"]}
 
 
