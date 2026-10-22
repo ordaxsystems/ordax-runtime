@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import io
 from pathlib import Path
 import struct
+import tarfile
+import tempfile
 import unittest
 import zlib
 
@@ -68,6 +72,27 @@ def fake_carchive(*, name="libsample.so", payload=None, compression=1, kind=b"b"
 
 # The same canonical parser is used for the bootloader and frozen ELF members.
 module_abi = module
+
+
+def make_buildroot_rootfs(entries):
+    """Build small target rootfs.tar with regular library files and links."""
+    temp = tempfile.TemporaryDirectory()
+    path = Path(temp.name) / "rootfs.tar"
+    with tarfile.open(path, "w") as archive:
+        root = tarfile.TarInfo("./")
+        root.type = tarfile.DIRTYPE
+        archive.addfile(root)
+        for name, body in entries:
+            member = tarfile.TarInfo(name)
+            if isinstance(body, str):
+                member.type = tarfile.SYMTYPE
+                member.linkname = body
+                archive.addfile(member)
+            else:
+                member.size = len(body)
+                member.mode = 0o755
+                archive.addfile(member, io.BytesIO(body))
+    return temp, path
 
 
 class IndependentNativeAbiTests(unittest.TestCase):
@@ -174,6 +199,94 @@ class IndependentNativeAbiTests(unittest.TestCase):
     def test_embedded_elf_inventory_rejects_wrong_member_type(self):
         with self.assertRaisesRegex(module.NativeAbiError, "misclassified"):
             module.inspect_embedded_elf(fake_carchive(kind=b"x"))
+
+    def test_buildroot_rootfs_resolves_real_loader_and_transitive_libraries(self):
+        # The dynamic loader and libz are actually in this exact rootfs, but
+        # pathname resolution alone cannot certify Python's frozen ABI.
+        temp, rootfs = make_buildroot_rootfs([
+            ("usr/lib/libc.musl-x86_64.so.1", fake_elf()),
+            ("usr/lib/libz.so.1", fake_elf(needed=("libc.musl-x86_64.so.1",))),
+            ("lib/ld-musl-x86_64.so.1", "../usr/lib/libc.musl-x86_64.so.1"),
+            ("lib/libz.so.1", "../usr/lib/libz.so.1"),
+        ])
+        self.addCleanup(temp.cleanup)
+        binary = fake_elf(
+            interpreter="/lib/ld-musl-x86_64.so.1",
+            needed=("libz.so.1", "libc.musl-x86_64.so.1"),
+        )
+        report = module.inspect_rootfs_abi(binary, rootfs)
+        self.assertTrue(report["interpreter_found"])
+        self.assertEqual(report["unresolved_rootfs_libraries"], [])
+        self.assertTrue(report["default_directory_name_resolution_complete"])
+        self.assertEqual(
+            report["resolved_rootfs_libraries"]["libz.so.1"]["target_path"],
+            "usr/lib/libz.so.1",
+        )
+        self.assertEqual(
+            report["target_rootfs_tar_sha256"],
+            hashlib.sha256(rootfs.read_bytes()).hexdigest(),
+        )
+        self.assertFalse(report["native_dependency_closure_proven"])
+        self.assertFalse(report["full_runtime_abi_compatible"])
+        self.assertFalse(report["device_install_authorized"])
+
+    def test_static_buildroot_rootfs_cannot_satisfy_dynamic_candidate(self):
+        temp, rootfs = make_buildroot_rootfs([
+            ("lib/libstandalone.a", b"static-archive"),
+        ])
+        self.addCleanup(temp.cleanup)
+        report = module.inspect_rootfs_abi(
+            fake_elf(
+                interpreter="/lib/ld-musl-x86_64.so.1",
+                needed=("libz.so.1",),
+            ), rootfs,
+        )
+        self.assertFalse(report["interpreter_found"])
+        self.assertEqual(report["unresolved_rootfs_libraries"], ["libz.so.1"])
+        self.assertFalse(report["default_directory_name_resolution_complete"])
+
+    def test_rootfs_symlink_may_not_escape_its_namespace(self):
+        temp, rootfs = make_buildroot_rootfs([
+            ("lib/libz.so.1", "../../../outside.so"),
+        ])
+        self.addCleanup(temp.cleanup)
+        with self.assertRaisesRegex(module.NativeAbiError, "symlink_escape"):
+            module.inspect_rootfs_abi(fake_elf(needed=("libz.so.1",)), rootfs)
+
+    def test_rootfs_symlink_cycle_fails_closed(self):
+        temp, rootfs = make_buildroot_rootfs([
+            ("lib/libz.so.1", "libother.so"),
+            ("lib/libother.so", "libz.so.1"),
+        ])
+        self.addCleanup(temp.cleanup)
+        with self.assertRaisesRegex(module.NativeAbiError, "symlink_cycle"):
+            module.inspect_rootfs_abi(fake_elf(needed=("libz.so.1",)), rootfs)
+
+    def test_duplicate_canonical_tar_library_name_is_rejected(self):
+        temp, rootfs = make_buildroot_rootfs([
+            ("./lib/libz.so.1", fake_elf()),
+            ("lib/libz.so.1", fake_elf()),
+        ])
+        self.addCleanup(temp.cleanup)
+        with self.assertRaisesRegex(module.NativeAbiError, "duplicate_library_path"):
+            module.inspect_rootfs_abi(fake_elf(needed=("libz.so.1",)), rootfs)
+
+    def test_rootfs_matching_non_elf_library_is_not_mistaken_for_abi(self):
+        temp, rootfs = make_buildroot_rootfs([
+            ("lib/libz.so.1", b"not-an-elf"),
+        ])
+        self.addCleanup(temp.cleanup)
+        with self.assertRaisesRegex(module.NativeAbiError, "library_not_valid_elf"):
+            module.inspect_rootfs_abi(fake_elf(needed=("libz.so.1",)), rootfs)
+
+    def test_ambiguous_library_names_cannot_implicitly_pick_one_loader_path(self):
+        temp, rootfs = make_buildroot_rootfs([
+            ("lib/libz.so.1", fake_elf()),
+            ("usr/lib/libz.so.1", fake_elf(needed=("libc.so",))),
+        ])
+        self.addCleanup(temp.cleanup)
+        with self.assertRaisesRegex(module.NativeAbiError, "ambiguous_library_name"):
+            module.inspect_rootfs_abi(fake_elf(needed=("libz.so.1",)), rootfs)
 
     def test_wrong_architecture_is_not_independent(self):
         artifact = bytearray(fake_elf())
