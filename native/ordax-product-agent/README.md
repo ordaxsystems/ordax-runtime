@@ -48,6 +48,18 @@ python3 native/ordax-product-agent/audit_elf.py \
   --recipe native/ordax-product-agent/Dockerfile
 ```
 
+The same auditor also walks the actual PyInstaller CArchive table and examines
+every frozen native `b` entry with the **existing** ELF parser, bounded
+decompression and strict path/size checks. `candidate.json` now binds
+`embedded_elf_inventory`: member count, total unpacked native bytes,
+aggregated exact member-hash fingerprint, declared library requirements and
+names not supplied by frozen members. This is a **diagnostic inventory**, not
+proof that the target loader can resolve names, execute extensions or satisfy
+Python's import-time ABI. The preceding upstream artifact contained 90
+frozen ELF members; its native dependency names included unresolved
+`libc.musl-x86_64.so.1` and `libc.so` when compared with frozen member
+basenames. That finding cannot be fixed by copying Alpine's libc into the OS.
+
 The release-gate form `--require-independent` exits nonzero if the ELF
 needs an external interpreter or shared library, the build recipe is Alpine,
 or a PyInstaller archive has no audited extracted-library closure. A

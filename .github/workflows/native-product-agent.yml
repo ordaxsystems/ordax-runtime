@@ -68,9 +68,17 @@ jobs:
           assert manifest["independent_base_abi_blockers"] == report["blockers"]
           assert manifest["elf_interpreter"] == report["interpreter"]
           assert manifest["elf_needed_libraries"] == report["needed_libraries"]
+          assert manifest["embedded_elf_inventory"] == report["embedded_elf_inventory"]
+          inventory = report["embedded_elf_inventory"]
+          assert inventory["read_only_audit"] is True
+          assert inventory["independent_base_compatibility_proven"] is False
+          assert inventory["install_authorized"] is False
+          assert inventory["native_entry_count"] > 0
           assert manifest["installation_authorized_by_candidate"] is False
           print("INDEPENDENT_BASE_NATIVE_ABI_READY=" + ("YES" if report["independent_base_abi_ready"] else "NO"))
           print("ABI_BLOCKERS=" + ",".join(report["blockers"]))
+          print("EMBEDDED_ELF_COUNT=" + str(inventory["native_entry_count"]))
+          print("UNPROVIDED_ELF_DEPENDENCIES=" + ",".join(inventory["unprovided_needed_names"]))
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
