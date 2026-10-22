@@ -612,7 +612,13 @@ def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "",
 
 
 def audit(binary_path: Path, recipe_path: Path, rootfs_tar: Path | None = None,
-          rootfs_cpio: Path | None = None) -> dict:
+          rootfs_cpio: Path | None = None,
+          expected_rootfs_sha256: str | None = None) -> dict:
+    if expected_rootfs_sha256 is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_rootfs_sha256):
+            raise NativeAbiError("native_rootfs_expected_sha256_invalid")
+        if rootfs_tar is None and rootfs_cpio is None:
+            raise NativeAbiError("native_rootfs_expected_sha256_requires_archive")
     if not binary_path.is_file() or binary_path.is_symlink():
         raise NativeAbiError("native_elf_file_unavailable")
     if binary_path.stat().st_size > MAX_BYTES:
@@ -633,6 +639,11 @@ def audit(binary_path: Path, recipe_path: Path, rootfs_tar: Path | None = None,
             recipe_path.read_text(encoding="utf-8"),
             archive_format="cpio" if rootfs_cpio is not None else "tar",
         )
+        if expected_rootfs_sha256 is not None:
+            hash_field = ("target_rootfs_cpio_sha256" if rootfs_cpio is not None
+                          else "target_rootfs_tar_sha256")
+            if report["target_rootfs_preflight"][hash_field] != expected_rootfs_sha256:
+                raise NativeAbiError("native_rootfs_source_sha256_mismatch")
     return report
 
 
@@ -646,11 +657,14 @@ def main() -> int:
                           help="Exact OS-owned Buildroot rootfs.tar for read-only ELF preflight")
     archives.add_argument("--rootfs-cpio", type=Path,
                           help="Exact OS-owned published rootfs.cpio.gz for read-only ELF preflight")
+    parser.add_argument("--expected-rootfs-sha256",
+                        help="Expected SHA-256 of exact OS-verified rootfs archive; fail closed on mismatch")
     parser.add_argument("--require-rootfs-name-resolution", action="store_true",
                         help="Fail if any required rootfs loader or DT_NEEDED name is unresolved")
     args = parser.parse_args()
     try:
-        result = audit(args.binary, args.recipe, args.rootfs_tar, args.rootfs_cpio)
+        result = audit(args.binary, args.recipe, args.rootfs_tar, args.rootfs_cpio,
+                       args.expected_rootfs_sha256)
     except (NativeAbiError, OSError, UnicodeError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         return 2
