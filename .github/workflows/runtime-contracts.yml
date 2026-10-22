@@ -20,6 +20,9 @@ jobs:
           python-version: "3.12"
       - name: Install the canonical Runtime
         run: python -m pip install --disable-pip-version-check .
+      - name: Verify project workspace grant and Git boundaries (Linux)
+        run: python -m unittest tests.test_project_workspace_port -v
+
       - name: Verify native composition and shared transport lifecycle on Linux
         run: >-
           python -m unittest
@@ -73,6 +76,8 @@ jobs:
       - name: Compile Runtime packages
         run: python -m compileall -q ordax_connector ordax_dev_agent ordax_device_agent ordax_studio mcp_blender_unity
 
+      - name: Verify project workspace grant and Git boundaries (Windows)
+        run: python -m unittest tests.test_project_workspace_port -v
       - name: Validate managed runtime, updater, and publication governance PowerShell syntax
         shell: pwsh
         run: |
