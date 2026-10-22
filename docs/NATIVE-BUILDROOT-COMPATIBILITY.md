@@ -51,6 +51,13 @@ em execução; esses nomes são informados separadamente como
 `build_tool_overlap_names`, sem excluí-los. O auditor preserva explicitamente `native_dependency_closure_proven=false`,
 `runtime_agent_packaged=false` e `device_install_authorized=false`.
 
+O auditor rejeita linhas não reconhecidas, dependências sem pin, diretivas
+externas, hashes apenas em comentários e alvos Python conflitantes. A suíte
+`tests.test_native_buildroot_lock` roda no workflow **Native Product Runtime
+Candidate** existente, inclusive quando o auditor ou seus testes mudam. Esse
+gate valida a completude da comparação, mas não transforma o lock CPython 3.12
+em um componente compatível com a ABI CPython 3.14 do OrdaX OS.
+
 Regras para o próximo passo: recompilar dependências nativas com a toolchain
 Buildroot selecionada pelo OS; providenciar uma receita Buildroot canônica
 para o MCP SDK e demais pacotes ausentes, com fontes/versões/hashes explícitos;
