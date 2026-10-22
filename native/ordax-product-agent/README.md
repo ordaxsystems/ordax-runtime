@@ -25,43 +25,6 @@ lock/recipe hashes and the offline proof. Byte-for-byte reproducibility has not
 been established. This is an unsigned candidate, not an installable signed OS
 component or evidence of physical notebook execution.
 
-## Cross-repository dependency version audit — required before replacing Alpine
-
-The Buildroot-built private CPython **3.14.7** passes isolated execution with
-its musl loader, TLS, and zlib in the OrdaX OS Independent Base branch. This is
-**not** proof that the currently locked Product MCP dependencies are compatible:
-`native/ordax-product-agent/requirements.lock` was resolved for Python **3.12**.
-
-The canonical upstream Runtime now includes `audit_buildroot_lock.py` to
-compare its actual locked package versions against the exact
-**SHA256-verified, already extracted Buildroot source** selected by the OS
-owner. No duplicated version list, forked package manager or extra runtime.
-Run it from this repository on a verified Buildroot tree:
-
-```sh
-python3 native/ordax-product-agent/audit_buildroot_lock.py \
-  --buildroot /path/to/verified/buildroot-2026.08
-```
-
-The JSON lists the Python-ABI mismatch, missing Buildroot packages, and
-source-version mismatches. The `--require-compatible` form fails closed
-until all source versions match. Both outputs **always** keep
-`native_dependency_closure_proven=false`,
-`runtime_agent_packaged=false` and `device_install_authorized=false`:
-version parity alone never proves cross-compilation or ELF compatibility.
-
-Important verified examples in Buildroot **2026.08**: `python-httpx`
-matches the current lock at `0.28.1`, but `python-websockets` is
-`16.0` against locked `15.0.1`, `python-pillow` is `12.0.0` against
-`11.3.0`, `python-cryptography` is `48.0.0` against `50.0.2`,
-`python-pydantic-core` is `2.46.3` against `2.50.1`, and no
-`python-mcp` target package exists in that release. The **single**
-`ordax-runtime` owner must reconcile these exact pins and provide a
-canonical Buildroot recipe for missing packages, then prove wheels/extensions
-built by the OrdaX toolchain with the actual Python ABI. Do not copy
-Alpine wheels, silently accept newer incompatible versions, introduce
-a second Product dispatcher, or enable installation early.
-
 ## Independent Base / kernel-only ABI gate
 
 The OrdaX OS Independent Base uses a **Buildroot-built static musl** userspace.
