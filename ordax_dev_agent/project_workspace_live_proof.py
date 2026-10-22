@@ -99,7 +99,7 @@ def project_workspace_live_proof(
         "device_id": device_id,
         "resource_id": resource_id,
     }
-    if scope.device_id != device_id:
+    if scope.device_id != device_id or actor.client_id != scope.client_id:
         return None
     if any(received.get(key) != value for key, value in expected.items()):
         return None
