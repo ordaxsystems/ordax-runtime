@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .git_readonly import readonly_git_environment
+
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,180}$")
 _RESOURCE = re.compile(r"^resource_[A-Za-z0-9_-]{8,160}$")
 _EXCLUDED = frozenset({".git", "node_modules", ".venv", "__pycache__", ".next",
@@ -99,11 +101,7 @@ def _git(root: Path, *args: str) -> bytes:
         # Inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, config injection,
         # alternate object stores, etc. must never redirect a project snapshot.
         # Preserve the ordinary process environment, not Git's ambient state.
-        env = {name: value for name, value in os.environ.items()
-               if not name.upper().startswith("GIT_")}
-        env.update({"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
-                    "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_NOSYSTEM": "1",
-                    "GIT_CONFIG_GLOBAL": os.devnull})
+        env = readonly_git_environment()
         response = subprocess.run(
             ["git", "-C", str(root), "--no-optional-locks",
              "-c", "core.fsmonitor=false", *args],
