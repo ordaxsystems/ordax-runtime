@@ -1,6 +1,7 @@
 """Disposable tests for the host-only picker seam; no real Owner/Device grants."""
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import unittest
@@ -231,6 +232,24 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
         self.root.mkdir()
         with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_grant_missing"):
             port.snapshot(self.actor, self.device, resource)
+
+    def test_ambient_git_config_cannot_spoof_project_origin(self):
+        fake = self.base / "other"
+        fake.mkdir()
+        inherited = {
+            "GIT_DIR": str(fake),
+            "GIT_WORK_TREE": str(fake),
+            "GIT_INDEX_FILE": str(fake / "index"),
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "remote.origin.url",
+            "GIT_CONFIG_VALUE_0": "git@github.com:attacker/wrong.git",
+        }
+        with patch.dict(os.environ, inherited):
+            resource = self.choose()
+            self.allowed = True
+            proof = self.picker.as_port(local_policy=lambda _root: True).verify_binding(
+                self.actor, self.device, resource)
+            self.assertEqual(proof["resourceId"], resource)
 
     def test_limits_and_native_host_provenance_are_mandatory(self):
         with self.assertRaises(ValueError):
