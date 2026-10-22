@@ -68,7 +68,12 @@ def _reparse(path: Path) -> bool:
     ) or bool(getattr(path, "is_junction", lambda: False)())
 
 
-def _secure_root(root: Path, grant: VerifiedProjectResource) -> Path:
+def capture_workspace_root_identity(root: Path) -> tuple[int, int]:
+    """Attest one local directory using the same boundary as the read port.
+
+    Called only from trusted host composition, never with model-selected paths.
+    No symlink, junction or reparse-point ancestor may be trusted.
+    """
     if not isinstance(root, Path) or not root.is_absolute():
         raise ProjectWorkspaceDenied("workspace_root_invalid")
     try:
@@ -80,7 +85,11 @@ def _secure_root(root: Path, grant: VerifiedProjectResource) -> Path:
         raise ProjectWorkspaceDenied("workspace_root_unavailable") from error
     if not stat.S_ISDIR(info.st_mode):
         raise ProjectWorkspaceDenied("workspace_root_not_directory")
-    if (info.st_dev, info.st_ino) != (grant.root_device, grant.root_inode):
+    return (info.st_dev, info.st_ino)
+
+
+def _secure_root(root: Path, grant: VerifiedProjectResource) -> Path:
+    if capture_workspace_root_identity(root) != (grant.root_device, grant.root_inode):
         raise ProjectWorkspaceDenied("workspace_root_changed")
     return root
 
