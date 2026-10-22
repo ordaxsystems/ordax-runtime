@@ -284,6 +284,39 @@ def main() -> int:
     return run(AgentConfig.from_env())
 
 
+def _native_local_access_granted(provider: Callable[[], bool] | None) -> bool:
+    """Recheck the OS-owned local MCP switch; unknown/error is always denial."""
+    if provider is None:
+        return True  # Windows uses its existing local Computer Access owner.
+    try:
+        return provider() is True
+    except Exception:
+        return False
+
+
+def _wait_for_native_access(
+    delay: float,
+    stop_requested: threading.Event,
+    native_access_enabled: Callable[[], bool] | None,
+) -> bool:
+    """Wait on the existing loop without delaying local revocation.
+
+    Only the Native host polls its OS-owned local policy during idle/retry.
+    Remote claim cadence is unchanged and no independent poller is created.
+    """
+    if native_access_enabled is None:
+        return not stop_requested.wait(delay)
+    deadline = time.monotonic() + max(0.0, delay)
+    while not stop_requested.is_set():
+        if not _native_local_access_granted(native_access_enabled):
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        stop_requested.wait(min(1.0, remaining))
+    return False
+
+
 def run(
     config: AgentConfig,
     *,
@@ -291,6 +324,7 @@ def run(
     computer_adapter: Mapping | None = None,
     status_port: int = 8765,
     orchestrator_installation_provider: Callable | None = None,
+    native_access_enabled: Callable[[], bool] | None = None,
 ) -> int:
     """Run the canonical lifecycle with host-owned configuration and identity.
 
@@ -314,6 +348,12 @@ def run(
         # adapter means no graphical capability, not a fallback to Win32.
         if computer_adapter is None:
             computer_adapter = {}
+        if not callable(native_access_enabled):
+            raise TypeError("Native Runtime requires the OS-owned local Connector policy")
+        if not _native_local_access_granted(native_access_enabled):
+            raise RuntimeError("native_local_connector_disabled")
+    elif native_access_enabled is not None:
+        raise TypeError("Native Connector policy requires a native device identity")
     started_monotonic = time.monotonic()
     _startup_log(config, f"RUN_ENTER pid={os.getpid()} version={__version__}")
     _startup_log(config, "CONFIG_READY")
@@ -430,6 +470,10 @@ def run(
         from .remote_protocol import DeviceAuthorizationError
 
         while not stop:
+            if not _native_local_access_granted(native_access_enabled):
+                runtime["state"] = "local-disabled"
+                status_server.shutdown()
+                return 0
             try:
                 runtime["state"] = "recovering-terminal-reports"
                 recovered = int(recover_pending_reports())
@@ -448,9 +492,16 @@ def run(
                 runtime["state"] = "terminal-recovery-error"
                 runtime["last_result"] = {"ok": False, "summary": str(error)}
                 print(f"terminal report recovery error: {error}", file=sys.stderr)
-                time.sleep(max(5.0, config.poll_seconds))
+                if not _wait_for_native_access(
+                    max(5.0, config.poll_seconds), stop_requested, native_access_enabled,
+                ):
+                    continue
 
     while not stop and not runtime["paired"]:
+        if not _native_local_access_granted(native_access_enabled):
+            runtime["state"] = "local-disabled"
+            status_server.shutdown()
+            return 0
         try:
             paired_now = control.pair_if_needed(
                 host_actions,
@@ -470,7 +521,10 @@ def run(
             runtime["state"] = "pairing-error"
             runtime["last_result"] = {"ok": False, "summary": str(error)}
             print(f"pairing error: {error}", file=sys.stderr)
-            time.sleep(max(5.0, config.poll_seconds))
+            if not _wait_for_native_access(
+                max(5.0, config.poll_seconds), stop_requested, native_access_enabled,
+            ):
+                continue
 
     if stop:
         status_server.shutdown()
@@ -482,6 +536,9 @@ def run(
 
     try:
         while not stop:
+            if not _native_local_access_granted(native_access_enabled):
+                runtime["state"] = "local-disabled"
+                break
             now = time.monotonic()
             try:
                 if callable(recover_pending_reports):
@@ -519,8 +576,9 @@ def run(
                         idle_claim_misses, config.poll_seconds,
                     )
                     # The WebSocket transport already waits for work; avoid an extra idle gap.
-                    time.sleep(0.10 if getattr(control, "uses_long_poll", False) and claim_seconds >= 1.0
-                               else max(0.10, idle_delay))
+                    idle_wait = (0.10 if getattr(control, "uses_long_poll", False)
+                                 and claim_seconds >= 1.0 else max(0.10, idle_delay))
+                    _wait_for_native_access(idle_wait, stop_requested, native_access_enabled)
                     continue
 
                 idle_claim_misses = 0
@@ -593,7 +651,11 @@ def run(
                             PRODUCT_REMOTE_CAPABILITY,
                             PRODUCT_REMOTE_LEGACY_CAPABILITY,
                         )
-                        if job.action == "orchestrator.app_read":
+                        if not _native_local_access_granted(native_access_enabled):
+                            # The local switch can be turned off after claim/start.
+                            # Report denial, never execute under a stale grant.
+                            result = ActionResult(False, "native_local_connector_disabled")
+                        elif job.action == "orchestrator.app_read":
                             from .orchestrator_product_execution import execute_orchestrator_app_status
                             result = execute_orchestrator_app_status(control, job,
                                 installation_provider=orchestrator_installation_provider)
@@ -671,7 +733,7 @@ def run(
                 # identical error through a prolonged backend outage.
                 if transport_failures <= 2 or (transport_failures & (transport_failures - 1)) == 0:
                     print(f"control-plane error (retry in {retry_delay:.0f}s): {error}", file=sys.stderr)
-                stop_requested.wait(retry_delay)
+                _wait_for_native_access(retry_delay, stop_requested, native_access_enabled)
                 runtime["state"] = "stopping" if stop else "ready"
     finally:
         runtime["state"] = "stopping"
