@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.control_plane import build_control_plane
-from ordax_dev_agent.main import run
+from ordax_dev_agent.main import run, _wait_for_native_access
 from ordax_dev_agent.models import AgentJob
 from ordax_dev_agent.models import ActionResult
 from ordax_dev_agent.actions import ActionRegistry, COMPUTER_GRAPHICAL_ACTIONS
@@ -81,6 +81,34 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                 run(self.config, device_credential_provider=self.provider,
                     native_access_enabled=lambda: False)
             server.assert_not_called()
+
+    def test_native_idle_wait_rechecks_existing_local_switch_without_new_scheduler(self):
+        from threading import Event
+
+        self.assertTrue(_wait_for_native_access(0, Event(), lambda: True))
+        self.assertFalse(_wait_for_native_access(0, Event(), lambda: False))
+        self.assertFalse(_wait_for_native_access(0, Event(), lambda: 1 / 0))
+        stopped = Event()
+        stopped.set()
+        self.assertFalse(_wait_for_native_access(10, stopped, lambda: True))
+
+        enabled = [True]
+
+        class RevokingWait:
+            def is_set(self):
+                return False
+
+            def wait(self, seconds):
+                self_seconds = seconds
+                self_owner = enabled
+                self_owner[0] = False
+                self.test_case.assertLessEqual(self_seconds, 1.0)
+                return False
+
+        wait = RevokingWait()
+        wait.test_case = self
+        self.assertFalse(_wait_for_native_access(8, wait, lambda: enabled[0]))
+        self.assertFalse(enabled[0])
 
     def test_native_switch_revoked_after_claim_refuses_file_mutation(self):
         target = self.root / "revoked.txt"
