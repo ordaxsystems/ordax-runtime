@@ -477,14 +477,25 @@ def main() -> int:
     parser.add_argument("--require-independent", action="store_true")
     parser.add_argument("--rootfs-tar", type=Path,
                         help="Exact OS-owned Buildroot rootfs.tar for read-only ELF preflight")
+    parser.add_argument("--require-rootfs-name-resolution", action="store_true",
+                        help="Fail if any required rootfs loader or DT_NEEDED name is unresolved")
     args = parser.parse_args()
     try:
         result = audit(args.binary, args.recipe, args.rootfs_tar)
     except (NativeAbiError, OSError, UnicodeError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         return 2
+    if args.require_rootfs_name_resolution and args.rootfs_tar is None:
+        print(json.dumps({"ok": False, "error": "rootfs_tar_required"}, sort_keys=True))
+        return 2
     print(json.dumps(result, sort_keys=True))
-    return 0 if result["independent_base_abi_ready"] or not args.require_independent else 1
+    if args.require_independent and not result["independent_base_abi_ready"]:
+        return 1
+    if args.require_rootfs_name_resolution and not result[
+        "target_rootfs_preflight"
+    ]["default_directory_name_resolution_complete"]:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
