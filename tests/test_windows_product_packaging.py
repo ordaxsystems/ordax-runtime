@@ -563,6 +563,25 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("ORDAX_APP_INTELLIGENCE_REGISTRY_OK", build)
         self.assertIn('"*.json"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
+    def test_installed_private_runtime_proves_hyperdrive_idle_budget(self) -> None:
+        """Reject stale high-frequency clients from the signed product build."""
+        probe = (ROOT / "scripts" / "windows" / "assert-runtime-package-capabilities.ps1").read_text(
+            encoding="utf-8")
+        builder = (ROOT / "scripts" / "windows" / "build-ordax-studio-product.ps1").read_text(
+            encoding="utf-8")
+        smoke = (ROOT / "scripts" / "windows" / "test-ordax-studio-install-smoke.ps1").read_text(
+            encoding="utf-8")
+        self.assertIn("from ordax_dev_agent.main import product_idle_claim_delay_seconds", probe)
+        self.assertIn("product_idle_claim_delay_seconds(1, 0.25)", probe)
+        self.assertIn("product_idle_claim_delay_seconds(40, configured_ceiling) < 30.0", probe)
+        self.assertIn("product_idle_claim_delay_seconds(40, 300.0) > 60.0", probe)
+        self.assertIn("ORDAX_PACKAGED_PRODUCT_IDLE_BUDGET=PASS", probe)
+        self.assertIn("assert-runtime-package-capabilities.ps1", builder)
+        self.assertIn("assert-runtime-package-capabilities.ps1", smoke)
+        # The assertion must execute from the installed Python -I probe,
+        # never by importing the developer checkout as an alternative owner.
+        self.assertIn("$probe | & $privatePythonPath -I - $expectedModule", probe)
+
     def test_installer_retires_only_recognized_historical_install_roots(self) -> None:
         installer = (ROOT / "packaging" / "windows" / "ordax-studio.iss").read_text(encoding="utf-8")
         self.assertIn("function IsRecognizedOrdaxInstallRoot", installer)
