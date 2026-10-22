@@ -16,7 +16,7 @@ from ordax_dev_agent.project_workspace_port import (
     ProjectWorkspaceDenied, WorkspaceActor,
 )
 from ordax_dev_agent.workspace_resource_selection import (
-    LiveWorkspaceAuthority, WorkspaceResourceSelection,
+    LiveWorkspaceAuthority, OwnerCanonicalProjectScope, WorkspaceResourceSelection,
 )
 
 
@@ -60,6 +60,7 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
         self.allowed = False
         self.revoked = False
         self.calls = 0
+        self.scope_calls = 0
         self.picker = self.make_picker()
 
     def live(self, actor, device, resource):
@@ -72,11 +73,20 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             actor_id=self.actor.actor_id, client_id=self.client,
             workspace_session_id=self.actor.workspace_session_id,
             device_id=self.device, resource_id=resource, grant_id=self.grant,
+            issued_at=datetime.now(timezone.utc) - timedelta(minutes=1),
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
             allowed_actions=frozenset({"read"}),
         )
 
-    def make_picker(self, *, choose=None, confirm=None, lookup=None):
+    def canonical_scope(self, repo, device):
+        self.scope_calls += 1
+        return OwnerCanonicalProjectScope(
+            owner_user_id=self.owner,client_id=self.client,
+            space_id=self.space,project_id=self.project,device_id=device,
+            repository_full_name=repo,
+        )
+
+    def make_picker(self, *, choose=None, confirm=None, lookup=None, scope_lookup=None):
         def select(project):
             self.selected.append(project.root)
             return project.root
@@ -89,6 +99,9 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             config=self.config, device_id=self.device,
             choose_directory=choose if choose is not None else select,
             confirm_owner=confirm if confirm is not None else approve,
+            canonical_project_scope=(
+                scope_lookup if scope_lookup is not None else self.canonical_scope
+            ),
             live_authority=lookup if lookup is not None else self.live,
             clock=lambda: self.clock[0],
         )
@@ -192,6 +205,9 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             {"grant_id": self.grant, "root": str(self.root)},
             None,
             replace(valid, owner_user_id="owner_fake"),
+            replace(valid, owner_user_id=_id()),
+            replace(valid, space_id=_id()),
+            replace(valid, canonical_project_id=_id()),
             replace(valid, client_id=_id()),
             replace(valid, grant_id="grant_fake"),
             replace(valid, space_id="bad_space"),
@@ -199,6 +215,9 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             replace(valid, allowed_actions=frozenset({"read", "write"})),
             replace(valid, expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)),
             replace(valid, expires_at=datetime.now(timezone.utc) + timedelta(days=2)),
+            replace(valid, issued_at=datetime.now(timezone.utc) + timedelta(minutes=1)),
+            replace(valid, issued_at=datetime.now(timezone.utc) - timedelta(days=3)),
+            replace(valid, issued_at=datetime.now(timezone.utc).replace(tzinfo=None)),
             replace(valid, expires_at=datetime.now(timezone.utc).replace(tzinfo=None)),
         )
         for authority in invalid:
@@ -208,6 +227,56 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             port = picker.as_port(local_policy=lambda _root: True)
             with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_grant_missing"):
                 port.verify_binding(self.actor, self.device, other)
+
+    def test_canonical_scope_missing_or_forged_blocks_picker_before_gui(self):
+        invalid = (
+            None,
+            {"space_id": self.space,"project_id": self.project},
+            replace(self.canonical_scope(self.REPOSITORY,self.device),owner_user_id=_id(),
+                    space_id="untrusted_space"),
+            replace(self.canonical_scope(self.REPOSITORY,self.device),project_id="invalid"),
+            replace(self.canonical_scope(self.REPOSITORY,self.device),device_id=_id()),
+            replace(self.canonical_scope(self.REPOSITORY,self.device),
+                    repository_full_name="ordaxsystems/other-repo"),
+            replace(self.canonical_scope(self.REPOSITORY,self.device),client_id="invalid"),
+        )
+        for value in invalid:
+            selected = []
+            picker = self.make_picker(
+                choose=lambda project: selected.append(project.root) or project.root,
+                scope_lookup=lambda *_: value,
+            )
+            with self.assertRaisesRegex(ProjectWorkspaceDenied,
+                                        "workspace_project_scope_unavailable"):
+                self.choose(picker)
+            self.assertEqual(selected, [])
+            self.assertEqual(picker._selections, {})
+
+    def test_canonical_scope_reassignment_during_dialog_denies_selection(self):
+        calls = []
+        def scope(repo,device):
+            calls.append((repo,device))
+            answer = self.canonical_scope(repo,device)
+            return replace(answer,project_id=_id()) if len(calls) > 1 else answer
+        picker = self.make_picker(scope_lookup=scope)
+        with self.assertRaisesRegex(ProjectWorkspaceDenied,"workspace_project_scope_changed"):
+            self.choose(picker)
+        self.assertEqual(len(calls),2)
+        self.assertEqual(picker._selections, {})
+
+    def test_pinned_project_cannot_be_confused_with_other_valid_project(self):
+        resource = self.choose()
+        self.allowed = True
+        valid = self.live(self.actor,self.device,resource)
+        for field in ("owner_user_id","space_id","canonical_project_id","client_id"):
+            other = replace(valid,**{field:_id()})
+            self.picker._live = lambda *args, value=other: value
+            with self.assertRaisesRegex(ProjectWorkspaceDenied,"workspace_grant_missing"):
+                self.picker.as_port(local_policy=lambda _: True).verify_binding(
+                    self.actor,self.device,resource)
+        self.picker._live = self.live
+        self.assertTrue(self.picker.as_port(local_policy=lambda _: True).verify_binding(
+            self.actor,self.device,resource)["authorized"])
 
     def test_selection_expiry_and_revocation_midscan_are_fail_closed(self):
         resource = self.choose()
@@ -285,7 +354,9 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             WorkspaceResourceSelection(config=self.config, device_id="device",
                 choose_directory=lambda *_: self.root,
-                confirm_owner=lambda *_: True,live_authority=self.live)
+                confirm_owner=lambda *_: True,
+                canonical_project_scope=self.canonical_scope,
+                live_authority=self.live)
         with patch("ordax_dev_agent.workspace_resource_selection._MAX_SELECTIONS", 1):
             self.choose()
             with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_selection_limit"):
