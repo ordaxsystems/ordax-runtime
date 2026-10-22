@@ -69,9 +69,9 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             return None
         return LiveWorkspaceAuthority(
             owner_user_id=self.owner, space_id=self.space,
-            canonical_project_id=self.project, lab_project_id=self.actor.project_id,
-            actor_id=self.actor.actor_id, client_id=self.client,
-            workspace_session_id=self.actor.workspace_session_id,
+            canonical_project_id=self.project, lab_project_id=actor.project_id,
+            actor_id=actor.actor_id, client_id=actor.client_id,
+            workspace_session_id=actor.workspace_session_id,
             device_id=self.device, resource_id=resource, grant_id=self.grant,
             issued_at=datetime.now(timezone.utc) - timedelta(minutes=1),
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
@@ -135,6 +135,7 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
 
     def test_registered_selection_requires_exact_server_proof_and_can_be_revoked(self):
         self.allowed = True
+        actor = WorkspaceActor(self.owner, self.client, "workspace_a", "lab_a")
         registered = []
         revoked = []
         picker = self.make_picker(
@@ -144,10 +145,10 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             ),
             revoke=lambda scope, actor, rid: revoked.append((scope, actor, rid)),
         )
-        resource = picker.choose_for_owner(self.REPOSITORY, self.actor)
+        resource = picker.choose_for_owner(self.REPOSITORY, actor)
         self.assertTrue(resource.startswith("resource_"))
         self.assertEqual(len(registered), 1)
-        self.assertEqual(registered[0][1], self.actor)
+        self.assertEqual(registered[0][1], actor)
         self.assertTrue(picker._selections[resource].bound)
         self.assertEqual(picker.as_port(local_policy=lambda _root: True).verify_binding(
             self.actor, self.device, resource,
@@ -159,16 +160,17 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
 
     def test_unconfirmed_or_mismatched_platform_resource_is_revoked_and_never_stored(self):
         self.allowed = True
+        actor = WorkspaceActor(self.owner, self.client, "workspace_a", "lab_a")
         revoked = []
         picker = self.make_picker(
-            register=lambda _scope, actor, rid: replace(
-                self.live(actor, self.device, rid),
+            register=lambda _scope, selected_actor, rid: replace(
+                self.live(selected_actor, self.device, rid),
                 allowed_actions=frozenset({"read", "write"}),
             ),
             revoke=lambda scope, actor, rid: revoked.append((scope, actor, rid)),
         )
         with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_grant_unverified"):
-            picker.choose_for_owner(self.REPOSITORY, self.actor)
+            picker.choose_for_owner(self.REPOSITORY, actor)
         self.assertEqual(len(revoked), 1)
         self.assertEqual(picker._selections, {})
 

@@ -42,6 +42,7 @@ class AuthenticatedOwnerProjectScopeResolverTests(unittest.TestCase):
         self.fail_session = False
         self.calls: list[tuple[str, str, str]] = []
         self.on_call = None
+        self.workspace_grants: dict[str, str] = {}
         transport = httpx.MockTransport(self.handle)
         http = httpx.Client(transport=transport)
         self.addCleanup(http.close)
@@ -61,8 +62,9 @@ class AuthenticatedOwnerProjectScopeResolverTests(unittest.TestCase):
 
     def workspace_proof(self, body):
         issued = datetime.now(timezone.utc)
+        grant_id = self.workspace_grants.setdefault(body["resource_id"], _uuid())
         grant = {
-            "grant_id": _uuid(),
+            "grant_id": grant_id,
             "owner_user_id": self.owner,
             "space_id": self.scope_space,
             "project_id": self.scope_project,
