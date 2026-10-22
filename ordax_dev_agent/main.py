@@ -294,6 +294,29 @@ def _native_local_access_granted(provider: Callable[[], bool] | None) -> bool:
         return False
 
 
+def _wait_for_native_access(
+    delay: float,
+    stop_requested: threading.Event,
+    native_access_enabled: Callable[[], bool] | None,
+) -> bool:
+    """Wait on the existing loop without delaying local revocation.
+
+    Only the Native host polls its OS-owned local policy during idle/retry.
+    Remote claim cadence is unchanged and no independent poller is created.
+    """
+    if native_access_enabled is None:
+        return not stop_requested.wait(delay)
+    deadline = time.monotonic() + max(0.0, delay)
+    while not stop_requested.is_set():
+        if not _native_local_access_granted(native_access_enabled):
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        stop_requested.wait(min(1.0, remaining))
+    return False
+
+
 def run(
     config: AgentConfig,
     *,
@@ -469,7 +492,10 @@ def run(
                 runtime["state"] = "terminal-recovery-error"
                 runtime["last_result"] = {"ok": False, "summary": str(error)}
                 print(f"terminal report recovery error: {error}", file=sys.stderr)
-                time.sleep(max(5.0, config.poll_seconds))
+                if not _wait_for_native_access(
+                    max(5.0, config.poll_seconds), stop_requested, native_access_enabled,
+                ):
+                    continue
 
     while not stop and not runtime["paired"]:
         if not _native_local_access_granted(native_access_enabled):
@@ -495,7 +521,10 @@ def run(
             runtime["state"] = "pairing-error"
             runtime["last_result"] = {"ok": False, "summary": str(error)}
             print(f"pairing error: {error}", file=sys.stderr)
-            time.sleep(max(5.0, config.poll_seconds))
+            if not _wait_for_native_access(
+                max(5.0, config.poll_seconds), stop_requested, native_access_enabled,
+            ):
+                continue
 
     if stop:
         status_server.shutdown()
@@ -547,8 +576,9 @@ def run(
                         idle_claim_misses, config.poll_seconds,
                     )
                     # The WebSocket transport already waits for work; avoid an extra idle gap.
-                    time.sleep(0.10 if getattr(control, "uses_long_poll", False) and claim_seconds >= 1.0
-                               else max(0.10, idle_delay))
+                    idle_wait = (0.10 if getattr(control, "uses_long_poll", False)
+                                 and claim_seconds >= 1.0 else max(0.10, idle_delay))
+                    _wait_for_native_access(idle_wait, stop_requested, native_access_enabled)
                     continue
 
                 idle_claim_misses = 0
@@ -703,7 +733,7 @@ def run(
                 # identical error through a prolonged backend outage.
                 if transport_failures <= 2 or (transport_failures & (transport_failures - 1)) == 0:
                     print(f"control-plane error (retry in {retry_delay:.0f}s): {error}", file=sys.stderr)
-                stop_requested.wait(retry_delay)
+                _wait_for_native_access(retry_delay, stop_requested, native_access_enabled)
                 runtime["state"] = "stopping" if stop else "ready"
     finally:
         runtime["state"] = "stopping"
