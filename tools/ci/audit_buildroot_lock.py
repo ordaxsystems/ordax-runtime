@@ -16,10 +16,11 @@ import json
 from pathlib import Path
 import re
 
-HERE = Path(__file__).resolve().parent
-DEFAULT_LOCK = HERE / "requirements.lock"
-DEFAULT_BOOTSTRAP_LOCK = HERE / "bootstrap.lock"
-DEFAULT_BUILD_REQUIREMENTS = HERE / "build-requirements.in"
+ROOT = Path(__file__).resolve().parents[2]
+NATIVE = ROOT / "native/ordax-product-agent"
+DEFAULT_LOCK = NATIVE / "requirements.lock"
+DEFAULT_BOOTSTRAP_LOCK = NATIVE / "bootstrap.lock"
+DEFAULT_BUILD_REQUIREMENTS = NATIVE / "build-requirements.in"
 PIN = re.compile(r"(?m)^([A-Za-z0-9][A-Za-z0-9_.-]*)==([A-Za-z0-9][^\s\\]*)\s*\\?")
 LOCK_PYTHON = re.compile(r"--python-version\s+(\d+\.\d+)")
 VERSION = re.compile(r"(?m)^\s*PYTHON_([A-Z0-9_]+)_VERSION\s*=\s*([^\s#]+)\s*$")
