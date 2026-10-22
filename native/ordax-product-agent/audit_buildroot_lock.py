@@ -60,6 +60,33 @@ def read_requirements(path: Path, *, lock: bool) -> tuple[dict[str, str], str | 
     return requirements, target.group(1) if target else None
 
 
+def read_build_only_requirements(path: Path) -> set[str]:
+    """Read direct build-tool names including version *ranges*, not just pins.
+
+    requirements.lock and bootstrap.lock are exact lock files; the
+    build-requirements.in is deliberately a constraint input and can use
+    e.g. hatchling>=1.27,<2. Excluding it must not mistake its contents
+    for an empty exact lock.
+    """
+    if not path.is_file() or path.is_symlink():
+        raise RuntimeBuildrootAuditError("canonical build-requirements file unavailable")
+    packages = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.partition("#")[0].strip()
+        if not line:
+            continue
+        match = re.fullmatch(
+            r"([A-Za-z0-9][A-Za-z0-9_.-]*)\s*(?:===|==|~=|!=|>=|<=|>|<).+",
+            line,
+        )
+        if not match:
+            raise RuntimeBuildrootAuditError("unrecognized direct build-tool requirement")
+        packages.add(normalize(match.group(1)))
+    if not packages:
+        raise RuntimeBuildrootAuditError("direct build-tool requirements are empty")
+    return packages
+
+
 def buildroot_python_version(buildroot: Path) -> str:
     file = buildroot / "package/python3/python3.mk"
     if not file.is_file() or file.is_symlink():
@@ -97,8 +124,8 @@ def audit(
         raise RuntimeBuildrootAuditError("verified Buildroot source tree unavailable")
     pinned, lock_python = read_requirements(requirements, lock=True)
     boot, _ = read_requirements(bootstrap, lock=True)
-    direct_build, _ = read_requirements(build_requirements, lock=False)
-    builders = set(boot) | set(direct_build)
+    direct_build = read_build_only_requirements(build_requirements)
+    builders = set(boot) | direct_build
     # Keep the original authoritative lock and report exclusions explicitly.
     # A build tool appearing in a runtime import chain needs a separate
     # package-graph proof: this inventory itself cannot authorize execution.
