@@ -361,6 +361,8 @@ def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "") -> dic
             for count, member in enumerate(tar, 1):
                 if count > ROOTFS_MAX_ENTRIES:
                     raise NativeAbiError("native_rootfs_member_count_exceeded")
+                if member.name in (".", "./"):
+                    continue
                 name = _tar_member_name(member.name)
                 if not _library_namespace(name):
                     continue
