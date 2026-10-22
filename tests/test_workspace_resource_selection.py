@@ -144,6 +144,21 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
                 self.choose(picker)
             self.assertEqual(picker._selections, {})
 
+    def test_symlink_alias_and_dotdot_paths_never_convert_to_root_authority(self):
+        dotdot = self.base / "registered" / ".." / "registered"
+        picker = self.make_picker(choose=lambda _project: dotdot)
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_selection_outside_registered_project"):
+            self.choose(picker)
+        link = self.base / "link_to_root"
+        try:
+            link.symlink_to(self.root, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("creating Windows symlink requires developer privileges")
+        picker = self.make_picker(choose=lambda _project: link)
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_root_reparse_point"):
+            self.choose(picker)
+        self.assertEqual(picker._selections, {})
+
     def test_unknown_or_ambiguous_local_project_is_rejected(self):
         with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_registered_project_unavailable"):
             self.picker.choose_for_owner("ordaxsystems/nonexistent")
