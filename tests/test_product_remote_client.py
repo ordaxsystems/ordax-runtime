@@ -11,6 +11,8 @@ from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRe
 DEVICE_ID = "24630b00-e9c0-4d93-b38a-2367048cd9d1"
 CLIENT_ID = "11111111-1111-4111-8111-111111111111"
 GROUP_ID = "22222222-2222-4222-8222-222222222222"
+SPACE_ID = "55555555-5555-4555-8555-555555555555"
+PROJECT_ID = "66666666-6666-4666-8666-666666666666"
 
 
 class ProductRemoteClientTests(unittest.TestCase):
@@ -97,6 +99,63 @@ class ProductRemoteClientTests(unittest.TestCase):
         with self.assertRaises(ProductRemoteError) as caught:
             client.owner_remote_authority("jwt", device_id=DEVICE_ID)
         self.assertEqual(caught.exception.error_code, "product_remote_invalid_response")
+
+    def test_owner_project_scope_is_bound_to_requested_device_and_repository(self):
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            self.assertEqual(request.method, "GET")
+            self.assertEqual(request.url.path, "/v3/owner/project-scope")
+            self.assertEqual(request.url.params.get("device_id"), DEVICE_ID)
+            self.assertEqual(request.url.params.get("repository_full_name"), "ordaxsystems/veste")
+            self.assertEqual(request.headers["authorization"], "Bearer owner-token")
+            return httpx.Response(200, json={
+                "ok": True,
+                "space_id": SPACE_ID,
+                "project_id": PROJECT_ID,
+                "repository_id": 17,
+                "repository_full_name": "ordaxsystems/veste",
+            })
+
+        client = ProductRemoteClient(
+            "https://mcp.example.test",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        scope = client.owner_project_scope(
+            "owner-token", device_id=DEVICE_ID,
+            repository_full_name="ordaxsystems/veste",
+        )
+        self.assertEqual(scope, {
+            "space_id": SPACE_ID,
+            "project_id": PROJECT_ID,
+            "repository_id": 17,
+            "repository_full_name": "ordaxsystems/veste",
+        })
+        self.assertEqual(len(seen), 1)
+
+    def test_owner_project_scope_rejects_repository_mismatch_and_invalid_ids(self):
+        payloads = [
+            {"ok": True, "space_id": SPACE_ID, "project_id": PROJECT_ID,
+             "repository_id": 17, "repository_full_name": "ordaxsystems/other"},
+            {"ok": True, "space_id": "not-a-uuid", "project_id": PROJECT_ID,
+             "repository_id": 17, "repository_full_name": "ordaxsystems/veste"},
+            {"ok": True, "space_id": SPACE_ID, "project_id": PROJECT_ID,
+             "repository_id": True, "repository_full_name": "ordaxsystems/veste"},
+        ]
+        for payload in payloads:
+            client = ProductRemoteClient(
+                "https://mcp.example.test",
+                http=httpx.Client(transport=httpx.MockTransport(
+                    lambda _request, body=payload: httpx.Response(200, json=body)
+                )),
+            )
+            with self.subTest(payload=payload), self.assertRaises(ProductRemoteError) as caught:
+                client.owner_project_scope(
+                    "owner-token", device_id=DEVICE_ID,
+                    repository_full_name="ordaxsystems/veste",
+                )
+            self.assertEqual(caught.exception.error_code, "product_remote_invalid_response")
 
     def test_replace_and_revoke_owner_grant_group_use_canonical_routes(self):
         seen: list[tuple[str, str, str]] = []

@@ -26,6 +26,11 @@ from .product_auth import (
     connect_existing_device,
 )
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
+from ordax_dev_agent.projects import (
+    canonical_github_repository_full_name,
+    project_repository_full_name,
+    resolve_project_for_repository,
+)
 from .web_desktop import APP_NAME, StudioApi
 
 
@@ -241,6 +246,114 @@ class StudioProductApi(StudioApi):
             authority = remote.owner_remote_authority(session.access_token, device_id=device_id)
         return session, device_id, authority
 
+    def _registered_project_scope(
+        self,
+        remote: ProductRemoteClient,
+        session: ProductAuthSession,
+        device_id: str,
+    ) -> dict[str, Any]:
+        """Resolve the selected registered Git project against Platform authority."""
+        slug = str(self.project or "").strip()
+        project = self.agent.projects.get(slug)
+        if project is None or not project.root.is_dir():
+            raise ProductAccountError(
+                "registered_project_unavailable",
+                "Selecione um projeto local registrado e disponível antes de autorizar acesso.",
+            )
+        repository = project_repository_full_name(project)
+        if repository is None:
+            raise ProductAccountError(
+                "registered_project_repository_unavailable",
+                "O projeto selecionado precisa ter um origin GitHub válido para receber grants de projeto.",
+            )
+        try:
+            unique_project = resolve_project_for_repository(self.agent.config, repository)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise ProductAccountError(
+                "registered_project_repository_mapping_unavailable",
+                "O repositório precisa corresponder a um único projeto registrado neste Runtime.",
+            ) from error
+        if unique_project.root != project.root:
+            raise ProductAccountError(
+                "registered_project_repository_mapping_mismatch",
+                "O repositório selecionado não corresponde exclusivamente ao projeto local ativo.",
+            )
+        try:
+            scope = remote.owner_project_scope(
+                session.access_token,
+                device_id=device_id,
+                repository_full_name=repository,
+            )
+        except ProductRemoteError:
+            raise
+        except ValueError as error:
+            raise ProductAccountError(
+                "canonical_project_scope_invalid",
+                "Não foi possível validar o repositório do projeto selecionado.",
+            ) from error
+        canonical_repository = canonical_github_repository_full_name(
+            str(scope.get("repository_full_name") or ""),
+        )
+        if canonical_repository != repository:
+            raise ProductAccountError(
+                "canonical_project_scope_mismatch",
+                "A autoridade Product retornou outro repositório para o projeto selecionado.",
+            )
+        if project_repository_full_name(project) != repository:
+            raise ProductAccountError(
+                "registered_project_repository_changed",
+                "O origin Git do projeto mudou durante a validação; tente novamente.",
+            )
+        return scope
+
+    @staticmethod
+    def _project_scoped_groups(
+        authority: dict[str, Any],
+        profile: str,
+        device_id: str,
+        scope: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        client_ids = {
+            str(item.get("client_id") or "").lower()
+            for item in authority.get("clients", []) if isinstance(item, dict)
+        }
+        space_id = str(scope.get("space_id") or "").lower()
+        project_id = str(scope.get("project_id") or "").lower()
+        return [
+            dict(group) for group in authority.get("grant_groups", [])
+            if isinstance(group, dict)
+            and str(group.get("profile_key") or "") == profile
+            and str(group.get("device_id") or "").lower() == device_id.lower()
+            and str(group.get("space_id") or "").lower() == space_id
+            and str(group.get("project_id") or "").lower() == project_id
+            and str(group.get("client_id") or "").lower() in client_ids
+        ]
+
+    @staticmethod
+    def _project_grant_for_revoke(
+        authority: dict[str, Any],
+        grant_group_id: str,
+        profile: str,
+        device_id: str,
+        scope: dict[str, Any],
+        client_id: str,
+    ) -> dict[str, Any]:
+        group_id = str(grant_group_id or "").strip().lower()
+        selected_client_id = str(client_id or "").strip().lower()
+        matches = [
+            group for group in StudioProductApi._project_scoped_groups(
+                authority, profile, device_id, scope,
+            )
+            if str(group.get("grant_group_id") or "").lower() == group_id
+            and str(group.get("client_id") or "").lower() == selected_client_id
+        ]
+        if len(matches) != 1:
+            raise ProductAccountError(
+                "owner_grant_group_not_found",
+                "A autorização informada não pertence ao projeto registrado selecionado.",
+            )
+        return matches[0]
+
     def remote_computer_grants(self) -> dict[str, Any]:
         try:
             _session, device_id, authority = self._owner_authority()
@@ -424,8 +537,14 @@ class StudioProductApi(StudioApi):
 
     def remote_project_browser_grants(self) -> dict[str, Any]:
         try:
-            _session, device_id, authority = self._owner_authority()
-            grants = self._profile_groups(authority, frozenset({_OWNER_PROJECT_BROWSER_GRANT_MODE}))
+            session = self._product_session_required()
+            device_id = self._current_product_device_id()
+            with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
+                authority = remote.owner_remote_authority(session.access_token, device_id=device_id)
+                scope = self._registered_project_scope(remote, session, device_id)
+            grants = self._project_scoped_groups(
+                authority, _OWNER_PROJECT_BROWSER_GRANT_MODE, device_id, scope,
+            )
         except ProductAccountError as error:
             return {"ok": False, "code": error.code, "summary": error.message}
         except ProductRemoteError as error:
@@ -444,22 +563,24 @@ class StudioProductApi(StudioApi):
                 "clients": authority["clients"],
                 "grant_groups": grants,
                 "available_modes": [_OWNER_PROJECT_BROWSER_GRANT_MODE],
-                "requires_canonical_project_scope": True,
+                "canonical_scope": scope,
             },
         }
 
     def authorize_remote_project_browser_grant(
         self,
         client_id: str | None = None,
-        space_id: str | None = None,
-        project_id: str | None = None,
         expires_days: int = 30,
     ) -> dict[str, Any]:
-        if not str(space_id or "").strip() or not str(project_id or "").strip():
+        if (
+            isinstance(expires_days, bool)
+            or not isinstance(expires_days, int)
+            or not 1 <= expires_days <= 30
+        ):
             return {
                 "ok": False,
-                "code": "canonical_project_scope_required",
-                "summary": "A autorização do navegador exige Space e projeto canônicos; o slug local não é autoridade.",
+                "code": "owner_project_grant_expiry_invalid",
+                "summary": "A autorização do navegador deve expirar em até 30 dias.",
             }
         try:
             expires_at = self._grant_expiry(expires_days, "owner_project_grant_expiry_invalid")
@@ -467,14 +588,15 @@ class StudioProductApi(StudioApi):
             device_id = self._current_product_device_id()
             with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
                 authority = remote.owner_remote_authority(session.access_token, device_id=device_id)
+                scope = self._registered_project_scope(remote, session, device_id)
                 client = self._select_owner_mcp_client(authority, client_id)
                 created = remote.replace_owner_remote_grant_group(
                     session.access_token,
                     client_id=str(client.get("client_id") or ""),
                     device_id=device_id,
                     profile_key=_OWNER_PROJECT_BROWSER_GRANT_MODE,
-                    space_id=str(space_id),
-                    project_id=str(project_id),
+                    space_id=str(scope["space_id"]),
+                    project_id=str(scope["project_id"]),
                     valid_until=expires_at,
                 )
         except ProductAccountError as error:
@@ -488,18 +610,24 @@ class StudioProductApi(StudioApi):
             }
         return {
             "ok": True,
-            "summary": "Navegador remoto autorizado para o escopo canônico informado",
+            "summary": "Navegador remoto autorizado para o projeto Git selecionado",
             "data": created,
         }
 
-    def revoke_remote_project_browser_grant(self, grant_group_id: str) -> dict[str, Any]:
+    def revoke_remote_project_browser_grant(
+        self,
+        grant_group_id: str,
+        client_id: str | None = None,
+    ) -> dict[str, Any]:
         try:
             session = self._product_session_required()
             device_id = self._current_product_device_id()
             with ProductRemoteClient(str(self.agent.config.product_mcp_url or "")) as remote:
                 authority = remote.owner_remote_authority(session.access_token, device_id=device_id)
-                group = self._grant_for_revoke(
-                    authority, grant_group_id, frozenset({_OWNER_PROJECT_BROWSER_GRANT_MODE}),
+                scope = self._registered_project_scope(remote, session, device_id)
+                group = self._project_grant_for_revoke(
+                    authority, grant_group_id, _OWNER_PROJECT_BROWSER_GRANT_MODE, device_id,
+                    scope, str(client_id or ""),
                 )
                 result = remote.revoke_owner_remote_grant_group(
                     session.access_token,

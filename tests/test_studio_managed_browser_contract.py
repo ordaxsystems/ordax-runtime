@@ -19,9 +19,11 @@ class StudioManagedBrowserContractTests(unittest.TestCase):
 
     def test_owner_browser_grant_uses_canonical_project_scope(self) -> None:
         self.assertIn('_OWNER_PROJECT_BROWSER_GRANT_MODE = "project-browser-automation"', self.product_host)
-        self.assertIn("canonical_project_scope_required", self.product_host)
-        self.assertIn("space_id=str(space_id)", self.product_host)
-        self.assertIn("project_id=str(project_id)", self.product_host)
+        self.assertIn("_registered_project_scope", self.product_host)
+        self.assertIn("owner_project_scope", self.product_host)
+        self.assertIn("_project_grant_for_revoke", self.product_host)
+        self.assertIn('space_id=str(scope["space_id"])', self.product_host)
+        self.assertIn('project_id=str(scope["project_id"])', self.product_host)
         self.assertIn("replace_owner_remote_grant_group", self.product_host)
         self.assertNotIn("create_project_capability_grant", self.product_host)
         self.assertNotIn("projects=[project]", self.product_host)
