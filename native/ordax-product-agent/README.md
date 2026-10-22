@@ -135,7 +135,10 @@ python3 native/ordax-product-agent/audit_elf.py \
 The CPIO adapter parses only Buildroot's `newc` format, bounds total inflated
 bytes and file counts, discards firmware and other irrelevant OS files without
 extracting or staging them, and reuses the **same** ELF parser, symlink resolution
-and dependency graph. The report binds the SHA-256 of the **exact compressed
+and dependency graph. TAR and CPIO preflight hash and parse through the
+**same open regular-file descriptor**; a pathname replacement cannot change
+the parsed bytes, and detected in-place mutations fail closed.
+The report binds the SHA-256 of the **exact compressed
 CPIO** in `target_rootfs_cpio_sha256`; the TAR option retains
 `target_rootfs_tar_sha256`. Supply a separately authenticated GitHub/OS rootfs
 artifact: this consumer cannot authenticate its producer. The optional
