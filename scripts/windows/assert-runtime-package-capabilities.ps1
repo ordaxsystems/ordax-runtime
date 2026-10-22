@@ -49,6 +49,21 @@ from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 from ordax_dev_agent.product_mcp import PRODUCT_MCP_TOOLS
+from ordax_dev_agent.main import product_idle_claim_delay_seconds
+
+# Offline proof executed by the *shipped private Python*, not the developer
+# checkout. Older installed Runtime builds polled an empty Product queue every
+# ~1.8 seconds, consuming the shared Hyperdrive SQL quota and eventually
+# disabling discovery and heartbeat for every account device. Reject those
+# installations before publication, silent upgrade or repair.
+if product_idle_claim_delay_seconds(1, 0.25) != 0.25:
+    raise SystemExit("Packaged Runtime changed interactive Product claim burst unexpectedly")
+for configured_ceiling in (0.25, 1.0, 10.0, 30.0):
+    if product_idle_claim_delay_seconds(40, configured_ceiling) < 30.0:
+        raise SystemExit("Packaged Runtime can exhaust shared Hyperdrive idle budget")
+if product_idle_claim_delay_seconds(40, 300.0) > 60.0:
+    raise SystemExit("Packaged Runtime unbounded idle Product claim delay")
+print("ORDAX_PACKAGED_PRODUCT_IDLE_BUDGET=PASS")
 
 # The actual shipped registry, transport-independent MCP catalog and Product
 # gateway must all agree about device actions. A cloud-only catalog does not
