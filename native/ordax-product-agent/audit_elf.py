@@ -198,7 +198,7 @@ def inspect_embedded_elf(binary: bytes, outer_needed=()) -> dict:
         entry_size, position, packed, size, compression, kind = struct.unpack_from(
             CARCHIVE_TOC_RECORD, binary, cursor
         )
-        if (entry_size <= header_size or cursor + entry_size > toc_end
+        if (entry_size <= header_size or entry_size > 1024 or cursor + entry_size > toc_end
                 or compression not in (0, 1) or size > MAX_CARCHIVE_MEMBER
                 or position + packed > toc_offset or packed > MAX_BYTES):
             raise NativeAbiError("native_carchive_entry_invalid")
@@ -209,7 +209,7 @@ def inspect_embedded_elf(binary: bytes, outer_needed=()) -> dict:
             name = raw_name.rstrip(b"\0").decode("utf-8")
         except UnicodeDecodeError as exc:
             raise NativeAbiError("native_carchive_name_invalid") from exc
-        if (not name or name in seen or name.startswith("/")
+        if (not name or "\0" in name or name in seen or name.startswith("/")
                 or "\\" in name or any(part in ("", ".", "..") for part in name.split("/"))):
             raise NativeAbiError("native_carchive_name_invalid")
         seen.add(name)
@@ -226,7 +226,10 @@ def inspect_embedded_elf(binary: bytes, outer_needed=()) -> dict:
         payload = _slice(binary, package_start + position, packed)
         if compression:
             decoder = zlib.decompressobj()
-            inflated = decoder.decompress(payload, size + 1)
+            try:
+                inflated = decoder.decompress(payload, size + 1)
+            except zlib.error as exc:
+                raise NativeAbiError("native_carchive_decompression_invalid") from exc
             if (not decoder.eof or decoder.unconsumed_tail or decoder.unused_data
                     or len(inflated) != size):
                 raise NativeAbiError("native_carchive_decompression_invalid")
