@@ -101,7 +101,7 @@ def make_buildroot_cpio(entries):
     """Canonical newc stream with 4-byte alignment, compressed as OS rootfs."""
     temporary = tempfile.TemporaryDirectory()
     path = Path(temporary.name) / "rootfs.cpio.gz"
-    with gzip.open(path, "wb", mtime=None) as archive:
+    with gzip.open(path, "wb") as archive:
         def record(name, payload, mode):
             raw_name = name.encode() + b"\0"
             fields = [
