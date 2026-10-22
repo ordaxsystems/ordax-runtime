@@ -73,7 +73,12 @@ def product_idle_claim_delay_seconds(idle_misses: int, configured_ceiling: float
         raise ValueError("idle_misses must be positive")
     if not math.isfinite(configured_ceiling):
         raise ValueError("configured_ceiling must be finite")
-    ceiling = min(60.0, max(8.0, configured_ceiling))
+    # poll_seconds controls active connectivity, not the cost of repeatedly
+    # claiming an empty PostgreSQL queue. The previous 8–12s idle ceiling
+    # can exhaust Hyperdrive Free when several devices are enrolled.
+    # Retain a brief interactive burst, then settle to at least 30 seconds.
+    # Workers Paid is required for sustained usage beyond its service quota.
+    ceiling = min(60.0, max(30.0, configured_ceiling))
     return min(ceiling, 0.25 * (1.8 ** min(idle_misses - 1, 11)))
 
 

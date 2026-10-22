@@ -37,8 +37,8 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
 
     def test_short_initial_burst_then_safe_idle_ceiling(self):
         self.assertLessEqual(product_idle_claim_delay_seconds(1, 12), 0.5)
-        self.assertEqual(product_idle_claim_delay_seconds(60, 12), 12.0)
-        self.assertEqual(product_idle_claim_delay_seconds(60, 1), 8.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 12), 30.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 1), 30.0)
         self.assertEqual(product_idle_claim_delay_seconds(60, 60), 60.0)
         with self.assertRaises(ValueError):
             product_idle_claim_delay_seconds(0, 12)
@@ -54,7 +54,10 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
         # Account for two SQL roundtrips per claim and one heartbeat every
         # 20 seconds, each conservatively estimated at two DB statements.
         upper_bound_queries = requests * 2 + 4320 * 2
-        self.assertLess(upper_bound_queries, 30000)
+        self.assertLess(upper_bound_queries, 16000)
+        # The account Free limit is shared by devices, not per device.
+        # Even 4 idle agents must leave plenty of room for real commands.
+        self.assertLess(upper_bound_queries * 4, 100000)
 
     def test_invalid_ceiling_fails_closed(self):
         for v in (float("nan"), float("inf"), -float("inf")):
