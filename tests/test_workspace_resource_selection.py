@@ -159,8 +159,8 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
 
     def test_forged_or_malformed_authority_cannot_enable_port(self):
         resource = self.choose()
-        valid = self.live(self.actor, self.device, resource)
         self.allowed = True
+        valid = self.live(self.actor, self.device, resource)
         invalid = (
             {"grant_id": self.grant, "root": str(self.root)},
             None,
