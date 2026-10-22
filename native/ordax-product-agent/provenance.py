@@ -26,7 +26,9 @@ def main() -> None:
     if (proof.get("ok") is not True or proof.get("network_used") is not False
         or proof.get("device_credential_used") is not False
         or proof.get("graphical_actions") != []
-        or proof.get("probes") != ["filesystem", "terminal", "supervised-process"]):
+        or proof.get("probes") != ["filesystem", "terminal", "supervised-process"]
+        or proof.get("supervised_process_actions") != [
+            "start", "status", "list", "write_stdin", "logs", "stop"]):
         raise ValueError("offline executable proof is missing or invalid")
     root = Path(__file__).resolve().parents[2]
     digest = hashlib.sha256(raw).hexdigest()
