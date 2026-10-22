@@ -238,7 +238,8 @@ class ProjectWorkspaceRegisteredRootContractTests(unittest.TestCase):
         self.dataclasses = dataclasses
         self.temp = tempfile.TemporaryDirectory(prefix="ordax-registered-workspace-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        # Match the canonical real path already retained by Runtime load_projects.
+        self.root = Path(self.temp.name).resolve()
         self.actor = WorkspaceActor("owner", "client", "session", "project")
         self.device = "device_fixture"
         self.resource = "resource_registry_test123"
