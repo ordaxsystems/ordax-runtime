@@ -44,9 +44,11 @@ Buildroot **2026.08** são:
 | MCP SDK | 1.30.0 | ausente como `python-mcp` |
 
 O resultado guarda o hash do `requirements.lock` e do `bootstrap.lock`,
-reporta cada versão ausente/incompatível, descarta ferramentas
-**exclusivas de build** do conjunto mínimo de dependências do Runtime e
-preserva explicitamente `native_dependency_closure_proven=false`,
+reporta cada versão ausente/incompatível e **verifica todas as entradas**
+do lock, inclusive pacotes compartilhados com ferramentas de build. A simples
+presença de um pacote em `bootstrap.lock` não prova que ele seja dispensável
+em execução; esses nomes são informados separadamente como
+`build_tool_overlap_names`, sem excluí-los. O auditor preserva explicitamente `native_dependency_closure_proven=false`,
 `runtime_agent_packaged=false` e `device_install_authorized=false`.
 
 Regras para o próximo passo: recompilar dependências nativas com a toolchain
