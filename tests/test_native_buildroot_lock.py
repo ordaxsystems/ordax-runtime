@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "native/ordax-product-agent/audit_buildroot_lock.py"
+SCRIPT = ROOT / "tools/ci/audit_buildroot_lock.py"
 spec = importlib.util.spec_from_file_location("ordax_buildroot_lock_audit", SCRIPT)
 audit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit)
