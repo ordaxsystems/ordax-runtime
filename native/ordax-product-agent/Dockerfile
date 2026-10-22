@@ -1,6 +1,6 @@
 FROM python:3.12.12-alpine3.22@sha256:5c84c59004e6679bc98a33930344c6ea3da9e2434869b29bc950e46902b6c383 AS build
 
-RUN apk add --no-cache gcc=14.2.0-r6 musl-dev=1.2.5-r12 zlib-dev=1.3.2-r1
+RUN apk add --no-cache gcc=14.2.0-r6 musl-dev=1.2.5-r13 zlib-dev=1.3.2-r1
 WORKDIR /source
 COPY native/ordax-product-agent/requirements.lock /build/requirements.lock
 COPY native/ordax-product-agent/bootstrap.lock /build/bootstrap.lock
