@@ -16,8 +16,6 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
-from PIL import ImageGrab
-
 from .models import ActionResult
 
 
@@ -506,6 +504,10 @@ class ComputerControlActions:
             return ActionResult(False, "mode must be desktop or active_window")
         target = self._computer_artifact_path()
         try:
+            # Windows-only capture dependency. The OrdaX OS Native Product
+            # Runtime must import the canonical action registry without PIL.
+            from PIL import ImageGrab
+
             if mode == "active_window":
                 hwnd = int(self._user32().GetForegroundWindow())
                 info = self._window_info(hwnd)

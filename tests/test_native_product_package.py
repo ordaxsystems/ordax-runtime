@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -34,6 +35,26 @@ class NativeProductPackageTests(unittest.TestCase):
         self.assertEqual(proof["probes"], ["filesystem", "terminal", "supervised-process"])
         self.assertEqual(proof["supervised_process_actions"],
                          ["start", "status", "list", "write_stdin", "logs", "stop"])
+
+    def test_native_registry_import_and_self_test_do_not_require_windows_pillow(self):
+        # Test in a separate interpreter so already-loaded Windows modules in
+        # this test runner cannot conceal imports of desktop-only libraries.
+        code = """import builtins
+original_import = builtins.__import__
+def native_import(name, *args, **kwargs):
+    if name == 'PIL' or name.startswith('PIL.'):
+        raise ModuleNotFoundError('Windows-only Pillow import in Native bootstrap')
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = native_import
+from ordax_dev_agent.native_main import self_test
+proof = self_test()
+assert proof['ok'] and proof['graphical_actions'] == []
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True, timeout=45, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
     def test_run_requires_explicit_owner_usb_profile_before_loading_identity(self):
         for arguments in (["--run"], ["--run", "--distribution-profile", "owner-development"]):
