@@ -204,7 +204,10 @@ class AuthenticatedOwnerProjectScopeResolverTests(unittest.TestCase):
                 else:
                     with self.assertRaises(ValueError):
                         self.make_resolver(**mutation)
-        self.assertEqual(self.calls if self.calls else [], [])
+        self.assertEqual([path for _method, path, _auth in self.calls], [
+            "/v3/product/session", "/v3/owner/remote-authority",
+        ])
+        self.assertTrue(all(method == "GET" for method, _, _ in self.calls))
 
     def test_broker_composition_uses_single_registered_root_and_does_not_read_without_grant(self):
         with tempfile.TemporaryDirectory() as home:
