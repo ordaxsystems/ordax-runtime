@@ -10,6 +10,7 @@ on:
       - "native/ordax-product-agent/**"
       - "tests/test_native_product_package.py"
       - "tests/test_native_product_abi.py"
+      - "tests/test_native_buildroot_lock.py"
       - "pyproject.toml"
       - ".github/workflows/native-product-agent.yml"
   push:
@@ -22,6 +23,7 @@ on:
       - "native/ordax-product-agent/**"
       - "tests/test_native_product_package.py"
       - "tests/test_native_product_abi.py"
+      - "tests/test_native_buildroot_lock.py"
       - "pyproject.toml"
       - ".github/workflows/native-product-agent.yml"
   workflow_dispatch:
@@ -37,6 +39,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Check exact Runtime lock versus Buildroot ABI contract
+        run: python3 -m unittest tests.test_native_buildroot_lock -v
       - name: Audit Independent Base kernel-only ELF contract
         run: python3 -m unittest tests.test_native_product_abi -v
       - name: Build the pinned native executable candidate
