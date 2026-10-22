@@ -87,7 +87,11 @@ def _secure_root(root: Path, grant: VerifiedProjectResource) -> Path:
 
 def _git(root: Path, *args: str) -> bytes:
     try:
-        env = dict(os.environ)
+        # Inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, config injection,
+        # alternate object stores, etc. must never redirect a project snapshot.
+        # Preserve the ordinary process environment, not Git's ambient state.
+        env = {name: value for name, value in os.environ.items()
+               if not name.upper().startswith("GIT_")}
         env.update({"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
                     "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_NOSYSTEM": "1",
                     "GIT_CONFIG_GLOBAL": os.devnull})
@@ -137,7 +141,21 @@ def _snapshot(root: Path) -> dict:
         except (OSError, ValueError) as error:
             raise ProjectWorkspaceDenied("workspace_scan_unavailable") from error
 
-    is_repo = (root / ".git").exists()
+    # Git may follow a .git file (linked worktree) or a directory junction
+    # outside the selected resource. Until Runtime owns a separately verified
+    # Git-dir grant, such repositories must fail closed rather than probing
+    # paths beyond the root. A normal local .git directory is supported.
+    git_marker = root / ".git"
+    try:
+        marker_info = git_marker.lstat()
+    except FileNotFoundError:
+        is_repo = False
+    except OSError as error:
+        raise ProjectWorkspaceDenied("workspace_git_boundary_unavailable") from error
+    else:
+        if not stat.S_ISDIR(marker_info.st_mode) or _reparse(git_marker):
+            raise ProjectWorkspaceDenied("workspace_git_boundary_unverified")
+        is_repo = True
     changed = 0
     git: dict = {"isRepository": False}
     if is_repo:
