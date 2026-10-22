@@ -25,6 +25,9 @@ _CLIENT_ID = re.compile(
     re.IGNORECASE,
 )
 _PROFILE_KEY = re.compile(r"[a-z][a-z0-9._-]{1,79}")
+_GITHUB_REPOSITORY = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}"
+)
 
 
 @dataclass
@@ -263,6 +266,61 @@ class ProductRemoteClient:
             "device_id": normalized_device,
             "clients": [dict(item) for item in clients],
             "grant_groups": [dict(item) for item in groups],
+        }
+
+    def owner_project_scope(
+        self,
+        access_token: str,
+        *,
+        device_id: str,
+        repository_full_name: str,
+    ) -> dict[str, Any]:
+        """Resolve owner-authorized canonical project IDs for a registered repo.
+
+        The caller must obtain ``repository_full_name`` from the Runtime's
+        registered local Git project. This endpoint remains the authority for
+        the corresponding Platform space/project UUIDs.
+        """
+        normalized_device = self._uuid(device_id, "device_id")
+        repository = str(repository_full_name or "").strip()
+        if _GITHUB_REPOSITORY.fullmatch(repository) is None:
+            raise ValueError("repository_full_name must be owner/repository")
+        response = self._request(
+            "GET",
+            f"{self.base_url}/v3/owner/project-scope",
+            headers=self._headers(access_token),
+            params={
+                "device_id": normalized_device,
+                "repository_full_name": repository,
+            },
+        )
+        body = self._body(response)
+        returned_repository = str(body.get("repository_full_name") or "").strip()
+        if (
+            not returned_repository
+            or returned_repository.lower() != repository.lower()
+            or type(body.get("repository_id")) is not int
+            or body["repository_id"] <= 0
+        ):
+            raise ProductRemoteError(
+                "product_remote_invalid_response",
+                response.status_code,
+                "Owner project scope does not match the requested repository",
+            )
+        try:
+            space_id = self._uuid(body.get("space_id"), "space_id")
+            project_id = self._uuid(body.get("project_id"), "project_id")
+        except ValueError as error:
+            raise ProductRemoteError(
+                "product_remote_invalid_response",
+                response.status_code,
+                "Owner project scope contains invalid canonical identifiers",
+            ) from error
+        return {
+            "space_id": space_id,
+            "project_id": project_id,
+            "repository_id": body["repository_id"],
+            "repository_full_name": returned_repository,
         }
 
     def replace_owner_remote_grant_group(
