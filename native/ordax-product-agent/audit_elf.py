@@ -174,9 +174,24 @@ def inspect_embedded_elf(binary: bytes, outer_needed=()) -> dict:
     marker = binary.rfind(CARCHIVE_MAGIC, max(0, len(binary) - 65536))
     if marker < 0 or marker + cookie_size > len(binary):
         raise NativeAbiError("native_carchive_cookie_missing")
-    magic, package_size, toc_offset, toc_size, _, _ = struct.unpack_from(
+    magic, package_size, toc_offset, toc_size, python_abi_number, library_field = struct.unpack_from(
         CARCHIVE_COOKIE, binary, marker
     )
+    # The embedded interpreter must agree with the exact PyInstaller cookie.
+    # This is descriptive ABI evidence, not proof of target-rootfs closure.
+    if b"\0" not in library_field:
+        raise NativeAbiError("native_carchive_python_abi_invalid")
+    raw_library, padding = library_field.split(b"\0", 1)
+    if any(padding):
+        raise NativeAbiError("native_carchive_python_abi_invalid")
+    try:
+        python_library = raw_library.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise NativeAbiError("native_carchive_python_abi_invalid") from exc
+    match = re.fullmatch(r"libpython(3)\.(\d{1,2})(?:t)?\.so(?:\.\d+)*", python_library)
+    if not match or python_abi_number != int(match.group(1)) * 100 + int(match.group(2)):
+        raise NativeAbiError("native_carchive_python_abi_invalid")
+    python_version = f"{match.group(1)}.{match.group(2)}"
     package_start = marker + cookie_size - package_size
     toc_start = package_start + toc_offset
     toc_end = toc_start + toc_size
@@ -257,6 +272,8 @@ def inspect_embedded_elf(binary: bytes, outer_needed=()) -> dict:
         "schema": "ordax.native-embedded-elf-inventory/1",
         "native_entry_count": len(inventory),
         "native_uncompressed_bytes": total_size,
+        "embedded_python_version": python_version,
+        "embedded_python_library": python_library,
         "inventory_sha256": fingerprint,
         "needed_libraries": sorted(needed),
         "unprovided_needed_names": sorted(needed - provided),

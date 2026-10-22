@@ -169,6 +169,8 @@ class IndependentNativeAbiTests(unittest.TestCase):
             outer_needed=("libc.musl-x86_64.so.1",),
         )
         self.assertEqual(result["native_entry_count"], 1)
+        self.assertEqual(result["embedded_python_version"], "3.12")
+        self.assertEqual(result["embedded_python_library"], "libpython3.12.so.1.0")
         self.assertEqual(result["needed_libraries"],
                          ["libc.musl-x86_64.so.1", "libz.so.1"])
         self.assertEqual(result["unprovided_needed_names"],
@@ -176,6 +178,32 @@ class IndependentNativeAbiTests(unittest.TestCase):
         self.assertEqual(len(result["inventory_sha256"]), 64)
         self.assertFalse(result["independent_base_compatibility_proven"])
         self.assertFalse(result["install_authorized"])
+
+    def test_carchive_python_version_and_library_must_agree(self):
+        candidate = bytearray(fake_carchive())
+        marker = candidate.rfind(module.CARCHIVE_MAGIC)
+        struct.pack_into("!I", candidate, marker + 20, 313)
+        with self.assertRaisesRegex(module.NativeAbiError, "python_abi_invalid"):
+            module.inspect_embedded_elf(bytes(candidate))
+
+    def test_carchive_python_library_must_be_bounded_and_unambiguous(self):
+        candidate = bytearray(fake_carchive())
+        marker = candidate.rfind(module.CARCHIVE_MAGIC)
+        candidate[marker + 24:marker + 88] = b"libpython3.12.so.1.0" + b"\0" * 43 + b"x"
+        with self.assertRaisesRegex(module.NativeAbiError, "python_abi_invalid"):
+            module.inspect_embedded_elf(bytes(candidate))
+
+    def test_carchive_python_metadata_is_reported_from_real_cookie(self):
+        candidate = bytearray(fake_carchive())
+        marker = candidate.rfind(module.CARCHIVE_MAGIC)
+        struct.pack_into("!I", candidate, marker + 20, 313)
+        candidate[marker + 24:marker + 88] = (
+            b"libpython3.13.so.1.0".ljust(64, b"\0")
+        )
+        result = module.inspect_embedded_elf(bytes(candidate))
+        self.assertEqual(result["embedded_python_version"], "3.13")
+        self.assertEqual(result["embedded_python_library"], "libpython3.13.so.1.0")
+        self.assertFalse(result["independent_base_compatibility_proven"])
 
     def test_embedded_elf_inventory_rejects_missing_cookie(self):
         with self.assertRaisesRegex(module.NativeAbiError, "cookie_missing"):
