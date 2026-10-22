@@ -10,8 +10,10 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import posixpath
 import re
 import struct
+import tarfile
 import zlib
 
 PT_LOAD = 1
@@ -265,7 +267,188 @@ def inspect_embedded_elf(binary: bytes, outer_needed=()) -> dict:
     }
 
 
-def audit(binary_path: Path, recipe_path: Path) -> dict:
+
+# The OS owns Buildroot and its exact rootfs. This is a read-only name/ELF
+# diagnostic for *that* verified rootfs, not another Buildroot implementation.
+# Importantly, it never extracts or executes an archive member.
+ROOTFS_LIBRARY_DIRS = ("lib", "lib64", "usr/lib", "usr/lib64")
+ROOTFS_MAX_TAR_BYTES = 2 * 1024 * 1024 * 1024
+ROOTFS_MAX_ENTRIES = 100_000
+ROOTFS_MAX_LIBRARY_BYTES = 64 * 1024 * 1024
+ROOTFS_MAX_LIBRARIES = 512
+LIB_NAME = re.compile(r"[A-Za-z0-9_.+-]{1,255}\Z")
+
+
+def _tar_member_name(raw: str) -> str:
+    name = raw
+    while name.startswith("./"):
+        name = name[2:]
+    if (not name or name.startswith("/") or "\\" in name or "\0" in name
+            or any(part in ("", ".", "..") for part in name.rstrip("/").split("/"))):
+        raise NativeAbiError("native_rootfs_unsafe_member_name")
+    return name.rstrip("/")
+
+
+def _rootfs_target(parent: str, target: str) -> str:
+    if not target or "\0" in target or "\\" in target:
+        raise NativeAbiError("native_rootfs_unsafe_symlink_target")
+    value = (target.lstrip("/") if target.startswith("/")
+             else posixpath.join(posixpath.dirname(parent), target))
+    normalized = posixpath.normpath(value)
+    if normalized in (".", "..") or normalized.startswith("../"):
+        raise NativeAbiError("native_rootfs_symlink_escape")
+    return normalized
+
+
+def _library_namespace(name: str) -> bool:
+    return any(name == root or name.startswith(root + "/")
+               for root in ROOTFS_LIBRARY_DIRS)
+
+
+def _resolve_rootfs_member(name: str, entries: dict) -> tuple[str, object] | None:
+    """Resolve symbolic links in-memory, including parent directory aliases."""
+    if name.startswith("/") or not _library_namespace(name):
+        return None
+    seen = set()
+    for _ in range(32):
+        if name in seen:
+            raise NativeAbiError("native_rootfs_symlink_cycle")
+        seen.add(name)
+        parts = name.split("/")
+        changed = False
+        for index in range(1, len(parts) + 1):
+            segment = "/".join(parts[:index])
+            member = entries.get(segment)
+            if member is None or not member.issym():
+                continue
+            target = _rootfs_target(segment, member.linkname)
+            name = posixpath.join(target, *parts[index:])
+            if not _library_namespace(name):
+                raise NativeAbiError("native_rootfs_symlink_outside_library_namespace")
+            changed = True
+            break
+        if not changed:
+            entry = entries.get(name)
+            return (name, entry) if entry is not None and entry.isfile() else None
+    raise NativeAbiError("native_rootfs_symlink_depth_exceeded")
+
+
+def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "") -> dict:
+    """Compare real target-rootfs ELF files against the frozen Runtime names.
+
+    Basename search through default loader directories cannot prove glibc/musl
+    symbol versions, dlopen calls, PyInstaller extraction/import behavior,
+    exact loader search policy or device execution. Positive results must NOT
+    lift the Independent Base release gate.
+    """
+    if (not rootfs_tar.is_file() or rootfs_tar.is_symlink()
+            or not 0 < rootfs_tar.stat().st_size <= ROOTFS_MAX_TAR_BYTES):
+        raise NativeAbiError("native_rootfs_tar_unavailable")
+    head = inspect_elf(binary, recipe)
+    embedded = (inspect_embedded_elf(binary, head["needed_libraries"])
+                if head["pyinstaller_archive_present"] else None)
+    needed = (embedded["unprovided_needed_names"] if embedded
+              else head["needed_libraries"])
+    if any(not LIB_NAME.fullmatch(name) for name in needed):
+        raise NativeAbiError("native_rootfs_unsafe_needed_name")
+    digest = hashlib.sha256()
+    with rootfs_tar.open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    entries = {}
+    try:
+        with tarfile.open(rootfs_tar, mode="r:*") as tar:
+            for count, member in enumerate(tar, 1):
+                if count > ROOTFS_MAX_ENTRIES:
+                    raise NativeAbiError("native_rootfs_member_count_exceeded")
+                name = _tar_member_name(member.name)
+                if not _library_namespace(name):
+                    continue
+                if name in entries:
+                    raise NativeAbiError("native_rootfs_duplicate_library_path")
+                if not (member.isfile() or member.isdir() or member.issym()):
+                    raise NativeAbiError("native_rootfs_unsupported_library_entry")
+                if member.isfile() and member.size > ROOTFS_MAX_LIBRARY_BYTES:
+                    raise NativeAbiError("native_rootfs_library_too_large")
+                entries[name] = member
+
+            def load_elf(name: str) -> tuple[str, dict, str] | None:
+                match = _resolve_rootfs_member(name, entries)
+                if match is None:
+                    return None
+                target, entry = match
+                stream = tar.extractfile(entry)
+                if stream is None:
+                    raise NativeAbiError("native_rootfs_library_unreadable")
+                with stream:
+                    data = stream.read(ROOTFS_MAX_LIBRARY_BYTES + 1)
+                if len(data) != entry.size or len(data) > ROOTFS_MAX_LIBRARY_BYTES:
+                    raise NativeAbiError("native_rootfs_library_size_changed")
+                try:
+                    info = inspect_elf(data)
+                except NativeAbiError as exc:
+                    raise NativeAbiError("native_rootfs_library_not_valid_elf") from exc
+                return target, info, hashlib.sha256(data).hexdigest()
+
+            interpreter = head["interpreter"]
+            loader = None
+            if interpreter:
+                if (not interpreter.startswith("/") or
+                        not _library_namespace(interpreter.lstrip("/"))):
+                    raise NativeAbiError("native_rootfs_interpreter_not_library_path")
+                loader = load_elf(interpreter.lstrip("/"))
+
+            checked = {}
+            unresolved = set()
+            queue = sorted(set(needed))
+            while queue:
+                name = queue.pop(0)
+                if name in checked or name in unresolved:
+                    continue
+                if len(checked) + len(unresolved) >= ROOTFS_MAX_LIBRARIES:
+                    raise NativeAbiError("native_rootfs_dependency_graph_too_large")
+                matches = []
+                for root in ROOTFS_LIBRARY_DIRS:
+                    candidate = load_elf(root + "/" + name)
+                    if candidate is not None:
+                        matches.append(candidate)
+                if not matches:
+                    unresolved.add(name)
+                    continue
+                # Different files for one SONAME can yield a loader-path-
+                # dependent answer. Never silently select the first match.
+                if len({x[2] for x in matches}) > 1:
+                    raise NativeAbiError("native_rootfs_ambiguous_library_name")
+                target, info, sha = matches[0]
+                checked[name] = {"target_path": target, "sha256": sha}
+                for sub in info["needed_libraries"]:
+                    if not LIB_NAME.fullmatch(sub):
+                        raise NativeAbiError("native_rootfs_unsafe_transitive_name")
+                    if sub not in checked and sub not in unresolved:
+                        queue.append(sub)
+    except (tarfile.TarError, EOFError) as exc:
+        raise NativeAbiError("native_rootfs_tar_unreadable") from exc
+
+    return {
+        "schema": "ordax.native-target-rootfs-elf-preflight/1",
+        "target_rootfs_tar_sha256": digest.hexdigest(),
+        "interpreter": head["interpreter"],
+        "interpreter_found": loader is not None if head["interpreter"] else None,
+        "required_dynamic_names": sorted(set(needed)),
+        "resolved_rootfs_libraries": dict(sorted(checked.items())),
+        "unresolved_rootfs_libraries": sorted(unresolved),
+        "default_directory_name_resolution_complete": (
+            not unresolved and (loader is not None if head["interpreter"] else True)
+        ),
+        "full_runtime_abi_compatible": False,
+        "native_dependency_closure_proven": False,
+        "device_install_authorized": False,
+        "device_execution_proven": False,
+        "read_only": True,
+    }
+
+
+def audit(binary_path: Path, recipe_path: Path, rootfs_tar: Path | None = None) -> dict:
     if not binary_path.is_file() or binary_path.is_symlink():
         raise NativeAbiError("native_elf_file_unavailable")
     if binary_path.stat().st_size > MAX_BYTES:
@@ -278,6 +461,10 @@ def audit(binary_path: Path, recipe_path: Path) -> dict:
         report["embedded_elf_inventory"] = inspect_embedded_elf(
             binary, report["needed_libraries"]
         )
+    if rootfs_tar is not None:
+        report["target_rootfs_preflight"] = inspect_rootfs_abi(
+            binary, rootfs_tar, recipe_path.read_text(encoding="utf-8")
+        )
     return report
 
 
@@ -286,9 +473,11 @@ def main() -> int:
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--recipe", type=Path, required=True)
     parser.add_argument("--require-independent", action="store_true")
+    parser.add_argument("--rootfs-tar", type=Path,
+                        help="Exact OS-owned Buildroot rootfs.tar for read-only ELF preflight")
     args = parser.parse_args()
     try:
-        result = audit(args.binary, args.recipe)
+        result = audit(args.binary, args.recipe, args.rootfs_tar)
     except (NativeAbiError, OSError, UnicodeError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         return 2
