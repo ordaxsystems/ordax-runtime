@@ -314,6 +314,22 @@ class IndependentNativeAbiTests(unittest.TestCase):
         self.assertEqual(len(replacements), 1)
         self.assertNotEqual(hashlib.sha256(rootfs.read_bytes()).hexdigest(), original_sha)
 
+    def test_rootfs_fifo_and_symlink_cannot_block_or_bypass_regular_file_gate(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            fifo = root / "untrusted-rootfs.cpio.gz"
+            os.mkfifo(fifo)
+            with self.assertRaisesRegex(module.NativeAbiError, "native_rootfs_tar_unavailable"):
+                module.inspect_rootfs_abi(fake_elf(), fifo, archive_format="cpio")
+            original, archive = make_buildroot_cpio([
+                ("usr/bin/isolated-proof", fake_elf()),
+            ])
+            self.addCleanup(original.cleanup)
+            link = root / "rootfs-symlink.cpio.gz"
+            link.symlink_to(archive)
+            with self.assertRaisesRegex(module.NativeAbiError, "native_rootfs_tar_unavailable"):
+                module.inspect_rootfs_abi(fake_elf(), link, archive_format="cpio")
+
     def test_rootfs_tar_is_hashed_and_parsed_via_one_open_file(self):
         temp, rootfs = make_buildroot_rootfs([
             ("usr/lib/libz.so.1", fake_elf()),
