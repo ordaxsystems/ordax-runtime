@@ -507,7 +507,7 @@ def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "",
         descriptor = os.open(
             rootfs_tar,
             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0),
+            | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0),
         )
     except OSError as exc:
         raise NativeAbiError("native_rootfs_tar_unavailable") from exc
