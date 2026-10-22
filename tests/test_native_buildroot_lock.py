@@ -64,11 +64,12 @@ class BuildrootNativeLockTests(unittest.TestCase):
         self.assertFalse(report["native_dependency_closure_proven"])
         self.assertFalse(report["runtime_agent_packaged"])
         self.assertFalse(report["device_install_authorized"])
-        self.assertEqual(report["build_tool_only_names"], ["hatchling"])
-        self.assertEqual(report["runtime_packages_examined"], 3)
+        self.assertEqual(report["build_tool_overlap_names"], ["hatchling"])
+        self.assertEqual(report["runtime_packages_examined"], 4)
         issues = {issue["package"]: issue["reason"] for issue in report["issues"]}
         self.assertEqual(issues, {
             "python3": "lock-python-abi-mismatch",
+            "hatchling": "missing",
             "mcp": "missing",
             "websockets": "version-mismatch",
         })
@@ -77,6 +78,7 @@ class BuildrootNativeLockTests(unittest.TestCase):
     def test_exactly_version_compatible_is_still_not_executable_proof(self):
         self.write_python("3.14.7")
         self.package("mcp", "1.30.0")
+        self.package("hatchling", "1.32.4")
         self.package("websockets", "15.0.1")
         self.lock(self.req, {
             "mcp": "1.30.0", "httpx": "0.28.1", "websockets": "15.0.1",
