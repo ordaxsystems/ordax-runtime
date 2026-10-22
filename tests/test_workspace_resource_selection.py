@@ -67,10 +67,10 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             return None
         return LiveWorkspaceAuthority(
             owner_user_id=self.owner, space_id=self.space,
-            canonical_project_id=self.project, lab_project_id=actor.project_id,
-            actor_id=actor.actor_id, client_id=actor.client_id,
-            workspace_session_id=actor.workspace_session_id,
-            device_id=device, resource_id=resource, grant_id=self.grant,
+            canonical_project_id=self.project, lab_project_id=self.actor.project_id,
+            actor_id=self.actor.actor_id, client_id=self.client,
+            workspace_session_id=self.actor.workspace_session_id,
+            device_id=self.device, resource_id=resource, grant_id=self.grant,
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
             allowed_actions=frozenset({"read"}),
         )
@@ -174,7 +174,8 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             replace(valid, expires_at=datetime.now(timezone.utc).replace(tzinfo=None)),
         )
         for authority in invalid:
-            picker = self.make_picker(lookup=lambda *_: authority)
+            picker = self.make_picker(lookup=lambda _actor, _device, rid, value=authority:
+                replace(value, resource_id=rid) if isinstance(value, LiveWorkspaceAuthority) else value)
             other = self.choose(picker)
             port = picker.as_port(local_policy=lambda _root: True)
             with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_grant_missing"):
