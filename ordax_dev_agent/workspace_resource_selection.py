@@ -24,7 +24,7 @@ from .project_workspace_port import (
     ProjectWorkspaceDenied, ProjectWorkspacePort, VerifiedProjectResource,
     WorkspaceActor, capture_workspace_root_identity,
 )
-from .projects import Project, resolve_project_for_repository
+from .projects import Project, canonical_github_repository_full_name, resolve_project_for_repository
 
 _PENDING_SECONDS = 300
 _MAX_REFERENCE_SECONDS = 24 * 60 * 60
@@ -37,6 +37,23 @@ def _uuid(value: object) -> bool:
         return isinstance(value, str) and str(uuid.UUID(value)) == value
     except (ValueError, TypeError, AttributeError):
         return False
+
+
+@dataclass(frozen=True)
+class OwnerCanonicalProjectScope:
+    """Owner-authenticated project scope from the existing Product resolver.
+
+    The trusted GUI composition must derive this from an authenticated Owner
+    session plus ProductRemoteClient.owner_project_scope(), and separately pin
+    the intended Product client UUID. Never from Lab/model/MCP JSON.
+    """
+
+    owner_user_id: str
+    client_id: str
+    space_id: str
+    project_id: str
+    device_id: str
+    repository_full_name: str
 
 
 @dataclass(frozen=True)
@@ -58,6 +75,7 @@ class LiveWorkspaceAuthority:
     device_id: str
     resource_id: str
     grant_id: str
+    issued_at: datetime
     expires_at: datetime
     allowed_actions: frozenset[str]
 
@@ -65,6 +83,7 @@ class LiveWorkspaceAuthority:
 @dataclass(frozen=True)
 class _LocalSelection:
     repository_full_name: str
+    project_scope: OwnerCanonicalProjectScope
     root: Path
     root_device: int
     root_inode: int
@@ -82,17 +101,20 @@ class WorkspaceResourceSelection:
         device_id: str,
         choose_directory: Callable[[Project], Path | None],
         confirm_owner: Callable[[Project, Path], bool],
+        canonical_project_scope: Callable[[str, str], OwnerCanonicalProjectScope | None],
         live_authority: Callable[[WorkspaceActor, str, str], LiveWorkspaceAuthority | None],
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not (_uuid(device_id) and callable(choose_directory)
-                and callable(confirm_owner) and callable(live_authority)
+                and callable(confirm_owner) and callable(canonical_project_scope)
+                and callable(live_authority)
                 and callable(clock)):
             raise ValueError("workspace_selection_trusted_host_required")
         self._config = config
         self._device_id = device_id
         self._choose = choose_directory
         self._confirm = confirm_owner
+        self._canonical_scope = canonical_project_scope
         self._live = live_authority
         self._clock = clock
         self._selections: dict[str, _LocalSelection] = {}
@@ -104,12 +126,33 @@ class WorkspaceResourceSelection:
         except (ValueError, OSError, RuntimeError):
             raise ProjectWorkspaceDenied("workspace_registered_project_unavailable") from None
 
+    def _owner_project_scope(self, repository_full_name: str) -> OwnerCanonicalProjectScope:
+        canonical = canonical_github_repository_full_name(repository_full_name)
+        if canonical is None or canonical != repository_full_name:
+            raise ProjectWorkspaceDenied("workspace_project_scope_unavailable")
+        try:
+            scope = self._canonical_scope(repository_full_name, self._device_id)
+        except Exception:
+            raise ProjectWorkspaceDenied("workspace_project_scope_unavailable") from None
+        if (not isinstance(scope, OwnerCanonicalProjectScope)
+                or not all(_uuid(value) for value in (
+                    scope.owner_user_id, scope.client_id, scope.space_id,
+                    scope.project_id, scope.device_id,
+                ))
+                or scope.device_id != self._device_id
+                or scope.repository_full_name != repository_full_name):
+            raise ProjectWorkspaceDenied("workspace_project_scope_unavailable")
+        return scope
+
     def choose_for_owner(self, canonical_repository_full_name: str) -> str:
         """Trusted user-session GUI entrypoint; returns ONLY an opaque ID.
 
         This method must never be exposed via MCP/LLM, HTTP or renderer-supplied
         arbitrary paths. The project comes from an authenticated Product resolver.
         """
+        # Authenticate the Product project/Space binding before opening a
+        # native dialog. A repository label is not an authorization by itself.
+        scope = self._owner_project_scope(canonical_repository_full_name)
         project = self._registered_project(canonical_repository_full_name)
         original = capture_workspace_root_identity(project.root)
         try:
@@ -144,6 +187,9 @@ class WorkspaceResourceSelection:
             raise ProjectWorkspaceDenied("workspace_root_changed")
         if self._registered_project(canonical_repository_full_name).root != selected:
             raise ProjectWorkspaceDenied("workspace_project_root_mismatch")
+        # The Owner scope may have been reassigned while the dialog was open.
+        if self._owner_project_scope(canonical_repository_full_name) != scope:
+            raise ProjectWorkspaceDenied("workspace_project_scope_changed")
 
         # Project paths remain private to Runtime. No cloud request or grant is
         # created here. Until Platform issuance succeeds the ID cannot be used.
@@ -161,7 +207,7 @@ class WorkspaceResourceSelection:
             while resource_id in self._selections:
                 resource_id = "resource_" + secrets.token_urlsafe(24)
             self._selections[resource_id] = _LocalSelection(
-                canonical_repository_full_name, selected, *original, now,
+                canonical_repository_full_name, scope, selected, *original, now,
             )
         return resource_id
 
@@ -201,15 +247,25 @@ class WorkspaceResourceSelection:
             proof.client_id, proof.device_id, proof.grant_id,
         )):
             return None
+        pinned = selected.project_scope
+        if (proof.owner_user_id, proof.space_id, proof.canonical_project_id,
+            proof.client_id, proof.device_id) != (
+            pinned.owner_user_id, pinned.space_id, pinned.project_id,
+            pinned.client_id, pinned.device_id,
+        ):
+            return None
         if (proof.lab_project_id, proof.actor_id, proof.client_id,
             proof.workspace_session_id, proof.device_id, proof.resource_id) != (
             actor.project_id, actor.actor_id, actor.client_id,
             actor.workspace_session_id, device_id, resource_id,
         ):
             return None
-        if (not isinstance(proof.expires_at, datetime)
+        if (not isinstance(proof.issued_at, datetime)
+                or proof.issued_at.tzinfo is None
+                or not isinstance(proof.expires_at, datetime)
                 or proof.expires_at.tzinfo is None
-                or not now < proof.expires_at <= now + _MAX_LIFESPAN
+                or proof.issued_at > now
+                or not now < proof.expires_at <= proof.issued_at + _MAX_LIFESPAN
                 or proof.allowed_actions != frozenset({"read"})):
             return None
         try:
