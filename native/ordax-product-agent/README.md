@@ -128,6 +128,7 @@ python3 native/ordax-product-agent/audit_elf.py \
   --binary out/ordax-product-agent \
   --recipe native/ordax-product-agent/Dockerfile \
   --rootfs-cpio /verified/ordax-independent/rootfs.cpio.gz \
+  --expected-rootfs-sha256 "$OS_AUTHENTICATED_ROOTFS_SHA256" \
   --require-rootfs-name-resolution
 ```
 
@@ -137,7 +138,11 @@ extracting or staging them, and reuses the **same** ELF parser, symlink resoluti
 and dependency graph. The report binds the SHA-256 of the **exact compressed
 CPIO** in `target_rootfs_cpio_sha256`; the TAR option retains
 `target_rootfs_tar_sha256`. Supply a separately authenticated GitHub/OS rootfs
-artifact: this consumer cannot authenticate its producer.
+artifact: this consumer cannot authenticate its producer. The optional
+`--expected-rootfs-sha256` rejects mismatched TAR/CPIO source bytes (and
+missing/invalid SHA-256 inputs); derive the digest from the **authenticated OS
+`provenance.json`**, not from unauthenticated archive bytes. This identity
+binding is not full Runtime ABI proof or installation authorization.
 
 The report binds the **actual source archive SHA-256**, inspects the target loader and
 ELF files in standard `/lib{,64}` and `/usr/lib{,64}` namespaces, follows

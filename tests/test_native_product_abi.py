@@ -279,6 +279,34 @@ class IndependentNativeAbiTests(unittest.TestCase):
         self.assertFalse(proof["full_runtime_abi_compatible"])
         self.assertFalse(proof["device_install_authorized"])
 
+    def test_verified_rootfs_sha256_is_required_to_match_exact_cpio_bytes(self):
+        temp, rootfs = make_buildroot_cpio([
+            ("usr/bin/offline-proof", fake_elf()),
+        ])
+        self.addCleanup(temp.cleanup)
+        with tempfile.TemporaryDirectory() as working:
+            binary = Path(working) / "agent"
+            recipe = Path(working) / "Dockerfile"
+            binary.write_bytes(fake_elf(interpreter="/lib/ld-musl-x86_64.so.1"))
+            recipe.write_text("FROM scratch\n")
+            expected = hashlib.sha256(rootfs.read_bytes()).hexdigest()
+            report = module.audit(
+                binary, recipe, rootfs_cpio=rootfs, expected_rootfs_sha256=expected
+            )
+            self.assertEqual(
+                report["target_rootfs_preflight"]["target_rootfs_cpio_sha256"],
+                expected,
+            )
+            self.assertFalse(report["target_rootfs_preflight"]["device_install_authorized"])
+            with self.assertRaisesRegex(module.NativeAbiError, "source_sha256_mismatch"):
+                module.audit(binary, recipe, rootfs_cpio=rootfs,
+                             expected_rootfs_sha256="0" * 64)
+            with self.assertRaisesRegex(module.NativeAbiError, "expected_sha256_invalid"):
+                module.audit(binary, recipe, rootfs_cpio=rootfs,
+                             expected_rootfs_sha256="not-a-sha")
+            with self.assertRaisesRegex(module.NativeAbiError, "requires_archive"):
+                module.audit(binary, recipe, expected_rootfs_sha256=expected)
+
     def test_real_os_cpio_without_dynamic_loader_remains_fail_closed(self):
         temp, rootfs = make_buildroot_cpio([
             ("usr/bin/isolated-static-tool", fake_elf()),
