@@ -25,6 +25,43 @@ lock/recipe hashes and the offline proof. Byte-for-byte reproducibility has not
 been established. This is an unsigned candidate, not an installable signed OS
 component or evidence of physical notebook execution.
 
+## Verified Buildroot-private Python versus Runtime lock
+
+The OS-owned experimental Independent Base job [39736013343](https://github.com/ordaxsystems/ordax-os/actions/runs/39736013343)
+compiled a component-private musl **Python 3.14.7**, TLS, zlib and an HTTPX
+subset using the pinned Buildroot 2026.08 source. It executed a read-only
+offline host-kernel smoke. Its actual `native-python-provenance.json` is the
+**source of measured Buildroot versions**, not a new package lock in this repo.
+It is intentionally a non-installable component, separate from the OS rootfs.
+
+The canonical Runtime uses a Python **3.12** hashed lock. Against the above
+verified OS receipt, the Buildroot probe disagrees on `anyio`
+(4.15.1 vs 4.13.0), `certifi` (2026.10.19 vs 2026.4.22) and `idna`
+(3.20 vs 3.11); `httpx`, `httpcore` and `h11` agree. The other
+Runtime lock packages have **no closure proof from that six-package probe**.
+
+Reconcile an externally verified OS artifact with the exact OS source
+contract using the existing Runtime lock parser:
+
+```sh
+python3 -m tools.ci.audit_independent_python_proof \
+  --receipt /verified/native-python-provenance.json \
+  --os-source /pinned/ordax-os/bootstrap/independent-base/source.json \
+  --requirements native/ordax-product-agent/requirements.lock \
+  --require-alignment
+```
+
+The current verified proof should return **1** for differences, print exact
+Buildroot/Runtime versions and report uncovered locks. Malformed/unbound
+evidence returns **2**. The output binds SHA-256 of both inputs and is a
+read-only *version reconciliation*, not a signature verification or permission
+to vendor other-distribution libraries. The OS owner verifies workflow
+provenance and actual ELF closure; this tool does not. No combination of
+matching versions may turn on `device_install_authorized`,
+`device_execution_proven` or `full_native_runtime_dependency_closure_proven`.
+The next compatible native build must use OS-owned Buildroot inputs and
+verify the complete Runtime import graph and kernel execution.
+
 ## Independent Base / kernel-only ABI gate
 
 The OrdaX OS Independent Base uses a **Buildroot-built static musl** userspace.
@@ -150,3 +187,23 @@ Refresh `bootstrap.lock` from the build-only dependency graph with
 `--no-emit-package pyinstaller`. It contains hashed build backend/tooling entries,
 installed before the compiler-backed PyInstaller build with build isolation
 disabled. The remaining Runtime dependencies are installed from the full lock.
+
+
+### Local OS Connector consent probe (read-only)
+
+The frozen `ordax-product-agent` also accepts
+`--local-access-status --distribution-profile owner-development --product-mode usb`
+with the existing `--system-root`, `--state-root` and `--workspace` paths.
+It imports **the OS-owned** `ProductDeviceIdentityStore` source through the
+same verified Native composition used by `--run` and checks
+`development_visibility_enabled()`. Status prints only
+`NATIVE_PRODUCT_LOCAL_ACCESS=ENABLED` (exit 0) or `DISABLED` (exit 3);
+unknown, absent credential and unsafe settings deny. It performs no network
+calls, enrollments, state writes, singleton-lock acquisition, OAuth/grant
+lookup or action dispatch. `--full-access` is forbidden in probe mode.
+
+This is a lifecycle *predicate*, not a session attestation, readiness
+receipt or activation authority. The OS supervisor must still use its
+canonical signed-current-slot verification before execution, run the
+same executable with `--run`, and stop it if local consent is revoked.
+Do not parse `product-connector-visibility.json` again in the supervisor.

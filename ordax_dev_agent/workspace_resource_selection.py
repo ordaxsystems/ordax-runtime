@@ -216,6 +216,29 @@ class WorkspaceResourceSelection:
         with self._lock:
             self._selections.pop(resource_id, None)
 
+    def trusted_scope_for_resource(self, resource_id: str) -> OwnerCanonicalProjectScope | None:
+        """Trusted in-process Device adapter: pinned IDs only, never a path/grant.
+
+        MUST NOT be an MCP/HTTP/renderer action. Opaque resource IDs are not
+        credentials; this accessor cannot attest authorization or issue a grant.
+        It only joins the exact Owner scope captured at native selection to a
+        fresh authenticated Device/Product verification. Expired/discarded
+        pending references fail closed.
+        """
+        if not isinstance(resource_id, str):
+            return None
+        with self._lock:
+            selected = self._selections.get(resource_id)
+            if selected is None:
+                return None
+            elapsed = self._clock() - selected.prepared_at
+            if elapsed > _MAX_REFERENCE_SECONDS or (
+                not selected.bound and elapsed > _PENDING_SECONDS
+            ):
+                self._selections.pop(resource_id, None)
+                return None
+            return selected.project_scope
+
     def resolve_live(
         self, actor: WorkspaceActor, device_id: str, resource_id: str,
     ) -> VerifiedProjectResource | None:
