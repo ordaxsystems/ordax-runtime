@@ -40,9 +40,9 @@ class ProductWorkspaceLiveProofTests(unittest.TestCase):
             "revoked_at":None,"active":True,
         }}
 
-    def project(self, response=None, **kwargs):
+    def project(self, response=..., **kwargs):
         return project_workspace_live_proof(
-            self.reply if response is None else response,
+            self.reply if response is ... else response,
             scope=kwargs.get("scope",self.scope),
             actor=kwargs.get("actor",self.actor),
             device_id=kwargs.get("device_id",self.device),
