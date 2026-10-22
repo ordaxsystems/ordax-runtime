@@ -7,10 +7,12 @@ executes the binary or treats a PyInstaller archive as static Linux proof.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
 import struct
+import zlib
 
 PT_LOAD = 1
 PT_DYNAMIC = 2
@@ -147,6 +149,122 @@ def inspect_elf(binary: bytes, recipe: str = "") -> dict:
     }
 
 
+# PyInstaller CArchive cookie and TOC use a versioned, big-endian on-disk
+# format. This is only a read-only native-file inventory; it is not a loader.
+CARCHIVE_MAGIC = b"MEI\x0c\x0b\x0a\x0b\x0e"
+CARCHIVE_COOKIE = "!8sIIII64s"
+CARCHIVE_TOC_RECORD = "!iIIIBc"
+MAX_CARCHIVE_ENTRIES = 4096
+MAX_CARCHIVE_MEMBER = 128 * 1024 * 1024
+MAX_CARCHIVE_TOTAL = 512 * 1024 * 1024
+
+
+def inspect_embedded_elf(binary: bytes, outer_needed=()) -> dict:
+    """Audit the *actual* frozen native entries without extracting or executing.
+
+    DT_NEEDED basename matching only identifies candidates not present in the
+    PyInstaller archive. It is not dynamic-loader resolution, RPATH validation,
+    ABI compatibility with Buildroot, or proof of runtime extraction.
+    """
+    if len(binary) < 128 or len(binary) > MAX_BYTES:
+        raise NativeAbiError("native_carchive_size_invalid")
+    cookie_size = struct.calcsize(CARCHIVE_COOKIE)
+    marker = binary.rfind(CARCHIVE_MAGIC, max(0, len(binary) - 65536))
+    if marker < 0 or marker + cookie_size > len(binary):
+        raise NativeAbiError("native_carchive_cookie_missing")
+    magic, package_size, toc_offset, toc_size, _, _ = struct.unpack_from(
+        CARCHIVE_COOKIE, binary, marker
+    )
+    package_start = marker + cookie_size - package_size
+    toc_start = package_start + toc_offset
+    toc_end = toc_start + toc_size
+    if (magic != CARCHIVE_MAGIC or package_start < 64 or package_size > len(binary)
+            or toc_size < 19 or toc_end != marker or toc_start < package_start):
+        raise NativeAbiError("native_carchive_layout_invalid")
+
+    cursor = toc_start
+    header_size = struct.calcsize(CARCHIVE_TOC_RECORD)
+    seen = set()
+    inventory = []
+    provided = set()
+    needed = set(outer_needed)
+    interpreters = set()
+    total_size = 0
+    count = 0
+    while cursor < toc_end:
+        count += 1
+        if count > MAX_CARCHIVE_ENTRIES or cursor + header_size > toc_end:
+            raise NativeAbiError("native_carchive_toc_invalid")
+        entry_size, position, packed, size, compression, kind = struct.unpack_from(
+            CARCHIVE_TOC_RECORD, binary, cursor
+        )
+        if (entry_size <= header_size or entry_size > 1024 or cursor + entry_size > toc_end
+                or compression not in (0, 1) or size > MAX_CARCHIVE_MEMBER
+                or position + packed > toc_offset or packed > MAX_BYTES):
+            raise NativeAbiError("native_carchive_entry_invalid")
+        raw_name = binary[cursor + header_size:cursor + entry_size]
+        if not raw_name.endswith(b"\0"):
+            raise NativeAbiError("native_carchive_name_invalid")
+        try:
+            name = raw_name.rstrip(b"\0").decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise NativeAbiError("native_carchive_name_invalid") from exc
+        if (not name or "\0" in name or name in seen or name.startswith("/")
+                or "\\" in name or any(part in ("", ".", "..") for part in name.split("/"))):
+            raise NativeAbiError("native_carchive_name_invalid")
+        seen.add(name)
+        cursor += entry_size
+        # Linux PyInstaller stores executables and shared objects as 'b'.
+        # Fail closed if it mislabels a .so as another member type.
+        if kind != b"b":
+            if re.search(r"\.so(?:\.[0-9.]+)?$", name) and kind == b"x":
+                raise NativeAbiError("native_carchive_shared_object_misclassified")
+            continue
+        total_size += size
+        if total_size > MAX_CARCHIVE_TOTAL or size < 64:
+            raise NativeAbiError("native_carchive_native_bytes_invalid")
+        payload = _slice(binary, package_start + position, packed)
+        if compression:
+            decoder = zlib.decompressobj()
+            try:
+                inflated = decoder.decompress(payload, size + 1)
+            except zlib.error as exc:
+                raise NativeAbiError("native_carchive_decompression_invalid") from exc
+            if (not decoder.eof or decoder.unconsumed_tail or decoder.unused_data
+                    or len(inflated) != size):
+                raise NativeAbiError("native_carchive_decompression_invalid")
+            payload = inflated
+        if len(payload) != size or payload[:4] != b"\x7fELF":
+            raise NativeAbiError("native_carchive_non_elf_binary")
+        result = inspect_elf(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        inventory.append((name, digest, result["interpreter"], result["needed_libraries"]))
+        provided.add(name.rsplit("/", 1)[-1])
+        needed.update(result["needed_libraries"])
+        if result["interpreter"]:
+            interpreters.add(result["interpreter"])
+    if cursor != toc_end or not inventory:
+        raise NativeAbiError("native_carchive_native_inventory_missing")
+
+    # Summarize the exact binary hashes and DT_NEEDED binding without placing
+    # all 90+ native modules or extracted code in the candidate manifest.
+    fingerprint = hashlib.sha256(json.dumps(
+        sorted(inventory), separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")).hexdigest()
+    return {
+        "schema": "ordax.native-embedded-elf-inventory/1",
+        "native_entry_count": len(inventory),
+        "native_uncompressed_bytes": total_size,
+        "inventory_sha256": fingerprint,
+        "needed_libraries": sorted(needed),
+        "unprovided_needed_names": sorted(needed - provided),
+        "embedded_interpreters": sorted(interpreters),
+        "read_only_audit": True,
+        "independent_base_compatibility_proven": False,
+        "install_authorized": False,
+    }
+
+
 def audit(binary_path: Path, recipe_path: Path) -> dict:
     if not binary_path.is_file() or binary_path.is_symlink():
         raise NativeAbiError("native_elf_file_unavailable")
@@ -154,9 +272,13 @@ def audit(binary_path: Path, recipe_path: Path) -> dict:
         raise NativeAbiError("native_elf_size_invalid")
     if not recipe_path.is_file() or recipe_path.is_symlink():
         raise NativeAbiError("native_build_recipe_unavailable")
-    return inspect_elf(
-        binary_path.read_bytes(), recipe_path.read_text(encoding="utf-8")
-    )
+    binary = binary_path.read_bytes()
+    report = inspect_elf(binary, recipe_path.read_text(encoding="utf-8"))
+    if report["pyinstaller_archive_present"]:
+        report["embedded_elf_inventory"] = inspect_embedded_elf(
+            binary, report["needed_libraries"]
+        )
+    return report
 
 
 def main() -> int:
