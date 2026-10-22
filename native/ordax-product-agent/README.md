@@ -143,3 +143,23 @@ Refresh `bootstrap.lock` from the build-only dependency graph with
 `--no-emit-package pyinstaller`. It contains hashed build backend/tooling entries,
 installed before the compiler-backed PyInstaller build with build isolation
 disabled. The remaining Runtime dependencies are installed from the full lock.
+
+
+### Local OS Connector consent probe (read-only)
+
+The frozen `ordax-product-agent` also accepts
+`--local-access-status --distribution-profile owner-development --product-mode usb`
+with the existing `--system-root`, `--state-root` and `--workspace` paths.
+It imports **the OS-owned** `ProductDeviceIdentityStore` source through the
+same verified Native composition used by `--run` and checks
+`development_visibility_enabled()`. Status prints only
+`NATIVE_PRODUCT_LOCAL_ACCESS=ENABLED` (exit 0) or `DISABLED` (exit 3);
+unknown, absent credential and unsafe settings deny. It performs no network
+calls, enrollments, state writes, singleton-lock acquisition, OAuth/grant
+lookup or action dispatch. `--full-access` is forbidden in probe mode.
+
+This is a lifecycle *predicate*, not a session attestation, readiness
+receipt or activation authority. The OS supervisor must still use its
+canonical signed-current-slot verification before execution, run the
+same executable with `--run`, and stop it if local consent is revoked.
+Do not parse `product-connector-visibility.json` again in the supervisor.
