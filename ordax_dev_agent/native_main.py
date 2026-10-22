@@ -237,7 +237,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from .main import run
         return run(config, device_credential_provider=store.read_enrolled_credential,
-                   computer_adapter={}, status_port=args.status_port)
+                   computer_adapter={}, status_port=args.status_port,
+                   native_access_enabled=store.development_visibility_enabled)
     finally:
         os.close(lock)
 
