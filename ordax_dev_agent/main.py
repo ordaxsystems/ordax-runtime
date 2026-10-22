@@ -284,6 +284,16 @@ def main() -> int:
     return run(AgentConfig.from_env())
 
 
+def _native_local_access_granted(provider: Callable[[], bool] | None) -> bool:
+    """Recheck the OS-owned local MCP switch; unknown/error is always denial."""
+    if provider is None:
+        return True  # Windows uses its existing local Computer Access owner.
+    try:
+        return provider() is True
+    except Exception:
+        return False
+
+
 def run(
     config: AgentConfig,
     *,
@@ -291,6 +301,7 @@ def run(
     computer_adapter: Mapping | None = None,
     status_port: int = 8765,
     orchestrator_installation_provider: Callable | None = None,
+    native_access_enabled: Callable[[], bool] | None = None,
 ) -> int:
     """Run the canonical lifecycle with host-owned configuration and identity.
 
@@ -314,6 +325,12 @@ def run(
         # adapter means no graphical capability, not a fallback to Win32.
         if computer_adapter is None:
             computer_adapter = {}
+        if not callable(native_access_enabled):
+            raise TypeError("Native Runtime requires the OS-owned local Connector policy")
+        if not _native_local_access_granted(native_access_enabled):
+            raise RuntimeError("native_local_connector_disabled")
+    elif native_access_enabled is not None:
+        raise TypeError("Native Connector policy requires a native device identity")
     started_monotonic = time.monotonic()
     _startup_log(config, f"RUN_ENTER pid={os.getpid()} version={__version__}")
     _startup_log(config, "CONFIG_READY")
@@ -430,6 +447,10 @@ def run(
         from .remote_protocol import DeviceAuthorizationError
 
         while not stop:
+            if not _native_local_access_granted(native_access_enabled):
+                runtime["state"] = "local-disabled"
+                status_server.shutdown()
+                return 0
             try:
                 runtime["state"] = "recovering-terminal-reports"
                 recovered = int(recover_pending_reports())
@@ -451,6 +472,10 @@ def run(
                 time.sleep(max(5.0, config.poll_seconds))
 
     while not stop and not runtime["paired"]:
+        if not _native_local_access_granted(native_access_enabled):
+            runtime["state"] = "local-disabled"
+            status_server.shutdown()
+            return 0
         try:
             paired_now = control.pair_if_needed(
                 host_actions,
@@ -482,6 +507,9 @@ def run(
 
     try:
         while not stop:
+            if not _native_local_access_granted(native_access_enabled):
+                runtime["state"] = "local-disabled"
+                break
             now = time.monotonic()
             try:
                 if callable(recover_pending_reports):
@@ -593,7 +621,11 @@ def run(
                             PRODUCT_REMOTE_CAPABILITY,
                             PRODUCT_REMOTE_LEGACY_CAPABILITY,
                         )
-                        if job.action == "orchestrator.app_read":
+                        if not _native_local_access_granted(native_access_enabled):
+                            # The local switch can be turned off after claim/start.
+                            # Report denial, never execute under a stale grant.
+                            result = ActionResult(False, "native_local_connector_disabled")
+                        elif job.action == "orchestrator.app_read":
                             from .orchestrator_product_execution import execute_orchestrator_app_status
                             result = execute_orchestrator_app_status(control, job,
                                 installation_provider=orchestrator_installation_provider)
