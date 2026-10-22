@@ -1,0 +1,34 @@
+name: Native Buildroot Source Compatibility
+
+on:
+  pull_request:
+    paths:
+      - "tools/ci/audit_buildroot_lock.py"
+      - "tests/test_native_buildroot_lock.py"
+      - "docs/NATIVE-BUILDROOT-COMPATIBILITY.md"
+      - ".github/workflows/native-buildroot-source-audit.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tools/ci/audit_buildroot_lock.py"
+      - "tests/test_native_buildroot_lock.py"
+      - "docs/NATIVE-BUILDROOT-COMPATIBILITY.md"
+      - ".github/workflows/native-buildroot-source-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-buildroot-source-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Runtime authoritative source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate pinned runtime lock parser and Buildroot drift gates
+        run: |
+          python3 -m py_compile tools/ci/audit_buildroot_lock.py
+          python3 -m unittest tests.test_native_buildroot_lock -v
