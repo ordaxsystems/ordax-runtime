@@ -48,6 +48,16 @@ Revision is a fingerprint of file metadata and Git state, **not** a cryptographi
 - Read-only source and disposable HTTP mock integration tests verify endpoint sequence, consent revoked during resolution, session invalidated during resolution, malformed project mapping, negative identity, absence of token in the adapter instance, and that selecting a local Git fixture still produces no readable grant.
 - **Not yet operational:** the packaged Owner UI has not composed this callback with its private authenticated account session. OAuth consent and project scope are necessary but not sufficient for a filesystem grant. Platform #266 still needs transactional grant issuance/revocation and the authenticated per-read Runtime verification bridge. No production migration/deploy or real file access is included.
 
+## Product workspace verification projection (source-only)
+
+`ordax_dev_agent.project_workspace_live_proof.project_workspace_live_proof` is the read-only **response decoder** for the canonical Platform SQL proposal `ordax.project-workspace-resource/1`, not a new permission service. It accepts **only a reply already obtained through an independently authenticated Device/Product transport**, the previously pinned `OwnerCanonicalProjectScope`, and the trusted Runtime `WorkspaceActor`. Raw renderer, LLM or MCP JSON must never be given authority by constructing a response.
+
+- Requires the exact known outer/grant fields. Rejects unknown fields (including `path`, credentials), wrong schema, inactive/revoked resources, wrong issuance provenance, write capabilities, noncanonical UUIDs, any mismatch of Owner/Space/Product project/Lab project/client/actor/session/device/resource and malformed timestamps.
+- Requires original issuance and expiry, both timezone-aware, with original grant lifetime at most 24h and positive remaining duration. The output is the **existing** `LiveWorkspaceAuthority` dataclass used by `WorkspaceResourceSelection.resolve_live`, not a duplicate grant ledger.
+- Tests exercise wrong identity in each dimension, foreign grant, mid-revocation response, extra/missing fields, legacy picker, token/path injection and expiry boundaries.
+- **No network is performed** by the decoder. Platform SQL `ordax_verify_project_workspace_resource_v1` is still a proposal and has no deployed Worker route. The next gate must wire the verifier behind the **existing attested Product device transport**, preserve Owner-issued grant/consent checks on every read, and ensure a fresh response on each `verify_binding` and postscan. A forged raw response must never be treated as attested.
+- No App capability is enabled by this file. An Owner-authenticated UI selection, transactional grant issuance/revocation, migration governance, signed Device transport and real VESTE Windows E2E remain mandatory.
+
 ## Windows native Owner-session UI adapter (source-only)
 
 `ordax_dev_agent.windows_owner_workspace_picker.WindowsOwnerWorkspacePicker` implements the **two existing callbacks** of `WorkspaceResourceSelection` directly via Windows APIs; there is no separate filesystem/policy implementation.
@@ -72,6 +82,6 @@ Do **not** wire a temporary raw filesystem adapter into Electron. The App alpha.
 
 ## Test gate
 
-`python -m unittest tests.test_project_workspace_port tests.test_workspace_resource_selection tests.test_windows_owner_workspace_picker tests.test_owner_project_scope_resolver -v` runs dedicated boundary regressions (environment isolation, local Git and external `.git` denial, scope, local policy and mid-scan revocation) on Linux and Windows CI. `python -m unittest tests.test_product_action_scope_parity -v` covers broader Product action scope. Source tests are not proof of live Product grants.
+`python -m unittest tests.test_project_workspace_port tests.test_workspace_resource_selection tests.test_windows_owner_workspace_picker tests.test_owner_project_scope_resolver tests.test_project_workspace_live_proof -v` runs dedicated boundary regressions (environment isolation, local Git and external `.git` denial, scope, local policy and mid-scan revocation) on Linux and Windows CI. `python -m unittest tests.test_product_action_scope_parity -v` covers broader Product action scope. Source tests are not proof of live Product grants.
 
 Next: jointly agree trusted picker and scope adapter with Platform. Only then connect Apps alpha.11 to this port, validate a disposable local VESTE fixture read-only, and proceed to M2.
