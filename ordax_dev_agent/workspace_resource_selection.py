@@ -118,10 +118,22 @@ class WorkspaceResourceSelection:
             raise ProjectWorkspaceDenied("workspace_picker_unavailable") from None
         if selected is None:
             raise ProjectWorkspaceDenied("workspace_selection_cancelled")
-        if not isinstance(selected, Path) or selected != project.root:
+        if (not isinstance(selected, Path) or not selected.is_absolute()
+                or ".." in selected.parts):
             raise ProjectWorkspaceDenied("workspace_selection_outside_registered_project")
-        if capture_workspace_root_identity(selected) != original:
+        # Verify the spelling supplied by the native dialog BEFORE resolving
+        # aliases. On Windows the same directory may have an 8.3 short name;
+        # a symlink or junction must not become acceptable via resolve().
+        selected_identity = capture_workspace_root_identity(selected)
+        try:
+            canonical_selected = selected.resolve(strict=True)
+        except (OSError, ValueError, RuntimeError):
+            raise ProjectWorkspaceDenied("workspace_selection_outside_registered_project") from None
+        if canonical_selected != project.root:
+            raise ProjectWorkspaceDenied("workspace_selection_outside_registered_project")
+        if selected_identity != original:
             raise ProjectWorkspaceDenied("workspace_root_changed")
+        selected = canonical_selected
         try:
             accepted = self._confirm(project, selected)
         except Exception:
