@@ -76,6 +76,11 @@ class ProjectWorkspacePortContractTests(unittest.TestCase):
         self.local_permitted = True
         self.lookups = 0
         self.revoke_at = None
+        # A repository without a first commit has no HEAD for Git metadata.
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=CI",
+                        "-c", "user.email=ci@example.invalid", "commit",
+                        "--allow-empty", "-qm", "initial"], check=True,
+                       capture_output=True)
         info = self.root.stat()
         self.grant = VerifiedProjectResource(
             actor_id=self.ACTOR.actor_id, client_id=self.ACTOR.client_id,
