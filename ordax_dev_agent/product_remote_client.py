@@ -323,6 +323,59 @@ class ProductRemoteClient:
             "repository_full_name": returned_repository,
         }
 
+    def device_workspace_proof(
+        self,
+        *,
+        device_id: str,
+        device_token: str,
+        owner_user_id: str,
+        actor_id: str,
+        client_id: str,
+        lab_project_id: str,
+        workspace_session_id: str,
+        resource_id: str,
+    ) -> dict[str, Any]:
+        """Read ONE fresh workspace-resource proof via canonical Product Device transport.
+
+        Must only be called in the trusted Runtime Device host, using its
+        existing enrolled device credential, never the Owner OAuth token.
+        The owner/client/actor/resource fields are lookup keys, not self-
+        asserted permission: the canonical SQL verifier checks them all.
+        There is no cache, path parameter, grant minting or MCP action.
+        """
+        canonical_device = self._uuid(device_id, "device_id")
+        owner = self._uuid(owner_user_id, "owner_user_id")
+        actor = self._uuid(actor_id, "actor_id")
+        client = self._client_id(client_id)
+        if (not isinstance(device_token, str)
+                or not 32 <= len(device_token) <= 512
+                or any(ord(ch) <= 0x20 or ord(ch) == 0x7f for ch in device_token)):
+            raise ValueError("device_workspace_proof_trusted_device_token_required")
+        if (not isinstance(lab_project_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,180}", lab_project_id)
+                or not isinstance(workspace_session_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,180}", workspace_session_id)
+                or not isinstance(resource_id, str)
+                or not re.fullmatch(r"resource_[A-Za-z0-9_-]{8,160}", resource_id)):
+            raise ValueError("device_workspace_proof_identity_invalid")
+        response = self._request(
+            "POST", f"{self.base_url}/v3/device/transport/workspace-proof",
+            headers={
+                "x-ordax-device-id": canonical_device,
+                "x-ordax-device-token": device_token,
+                "accept": "application/json",
+            },
+            json={
+                "owner_user_id": owner,
+                "actor_id": actor,
+                "client_id": client,
+                "lab_project_id": lab_project_id,
+                "workspace_session_id": workspace_session_id,
+                "resource_id": resource_id,
+            },
+        )
+        return self._body(response)
+
     def replace_owner_remote_grant_group(
         self,
         access_token: str,
