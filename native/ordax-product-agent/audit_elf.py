@@ -7,11 +7,14 @@ executes the binary or treats a PyInstaller archive as static Linux proof.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
+import gzip
 import hashlib
 import json
 from pathlib import Path
 import posixpath
 import re
+import stat
 import struct
 import tarfile
 import zlib
@@ -293,6 +296,122 @@ ROOTFS_MAX_TAR_BYTES = 2 * 1024 * 1024 * 1024
 ROOTFS_MAX_ENTRIES = 100_000
 ROOTFS_MAX_LIBRARY_BYTES = 64 * 1024 * 1024
 ROOTFS_MAX_LIBRARIES = 512
+ROOTFS_MAX_CPIO_EXPANDED_BYTES = 2 * 1024 * 1024 * 1024
+ROOTFS_MAX_CPIO_LIB_BYTES = 192 * 1024 * 1024
+ROOTFS_CPIO_HEADER_BYTES = 110
+
+
+class _CpioMember:
+    """Bounded, in-memory *library* metadata; other OS files are discarded."""
+    def __init__(self, kind: int, data: bytes = b"", linkname: str = ""):
+        self.kind = kind
+        self.data = data
+        self.linkname = linkname
+        self.size = len(data)
+
+    def isfile(self) -> bool:
+        return self.kind == stat.S_IFREG
+
+    def isdir(self) -> bool:
+        return self.kind == stat.S_IFDIR
+
+    def issym(self) -> bool:
+        return self.kind == stat.S_IFLNK
+
+
+def _read_cpio_libraries(path: Path) -> dict:
+    """Index standard-library paths in OS-owned newc CPIO, without extraction.
+
+    The OrdaX Buildroot QEMU artifact publishes rootfs.cpio.gz but not its
+    rootfs.tar. Reuse the *same* ELF and dependency graph after this small
+    newc archive adapter; never build another OS rootfs or install anything.
+    """
+    entries = {}
+    expanded = 0
+    library_bytes = 0
+    count = 0
+    with gzip.open(path, "rb") as stream:
+        def take(length: int, *, retain: bool = False) -> bytes:
+            nonlocal expanded
+            if length < 0 or length > ROOTFS_MAX_CPIO_EXPANDED_BYTES - expanded:
+                raise NativeAbiError("native_rootfs_cpio_unpacked_limit")
+            expanded += length
+            chunks = [] if retain else None
+            remaining = length
+            while remaining:
+                data = stream.read(min(remaining, 1 << 20))
+                if not data:
+                    raise NativeAbiError("native_rootfs_cpio_truncated")
+                remaining -= len(data)
+                if chunks is not None:
+                    chunks.append(data)
+            return b"".join(chunks) if chunks is not None else b""
+
+        while True:
+            header = take(ROOTFS_CPIO_HEADER_BYTES, retain=True)
+            if header[:6] != b"070701":
+                raise NativeAbiError("native_rootfs_cpio_format_invalid")
+            try:
+                fields = [int(header[6+i*8:14+i*8], 16) for i in range(13)]
+            except ValueError as exc:
+                raise NativeAbiError("native_rootfs_cpio_header_invalid") from exc
+            mode, size, namesize = fields[1], fields[6], fields[11]
+            if not 1 <= namesize <= 4096:
+                raise NativeAbiError("native_rootfs_cpio_name_size_invalid")
+            raw_name = take(namesize, retain=True)
+            if raw_name[-1] != 0 or b"\0" in raw_name[:-1]:
+                raise NativeAbiError("native_rootfs_cpio_name_invalid")
+            try:
+                name = raw_name[:-1].decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise NativeAbiError("native_rootfs_cpio_name_invalid") from exc
+            if name == "TRAILER!!!":
+                if size or mode:
+                    raise NativeAbiError("native_rootfs_cpio_trailer_invalid")
+                take(-(ROOTFS_CPIO_HEADER_BYTES + namesize) % 4)
+                # newc permits zero padding after its trailer.
+                while True:
+                    rest = stream.read(1 << 20)
+                    if not rest:
+                        break
+                    if any(rest):
+                        raise NativeAbiError("native_rootfs_cpio_trailing_data")
+                return entries
+            count += 1
+            if count > ROOTFS_MAX_ENTRIES:
+                raise NativeAbiError("native_rootfs_member_count_exceeded")
+            normalized = None
+            if name not in (".", "./"):
+                normalized = _tar_member_name(name)
+            take(-(ROOTFS_CPIO_HEADER_BYTES + namesize) % 4)
+            is_library = normalized is not None and _library_namespace(normalized)
+            kind = stat.S_IFMT(mode)
+            if is_library:
+                if normalized in entries:
+                    raise NativeAbiError("native_rootfs_duplicate_library_path")
+                if kind not in (stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK):
+                    raise NativeAbiError("native_rootfs_unsupported_library_entry")
+                if size > ROOTFS_MAX_LIBRARY_BYTES:
+                    raise NativeAbiError("native_rootfs_library_too_large")
+                if library_bytes + size > ROOTFS_MAX_CPIO_LIB_BYTES:
+                    raise NativeAbiError("native_rootfs_cpio_library_limit")
+                library_bytes += size
+            data = take(size, retain=is_library and kind != stat.S_IFDIR)
+            take(-size % 4)
+            if is_library:
+                link = ""
+                if kind == stat.S_IFLNK:
+                    try:
+                        link = data.decode("utf-8")
+                    except UnicodeDecodeError as exc:
+                        raise NativeAbiError("native_rootfs_unsafe_symlink_target") from exc
+                    if len(data) > 4096:
+                        raise NativeAbiError("native_rootfs_unsafe_symlink_target")
+                if kind == stat.S_IFDIR and size:
+                    raise NativeAbiError("native_rootfs_cpio_directory_payload")
+                entries[normalized] = _CpioMember(kind, data if kind == stat.S_IFREG else b"", link)
+
+
 LIB_NAME = re.compile(r"[A-Za-z0-9_.+-]{1,255}\Z")
 
 
@@ -350,7 +469,8 @@ def _resolve_rootfs_member(name: str, entries: dict) -> tuple[str, object] | Non
     raise NativeAbiError("native_rootfs_symlink_depth_exceeded")
 
 
-def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "") -> dict:
+def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "",
+                       *, archive_format: str = "tar") -> dict:
     """Compare real target-rootfs ELF files against the frozen Runtime names.
 
     Basename search through default loader directories cannot prove glibc/musl
@@ -372,35 +492,45 @@ def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "") -> dic
     with rootfs_tar.open("rb") as stream:
         for block in iter(lambda: stream.read(1 << 20), b""):
             digest.update(block)
-    entries = {}
+    if archive_format not in ("tar", "cpio"):
+        raise NativeAbiError("native_rootfs_archive_format_invalid")
     try:
-        with tarfile.open(rootfs_tar, mode="r:*") as tar:
-            for count, member in enumerate(tar, 1):
-                if count > ROOTFS_MAX_ENTRIES:
-                    raise NativeAbiError("native_rootfs_member_count_exceeded")
-                if member.name in (".", "./"):
-                    continue
-                name = _tar_member_name(member.name)
-                if not _library_namespace(name):
-                    continue
-                if name in entries:
-                    raise NativeAbiError("native_rootfs_duplicate_library_path")
-                if not (member.isfile() or member.isdir() or member.issym()):
-                    raise NativeAbiError("native_rootfs_unsupported_library_entry")
-                if member.isfile() and member.size > ROOTFS_MAX_LIBRARY_BYTES:
-                    raise NativeAbiError("native_rootfs_library_too_large")
-                entries[name] = member
+        with ExitStack() as stack:
+            entries = {}
+            tar = None
+            if archive_format == "cpio":
+                entries = _read_cpio_libraries(rootfs_tar)
+            else:
+                tar = stack.enter_context(tarfile.open(rootfs_tar, mode="r:*"))
+                for count, member in enumerate(tar, 1):
+                    if count > ROOTFS_MAX_ENTRIES:
+                        raise NativeAbiError("native_rootfs_member_count_exceeded")
+                    if member.name in (".", "./"):
+                        continue
+                    name = _tar_member_name(member.name)
+                    if not _library_namespace(name):
+                        continue
+                    if name in entries:
+                        raise NativeAbiError("native_rootfs_duplicate_library_path")
+                    if not (member.isfile() or member.isdir() or member.issym()):
+                        raise NativeAbiError("native_rootfs_unsupported_library_entry")
+                    if member.isfile() and member.size > ROOTFS_MAX_LIBRARY_BYTES:
+                        raise NativeAbiError("native_rootfs_library_too_large")
+                    entries[name] = member
 
             def load_elf(name: str) -> tuple[str, dict, str] | None:
                 match = _resolve_rootfs_member(name, entries)
                 if match is None:
                     return None
                 target, entry = match
-                stream = tar.extractfile(entry)
-                if stream is None:
-                    raise NativeAbiError("native_rootfs_library_unreadable")
-                with stream:
-                    data = stream.read(ROOTFS_MAX_LIBRARY_BYTES + 1)
+                if isinstance(entry, _CpioMember):
+                    data = entry.data
+                else:
+                    source = tar.extractfile(entry)
+                    if source is None:
+                        raise NativeAbiError("native_rootfs_library_unreadable")
+                    with source:
+                        data = source.read(ROOTFS_MAX_LIBRARY_BYTES + 1)
                 if len(data) != entry.size or len(data) > ROOTFS_MAX_LIBRARY_BYTES:
                     raise NativeAbiError("native_rootfs_library_size_changed")
                 try:
@@ -450,7 +580,8 @@ def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "") -> dic
 
     return {
         "schema": "ordax.native-target-rootfs-elf-preflight/1",
-        "target_rootfs_tar_sha256": digest.hexdigest(),
+        "target_rootfs_tar_sha256": digest.hexdigest() if archive_format == "tar" else None,
+        "target_rootfs_cpio_sha256": digest.hexdigest() if archive_format == "cpio" else None,
         "interpreter": head["interpreter"],
         "interpreter_found": loader is not None if head["interpreter"] else None,
         "required_dynamic_names": sorted(set(needed)),
@@ -467,7 +598,8 @@ def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "") -> dic
     }
 
 
-def audit(binary_path: Path, recipe_path: Path, rootfs_tar: Path | None = None) -> dict:
+def audit(binary_path: Path, recipe_path: Path, rootfs_tar: Path | None = None,
+          rootfs_cpio: Path | None = None) -> dict:
     if not binary_path.is_file() or binary_path.is_symlink():
         raise NativeAbiError("native_elf_file_unavailable")
     if binary_path.stat().st_size > MAX_BYTES:
@@ -480,9 +612,13 @@ def audit(binary_path: Path, recipe_path: Path, rootfs_tar: Path | None = None) 
         report["embedded_elf_inventory"] = inspect_embedded_elf(
             binary, report["needed_libraries"]
         )
-    if rootfs_tar is not None:
+    if rootfs_tar is not None and rootfs_cpio is not None:
+        raise NativeAbiError("native_rootfs_sources_mutually_exclusive")
+    if rootfs_tar is not None or rootfs_cpio is not None:
         report["target_rootfs_preflight"] = inspect_rootfs_abi(
-            binary, rootfs_tar, recipe_path.read_text(encoding="utf-8")
+            binary, rootfs_cpio if rootfs_cpio is not None else rootfs_tar,
+            recipe_path.read_text(encoding="utf-8"),
+            archive_format="cpio" if rootfs_cpio is not None else "tar",
         )
     return report
 
@@ -492,17 +628,20 @@ def main() -> int:
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--recipe", type=Path, required=True)
     parser.add_argument("--require-independent", action="store_true")
-    parser.add_argument("--rootfs-tar", type=Path,
-                        help="Exact OS-owned Buildroot rootfs.tar for read-only ELF preflight")
+    archives = parser.add_mutually_exclusive_group()
+    archives.add_argument("--rootfs-tar", type=Path,
+                          help="Exact OS-owned Buildroot rootfs.tar for read-only ELF preflight")
+    archives.add_argument("--rootfs-cpio", type=Path,
+                          help="Exact OS-owned published rootfs.cpio.gz for read-only ELF preflight")
     parser.add_argument("--require-rootfs-name-resolution", action="store_true",
                         help="Fail if any required rootfs loader or DT_NEEDED name is unresolved")
     args = parser.parse_args()
     try:
-        result = audit(args.binary, args.recipe, args.rootfs_tar)
+        result = audit(args.binary, args.recipe, args.rootfs_tar, args.rootfs_cpio)
     except (NativeAbiError, OSError, UnicodeError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         return 2
-    if args.require_rootfs_name_resolution and args.rootfs_tar is None:
+    if args.require_rootfs_name_resolution and args.rootfs_tar is None and args.rootfs_cpio is None:
         print(json.dumps({"ok": False, "error": "rootfs_tar_required"}, sort_keys=True))
         return 2
     print(json.dumps(result, sort_keys=True))
