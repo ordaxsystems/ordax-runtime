@@ -80,6 +80,14 @@ A disposable Git fixture test exercises real `WorkspaceResourceSelection -> Devi
 
 Tests exercise both callbacks, denial in noninteractive environments, native COM cancel/error cleanup and default-deny confirmation with **mock dialogs** on Windows and Linux CI. They do not pretend to prove a real interactive Owner UI or Platform grant E2E.
 
+## Two-phase Owner/Device issuance client (source only, default-off)
+
+`ProductRemoteClient.approve_owner_workspace_resource` and `confirm_device_workspace_resource` reuse the existing authenticated Product HTTP client and the canonical Platform endpoints. The first stage sends an explicit Owner-signed consent to `/v3/owner/workspace-resources/approvals`; the second sends a separately enrolled Device-confirmation to `/v3/device/transport/workspace-confirm`. They require exact UUID/opaque IDs, send no path/token in JSON and fail closed if PostgreSQL denies, an endpoint is disabled, or the response omits the `approved/committed: true` value. Nothing caches issuance or grants.
+
+**Crucial trust boundary:** these are HTTP methods, **not** proof that either interactive native dialog was shown. The trusted Windows Owner host must construct calls only after the already established native picker and affirmative Owner confirmation; the Device host must independently match the pending intent and exact in-process selected resource. Never accept a model, MCP, renderer, or headless service request as the source of either approval. A successful Owner approval alone never authorizes reading; only a live post-commit Product verifier may do so. The existing Client does not issue grants locally or create a second ledger.
+
+Both Platform routes still require `WORKSPACE_RESOURCE_VERIFIER_ENABLED=enabled` **and** `WORKSPACE_RESOURCE_ISSUANCE_ENABLED=enabled`; the governed SQL remains unapplied. The installed Studio does **not** yet compose the trusted callbacks, and `capability_unavailable` remains the correct UI result. Only source tests against `httpx.MockTransport` have been added; no production SQL, Worker flags, notebook files or pendrive changed.
+
 ## Not yet implemented
 
 - Trusted **interactive Owner host composition** of the Windows native picker callbacks; the UI adapter exists but is not yet invoked by a packaged Owner GUI. Authenticated Runtime/Platform bridge and actual Owner resource-grant issuance/expiry are absent.
