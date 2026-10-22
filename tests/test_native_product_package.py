@@ -56,6 +56,48 @@ assert proof['ok'] and proof['graphical_actions'] == []
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
+    def test_native_product_http_transport_boots_without_python_mcp_server_sdk(self):
+        # Product MCP HTTPX transport is the canonical DEVICE client. Loading
+        # the separate Python MCP server SDK must not be a prerequisite for
+        # the Native OS agent's action registry or attestation client.
+        code = """import builtins
+import tempfile
+from pathlib import Path
+original_import = builtins.__import__
+def native_import(name, *args, **kwargs):
+    if name == 'mcp' or name.startswith('mcp.'):
+        raise ModuleNotFoundError('MCP server SDK is unavailable in Buildroot')
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = native_import
+from ordax_dev_agent.native_main import native_config, self_test
+from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
+assert self_test()['ok']
+device = '22222222-2222-4222-8222-222222222222'
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    private = root / 'private'
+    private.mkdir(mode=0o700)
+    config = native_config(private, root, device)
+    control = ProductDeviceControlPlane(
+        config,
+        device_credential_provider=lambda: {
+            'device_id': device, 'device_token': 'a' * 64
+        },
+    )
+    try:
+        assert control.runtime_kind == 'ordax-os'
+        assert control.device_id == device
+        assert not control.product_central_session.status.confirmed
+    finally:
+        control.product_central_session.close()
+        control.http.close()
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True, timeout=45, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
     def test_run_requires_explicit_owner_usb_profile_before_loading_identity(self):
         for arguments in (["--run"], ["--run", "--distribution-profile", "owner-development"]):
             with self.subTest(arguments=arguments), patch("ordax_dev_agent.native_main.identity_store") as store:
