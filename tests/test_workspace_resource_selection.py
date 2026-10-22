@@ -100,8 +100,9 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
         resource = self.choose()
         self.assertTrue(resource.startswith("resource_"))
         self.assertNotIn(str(self.root), resource)
-        self.assertEqual(self.selected, [self.root])
-        self.assertEqual(self.confirmed, [(self.root, self.root)])
+        canonical = self.root.resolve()
+        self.assertEqual(self.selected, [canonical])
+        self.assertEqual(self.confirmed, [(canonical, canonical)])
         port = self.picker.as_port(local_policy=lambda _root: True)
         with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_grant_missing"):
             port.verify_binding(self.actor, self.device, resource)
@@ -115,6 +116,17 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
         self.assertNotIn(str(self.root), str(result))
         self.assertNotIn("fixture only", str(result))
         self.assertGreaterEqual(self.calls, 4)
+
+    def test_native_picker_alias_is_accepted_only_for_identical_safe_root(self):
+        # Temp on Windows can be returned using an 8.3 RUNNER~1 ancestor
+        # while Runtime's canonical registry resolves it to runneradmin.
+        picker = self.make_picker(choose=lambda _project: self.root)
+        resource = self.choose(picker)
+        self.assertTrue(resource.startswith("resource_"))
+        self.assertEqual(picker._selections[resource].root, self.root.resolve())
+        self.allowed = True
+        self.assertTrue(picker.as_port(local_policy=lambda _: True).verify_binding(
+            self.actor, self.device, resource)["authorized"])
 
     def test_cancel_reject_or_escape_never_create_resource(self):
         outside = self.base / "outside"
