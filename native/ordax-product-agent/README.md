@@ -60,6 +60,41 @@ frozen ELF members; its native dependency names included unresolved
 `libc.musl-x86_64.so.1` and `libc.so` when compared with frozen member
 basenames. That finding cannot be fixed by copying Alpine's libc into the OS.
 
+### Read-only target rootfs dependency proof
+
+The **same canonical native ABI auditor** can inspect the exact Buildroot
+`rootfs.tar` produced by `ordax-os/bootstrap/independent-base/build.py`
+without unpacking into the host filesystem or executing any package.
+Supply the OS-verified tarball to the Runtime-owned parser:
+
+```sh
+python3 native/ordax-product-agent/audit_elf.py \
+  --binary out/ordax-product-agent \
+  --recipe native/ordax-product-agent/Dockerfile \
+  --rootfs-tar /verified/ordax-independent/rootfs.tar \
+  --require-rootfs-name-resolution
+```
+
+The report binds the **rootfs TAR SHA-256**, inspects the target loader and
+ELF files in standard `/lib{,64}` and `/usr/lib{,64}` namespaces, follows
+in-archive symlinks without extraction, checks transitive `DT_NEEDED` names,
+and identifies missing or ambiguous libraries. It fails closed for truncated,
+malformed, unsafe or ambiguous library entries. The strict CLI option returns
+nonzero for missing names/loader, but a green result **still does not authorize
+installation**: SONAME path availability cannot establish the Python minor ABI,
+loader search policy, symbol versioning, `dlopen` imports, frozen-module
+relocations, reproducibility or actual QEMU/physical execution.
+`full_runtime_abi_compatible`, `native_dependency_closure_proven` and
+`device_install_authorized` explicitly remain false. This does not create
+another rootfs owner, compiler, installer or device-side executor.
+
+The current minimal Independent Base is static musl, so the Alpine-built
+dynamic candidate is expected to fail this strict rootfs preflight.
+The Buildroot owner (#1860 in `ordax-os`) must decide whether to produce
+a truly static/self-contained native Runtime or move to a reproducible
+Buildroot-owned dynamic userspace, then prove the exact artifact's complete
+closure on QEMU. No Alpine APK, loader symlink or foreign distro is a solution.
+
 The release-gate form `--require-independent` exits nonzero if the ELF
 needs an external interpreter or shared library, the build recipe is Alpine,
 or a PyInstaller archive has no audited extracted-library closure. A
