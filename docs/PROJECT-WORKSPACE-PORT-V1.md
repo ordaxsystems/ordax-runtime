@@ -37,9 +37,21 @@ Revision is a fingerprint of file metadata and Git state, **not** a cryptographi
 - The reference registry is intentionally **ephemeral**: Runtime restart loses all selections and denies reuse. Durable cross-restart recovery needs its own authenticated rebind gate; never deserialize SQLite rows into a local root.
 - This seam is **not wired to any endpoint**, and the callback does not exist in production until Platform #266 issuance, attested Runtime transport, and real Windows Owner native UI. It cannot silently elevate a legacy project or run automatically in a service.
 
+## Windows native Owner-session UI adapter (source-only)
+
+`ordax_dev_agent.windows_owner_workspace_picker.WindowsOwnerWorkspacePicker` implements the **two existing callbacks** of `WorkspaceResourceSelection` directly via Windows APIs; there is no separate filesystem/policy implementation.
+
+- **Choose:** COM `IFileOpenDialog` with `FOS_PICKFOLDERS|FOS_FORCEFILESYSTEM|FOS_PATHMUSTEXIST`, initialized at the Runtime-registered project root. The native OS returns the chosen directory **inside** the same process; Runtime broker still enforces exact root identity and reparse/junction restrictions.
+- **Confirm:** a separate native `MessageBoxW` explaining the project and full selected path, with default answer **No**. Clicking `Sim` confirms **only** the local selection; it does not emit a Product grant, send a path or enable reading.
+- **Session gate:** Windows only, main GUI thread, process session != 0 and visible interactive window station. Any headless service, scheduler, incompatible COM apartment, unavailable dialog, cancellation, or confirmation error must deny; no fallback picker, shell command, PowerShell, localhost listener or temporary persistence.
+- **COM:** STA apartment scoped to the dialog; interfaces, path memory, and COM apartment released on success, cancellation or error. No Win32 permissions are changed.
+- **Ownership constraint:** these callbacks can be composed ONLY by an already authenticated interactive Owner host. The session/desktop check is not identity attestation; the **host composition and Platform Product authority must remain separate**. The adapter is deliberately **not wired** into Studio HTTP, generic computer actions, MCP, the headless Runtime service, or the Orchestrator Lab renderer.
+
+Tests exercise both callbacks, denial in noninteractive environments, native COM cancel/error cleanup and default-deny confirmation with **mock dialogs** on Windows and Linux CI. They do not pretend to prove a real interactive Owner UI or Platform grant E2E.
+
 ## Not yet implemented
 
-- Native trusted user-session folder picker, authenticated Runtime/Platform bridge, and actual Owner resource-grant issuance/expiry in Platform (the host-only in-process selection seam is source-only).
+- Trusted **interactive Owner host composition** of the Windows native picker callbacks; the UI adapter exists but is not yet invoked by a packaged Owner GUI. Authenticated Runtime/Platform bridge and actual Owner resource-grant issuance/expiry are absent.
 - Verified mapping from a Lab projectId to canonical Product project/Space.
 - Authenticated Runtime transport binding this port to the App, typed errors and revocation.
 - Canonical local policy callback wired into a live device agent.
@@ -49,6 +61,6 @@ Do **not** wire a temporary raw filesystem adapter into Electron. The App alpha.
 
 ## Test gate
 
-`python -m unittest tests.test_project_workspace_port tests.test_workspace_resource_selection -v` runs dedicated boundary regressions (environment isolation, local Git and external `.git` denial, scope, local policy and mid-scan revocation) on Linux and Windows CI. `python -m unittest tests.test_product_action_scope_parity -v` covers broader Product action scope. Source tests are not proof of live Product grants.
+`python -m unittest tests.test_project_workspace_port tests.test_workspace_resource_selection tests.test_windows_owner_workspace_picker -v` runs dedicated boundary regressions (environment isolation, local Git and external `.git` denial, scope, local policy and mid-scan revocation) on Linux and Windows CI. `python -m unittest tests.test_product_action_scope_parity -v` covers broader Product action scope. Source tests are not proof of live Product grants.
 
 Next: jointly agree trusted picker and scope adapter with Platform. Only then connect Apps alpha.11 to this port, validate a disposable local VESTE fixture read-only, and proceed to M2.
