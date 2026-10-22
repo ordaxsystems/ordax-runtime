@@ -106,7 +106,7 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
 
         plane.complete.side_effect = complete
         # Startup, pairing and claim succeed; local setting changes before dispatch.
-        switch = Mock(side_effect=[True, True, True, False])
+        switch = Mock(side_effect=[True, True, True, True, False])
         with (
             patch("ordax_dev_agent.control_plane.build_control_plane", return_value=plane),
             patch("ordax_dev_agent.main.start_status_server") as server,
