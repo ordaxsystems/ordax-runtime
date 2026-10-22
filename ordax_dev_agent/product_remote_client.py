@@ -323,6 +323,96 @@ class ProductRemoteClient:
             "repository_full_name": returned_repository,
         }
 
+    def approve_owner_workspace_resource(
+        self, access_token: str, *, intent_id: str, client_id: str,
+        lab_project_id: str, space_id: str, project_id: str, device_id: str,
+        actor_id: str, workspace_session_id: str, resource_id: str,
+    ) -> bool:
+        """Staged Owner approval only; never approval from model or MCP data.
+
+        Call solely from an authenticated interactive host AFTER native
+        confirmation, using the original pinned workspace selection. Even a
+        true response is NOT a filesystem grant; enrolled Device confirmation
+        and live PostgreSQL verification are separately required.
+        """
+        body = self._workspace_issuance_ids(
+            intent_id=intent_id, actor_id=actor_id, client_id=client_id,
+            workspace_session_id=workspace_session_id, resource_id=resource_id,
+        )
+        if (not isinstance(lab_project_id, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,180}", lab_project_id) is None):
+            raise ValueError("workspace_lab_project_invalid")
+        body.update({
+            "lab_project_id": lab_project_id,
+            "space_id": self._uuid(space_id, "space_id"),
+            "project_id": self._uuid(project_id, "project_id"),
+            "device_id": self._uuid(device_id, "device_id"),
+        })
+        response = self._request(
+            "POST", f"{self.base_url}/v3/owner/workspace-resources/approvals",
+            headers=self._headers(access_token), json=body,
+        )
+        return self._workspace_stage_result(response, "approved")
+
+    @staticmethod
+    def _workspace_issuance_ids(
+        *, intent_id: str, actor_id: str, client_id: str,
+        workspace_session_id: str, resource_id: str,
+    ) -> dict[str, str]:
+        if (not isinstance(workspace_session_id, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,180}", workspace_session_id) is None
+                or not isinstance(resource_id, str)
+                or re.fullmatch(r"resource_[A-Za-z0-9_-]{8,160}", resource_id) is None):
+            raise ValueError("workspace_issuance_identity_invalid")
+        return {
+            "intent_id": ProductRemoteClient._uuid(intent_id, "intent_id"),
+            "actor_id": ProductRemoteClient._uuid(actor_id, "actor_id"),
+            "client_id": ProductRemoteClient._client_id(client_id),
+            "workspace_session_id": workspace_session_id,
+            "resource_id": resource_id,
+        }
+
+    @classmethod
+    def _workspace_stage_result(cls, response: httpx.Response, field: str) -> bool:
+        body = cls._body(response)
+        if set(body) != {"ok", field} or body.get(field) is not True:
+            raise ProductRemoteError(
+                "product_remote_invalid_response", response.status_code,
+                "Product workspace stage response invalid",
+            )
+        return True
+
+    def confirm_device_workspace_resource(
+        self, *, device_id: str, device_token: str,
+        intent_id: str, actor_id: str, client_id: str,
+        workspace_session_id: str, resource_id: str,
+    ) -> bool:
+        """Second stage via existing enrolled Device transport, no grant cache.
+
+        The trusted Runtime host MUST only call after a real native Owner
+        picker confirmation and a successful authenticated Owner approval.
+        No GUI attestation can be inferred by this HTTP helper itself.
+        """
+        canonical_device = self._uuid(device_id, "device_id")
+        if (not isinstance(device_token, str)
+                or not 32 <= len(device_token) <= 512
+                or any(ord(ch) <= 0x20 or ord(ch) == 0x7f for ch in device_token)):
+            raise ValueError("device_workspace_confirmation_trusted_token_required")
+        body = self._workspace_issuance_ids(
+            intent_id=intent_id, actor_id=actor_id, client_id=client_id,
+            workspace_session_id=workspace_session_id, resource_id=resource_id,
+        )
+        response = self._request(
+            "POST", f"{self.base_url}/v3/device/transport/workspace-confirm",
+            headers={
+                "x-ordax-device-id": canonical_device,
+                "x-ordax-device-token": device_token,
+                "accept": "application/json",
+            },
+            json=body,
+        )
+        return self._workspace_stage_result(response, "committed")
+
     def device_workspace_proof(
         self,
         *,
