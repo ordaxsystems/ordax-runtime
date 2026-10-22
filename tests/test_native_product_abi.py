@@ -305,12 +305,14 @@ class IndependentNativeAbiTests(unittest.TestCase):
             return original_gzip(*args, **kwargs)
 
         with patch.object(module.gzip, "GzipFile", side_effect=replace_during_parse):
-            proof = module.inspect_rootfs_abi(candidate, rootfs, archive_format="cpio")
+            # Replacing the pathname unlinks the original inode; its ctime
+            # changes, so the descriptor's post-audit integrity gate DENIES.
+            with self.assertRaisesRegex(
+                module.NativeAbiError, "source_changed_during_audit"
+            ):
+                module.inspect_rootfs_abi(candidate, rootfs, archive_format="cpio")
         self.assertEqual(len(replacements), 1)
-        self.assertEqual(proof["target_rootfs_cpio_sha256"], original_sha)
         self.assertNotEqual(hashlib.sha256(rootfs.read_bytes()).hexdigest(), original_sha)
-        self.assertTrue(proof["default_directory_name_resolution_complete"])
-        self.assertFalse(proof["device_install_authorized"])
 
     def test_rootfs_tar_is_hashed_and_parsed_via_one_open_file(self):
         temp, rootfs = make_buildroot_rootfs([
