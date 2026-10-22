@@ -47,6 +47,7 @@ def main() -> None:
         "independent_base_abi_blockers": abi["blockers"],
         "elf_interpreter": abi["interpreter"],
         "elf_needed_libraries": abi["needed_libraries"],
+        "embedded_elf_inventory": abi["embedded_elf_inventory"],
         "signature_present": False, "installation_authorized_by_candidate": False,
         "stable_activation_authorized": False,
     }
