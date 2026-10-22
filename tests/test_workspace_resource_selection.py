@@ -53,7 +53,7 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
         self.project = _id()
         self.grant = _id()
         self.device = _id()
-        self.actor = WorkspaceActor(_id(), self.client, "workspace_a", "lab_a")
+        self.actor = WorkspaceActor(self.owner, self.client, "workspace_a", "lab_a")
         self.clock = [100.0]
         self.selected = []
         self.confirmed = []
@@ -69,9 +69,9 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             return None
         return LiveWorkspaceAuthority(
             owner_user_id=self.owner, space_id=self.space,
-            canonical_project_id=self.project, lab_project_id=actor.project_id,
-            actor_id=actor.actor_id, client_id=actor.client_id,
-            workspace_session_id=actor.workspace_session_id,
+            canonical_project_id=self.project, lab_project_id=self.actor.project_id,
+            actor_id=self.actor.actor_id, client_id=self.client,
+            workspace_session_id=self.actor.workspace_session_id,
             device_id=self.device, resource_id=resource, grant_id=self.grant,
             issued_at=datetime.now(timezone.utc) - timedelta(minutes=1),
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
@@ -151,10 +151,10 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
         self.assertEqual(registered[0][1], actor)
         self.assertTrue(picker._selections[resource].bound)
         self.assertEqual(picker.as_port(local_policy=lambda _root: True).verify_binding(
-            self.actor, self.device, resource,
+            actor, self.device, resource,
         )["resourceId"], resource)
 
-        picker.revoke_for_owner(self.actor, resource)
+        picker.revoke_for_owner(actor, resource)
         self.assertEqual(revoked, [registered[0]])
         self.assertNotIn(resource, picker._selections)
 
