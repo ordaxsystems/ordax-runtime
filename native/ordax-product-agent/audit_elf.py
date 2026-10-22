@@ -11,6 +11,7 @@ from contextlib import ExitStack
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 import posixpath
 import re
@@ -329,7 +330,7 @@ def _cpio_loader_search_path(name: str) -> bool:
                for root in ROOTFS_LIBRARY_DIRS)
 
 
-def _read_cpio_libraries(path: Path) -> dict:
+def _read_cpio_libraries(source) -> dict:
     """Index standard-library paths in OS-owned newc CPIO, without extraction.
 
     The OrdaX Buildroot QEMU artifact publishes rootfs.cpio.gz but not its
@@ -340,7 +341,7 @@ def _read_cpio_libraries(path: Path) -> dict:
     expanded = 0
     library_bytes = 0
     count = 0
-    with gzip.open(path, "rb") as stream:
+    with gzip.GzipFile(fileobj=source, mode="rb") as stream:
         def take(length: int, *, retain: bool = False) -> bytes:
             nonlocal expanded
             if length < 0 or length > ROOTFS_MAX_CPIO_EXPANDED_BYTES - expanded:
@@ -491,9 +492,6 @@ def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "",
     exact loader search policy or device execution. Positive results must NOT
     lift the Independent Base release gate.
     """
-    if (not rootfs_tar.is_file() or rootfs_tar.is_symlink()
-            or not 0 < rootfs_tar.stat().st_size <= ROOTFS_MAX_TAR_BYTES):
-        raise NativeAbiError("native_rootfs_tar_unavailable")
     head = inspect_elf(binary, recipe)
     embedded = (inspect_embedded_elf(binary, head["needed_libraries"])
                 if head["pyinstaller_archive_present"] else None)
@@ -501,20 +499,35 @@ def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "",
               else head["needed_libraries"])
     if any(not LIB_NAME.fullmatch(name) for name in needed):
         raise NativeAbiError("native_rootfs_unsafe_needed_name")
-    digest = hashlib.sha256()
-    with rootfs_tar.open("rb") as stream:
-        for block in iter(lambda: stream.read(1 << 20), b""):
-            digest.update(block)
     if archive_format not in ("tar", "cpio"):
         raise NativeAbiError("native_rootfs_archive_format_invalid")
+    # The OS authenticated archive must be exactly the same descriptor
+    # inspected for ELF closure, even if its pathname is replaced mid-check.
+    try:
+        descriptor = os.open(
+            rootfs_tar,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0),
+        )
+    except OSError as exc:
+        raise NativeAbiError("native_rootfs_tar_unavailable") from exc
     try:
         with ExitStack() as stack:
+            source = stack.enter_context(os.fdopen(descriptor, "rb"))
+            before = os.fstat(source.fileno())
+            if (not stat.S_ISREG(before.st_mode)
+                    or not 0 < before.st_size <= ROOTFS_MAX_TAR_BYTES):
+                raise NativeAbiError("native_rootfs_tar_unavailable")
+            digest = hashlib.sha256()
+            for block in iter(lambda: source.read(1 << 20), b""):
+                digest.update(block)
+            source.seek(0)
             entries = {}
             tar = None
             if archive_format == "cpio":
-                entries = _read_cpio_libraries(rootfs_tar)
+                entries = _read_cpio_libraries(source)
             else:
-                tar = stack.enter_context(tarfile.open(rootfs_tar, mode="r:*"))
+                tar = stack.enter_context(tarfile.open(fileobj=source, mode="r:*"))
                 for count, member in enumerate(tar, 1):
                     if count > ROOTFS_MAX_ENTRIES:
                         raise NativeAbiError("native_rootfs_member_count_exceeded")
@@ -588,6 +601,12 @@ def inspect_rootfs_abi(binary: bytes, rootfs_tar: Path, recipe: str = "",
                         raise NativeAbiError("native_rootfs_unsafe_transitive_name")
                     if sub not in checked and sub not in unresolved:
                         queue.append(sub)
+            after = os.fstat(source.fileno())
+            if ((before.st_dev, before.st_ino, before.st_size,
+                 before.st_mtime_ns, before.st_ctime_ns) !=
+                (after.st_dev, after.st_ino, after.st_size,
+                 after.st_mtime_ns, after.st_ctime_ns)):
+                raise NativeAbiError("native_rootfs_source_changed_during_audit")
     except (tarfile.TarError, EOFError) as exc:
         raise NativeAbiError("native_rootfs_tar_unreadable") from exc
 

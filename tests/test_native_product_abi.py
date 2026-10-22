@@ -5,12 +5,14 @@ import importlib.util
 import gzip
 import hashlib
 import io
+import os
 from pathlib import Path
 import stat
 import struct
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 import zlib
 
 SCRIPT = Path(__file__).resolve().parents[1] / "native/ordax-product-agent/audit_elf.py"
@@ -277,6 +279,71 @@ class IndependentNativeAbiTests(unittest.TestCase):
         self.assertEqual(proof["resolved_rootfs_libraries"]["libz.so.1"]["target_path"],
                          "usr/lib/libz.so.1")
         self.assertFalse(proof["full_runtime_abi_compatible"])
+        self.assertFalse(proof["device_install_authorized"])
+
+    def test_rootfs_cpio_path_swap_during_parse_keeps_authenticated_bytes(self):
+        first, rootfs = make_buildroot_cpio([
+            ("lib/ld-musl-x86_64.so.1", "../usr/lib/libc.musl-x86_64.so.1"),
+            ("usr/lib/libc.musl-x86_64.so.1", fake_elf()),
+            ("usr/lib/libz.so.1", fake_elf()),
+        ])
+        second, substitute = make_buildroot_cpio([
+            ("usr/bin/other-rootfs", fake_elf()),
+        ])
+        self.addCleanup(first.cleanup)
+        self.addCleanup(second.cleanup)
+        original_sha = hashlib.sha256(rootfs.read_bytes()).hexdigest()
+        candidate = fake_elf(
+            interpreter="/lib/ld-musl-x86_64.so.1", needed=("libz.so.1",)
+        )
+        original_gzip = module.gzip.GzipFile
+        replacements = []
+
+        def replace_during_parse(*args, **kwargs):
+            os.replace(substitute, rootfs)
+            replacements.append(True)
+            return original_gzip(*args, **kwargs)
+
+        with patch.object(module.gzip, "GzipFile", side_effect=replace_during_parse):
+            # Replacing the pathname unlinks the original inode; its ctime
+            # changes, so the descriptor's post-audit integrity gate DENIES.
+            with self.assertRaisesRegex(
+                module.NativeAbiError, "source_changed_during_audit"
+            ):
+                module.inspect_rootfs_abi(candidate, rootfs, archive_format="cpio")
+        self.assertEqual(len(replacements), 1)
+        self.assertNotEqual(hashlib.sha256(rootfs.read_bytes()).hexdigest(), original_sha)
+
+    def test_rootfs_fifo_and_symlink_cannot_block_or_bypass_regular_file_gate(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            fifo = root / "untrusted-rootfs.cpio.gz"
+            os.mkfifo(fifo)
+            with self.assertRaisesRegex(module.NativeAbiError, "native_rootfs_tar_unavailable"):
+                module.inspect_rootfs_abi(fake_elf(), fifo, archive_format="cpio")
+            original, archive = make_buildroot_cpio([
+                ("usr/bin/isolated-proof", fake_elf()),
+            ])
+            self.addCleanup(original.cleanup)
+            link = root / "rootfs-symlink.cpio.gz"
+            link.symlink_to(archive)
+            with self.assertRaisesRegex(module.NativeAbiError, "native_rootfs_tar_unavailable"):
+                module.inspect_rootfs_abi(fake_elf(), link, archive_format="cpio")
+
+    def test_rootfs_tar_is_hashed_and_parsed_via_one_open_file(self):
+        temp, rootfs = make_buildroot_rootfs([
+            ("usr/lib/libz.so.1", fake_elf()),
+        ])
+        self.addCleanup(temp.cleanup)
+        expected = hashlib.sha256(rootfs.read_bytes()).hexdigest()
+        real_open = os.open
+        with patch.object(module.os, "open", wraps=real_open) as opened:
+            proof = module.inspect_rootfs_abi(
+                fake_elf(needed=("libz.so.1",)), rootfs, archive_format="tar"
+            )
+        opened.assert_called_once()
+        self.assertEqual(proof["target_rootfs_tar_sha256"], expected)
+        self.assertEqual(proof["unresolved_rootfs_libraries"], [])
         self.assertFalse(proof["device_install_authorized"])
 
     def test_verified_rootfs_sha256_is_required_to_match_exact_cpio_bytes(self):
