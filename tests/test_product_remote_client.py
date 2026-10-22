@@ -13,9 +13,95 @@ CLIENT_ID = "11111111-1111-4111-8111-111111111111"
 GROUP_ID = "22222222-2222-4222-8222-222222222222"
 SPACE_ID = "55555555-5555-4555-8555-555555555555"
 PROJECT_ID = "66666666-6666-4666-8666-666666666666"
+OWNER_ID = "77777777-7777-4777-8777-777777777777"
+DEVICE_TOKEN = "d" * 64
+RESOURCE_ID = "resource_0123456789abcdefghijklmnopqrstuvwxyz"
 
 
 class ProductRemoteClientTests(unittest.TestCase):
+    def test_workspace_resource_lifecycle_uses_owner_and_device_authority_per_call(self):
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            if request.method == "POST" and request.url.path == "/v3/owner/project-workspace-resources":
+                return httpx.Response(200, json={"ok": True, "schema": "ordax.project-workspace-resource/1"})
+            if request.method == "POST" and request.url.path == "/v3/device/transport/workspace-proof":
+                return httpx.Response(200, json={"ok": True, "schema": "ordax.project-workspace-resource/1"})
+            if request.method == "DELETE" and request.url.path.endswith("/" + RESOURCE_ID):
+                return httpx.Response(200, json={
+                    "ok": True, "resource_id": RESOURCE_ID, "revoked": True,
+                })
+            return httpx.Response(404, json={"ok": False, "error": "not_found"})
+
+        client = ProductRemoteClient(
+            "https://mcp.example.test",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        self.assertTrue(client.register_owner_project_workspace_resource(
+            "owner-token", device_id=DEVICE_ID, device_token=DEVICE_TOKEN,
+            actor_id=OWNER_ID, client_id=CLIENT_ID, lab_project_id="lab_veste",
+            repository_full_name="ordaxsystems/veste", resource_id=RESOURCE_ID,
+            workspace_session_id="session_veste",
+        )["ok"])
+        self.assertTrue(client.verify_device_project_workspace_resource(
+            owner_user_id=OWNER_ID, actor_id=OWNER_ID, client_id=CLIENT_ID,
+            device_id=DEVICE_ID, device_token=DEVICE_TOKEN,
+            lab_project_id="lab_veste", resource_id=RESOURCE_ID,
+            workspace_session_id="session_veste",
+        )["ok"])
+        self.assertTrue(client.revoke_owner_project_workspace_resource(
+            "owner-token", client_id=CLIENT_ID, device_id=DEVICE_ID,
+            device_token=DEVICE_TOKEN, resource_id=RESOURCE_ID,
+        )["revoked"])
+
+        register, verify, revoke = seen
+        self.assertEqual(register.method, "POST")
+        self.assertEqual(register.headers["authorization"], "Bearer owner-token")
+        self.assertEqual(register.headers["x-ordax-device-id"], DEVICE_ID)
+        self.assertEqual(register.headers["x-ordax-device-token"], DEVICE_TOKEN)
+        self.assertEqual(set(json.loads(register.content)), {
+            "actor_id", "client_id", "lab_project_id", "repository_full_name",
+            "resource_id", "workspace_session_id",
+        })
+        self.assertNotIn("path", json.loads(register.content))
+
+        self.assertEqual(verify.method, "POST")
+        self.assertNotIn("authorization", verify.headers)
+        self.assertEqual(verify.headers["x-ordax-device-token"], DEVICE_TOKEN)
+        self.assertEqual(set(json.loads(verify.content)), {
+            "owner_user_id", "actor_id", "client_id", "lab_project_id",
+            "resource_id", "workspace_session_id",
+        })
+
+        self.assertEqual(revoke.method, "DELETE")
+        self.assertEqual(revoke.headers["authorization"], "Bearer owner-token")
+        self.assertEqual(revoke.url.params.get("client_id"), CLIENT_ID)
+        self.assertFalse(hasattr(client, "access_token"))
+        self.assertFalse(hasattr(client, "device_token"))
+
+    def test_workspace_resource_rejects_invalid_reference_and_device_credential_before_network(self):
+        calls = []
+        client = ProductRemoteClient(
+            "https://mcp.example.test",
+            http=httpx.Client(transport=httpx.MockTransport(lambda request: calls.append(request))),
+        )
+        with self.assertRaisesRegex(ValueError, "resource_id is invalid"):
+            client.verify_device_project_workspace_resource(
+                owner_user_id=OWNER_ID, actor_id=OWNER_ID, client_id=CLIENT_ID,
+                device_id=DEVICE_ID, device_token=DEVICE_TOKEN,
+                lab_project_id="lab_veste", resource_id="C:\\Users\\test",
+                workspace_session_id="session_veste",
+            )
+        with self.assertRaisesRegex(ValueError, "Product device credential is invalid"):
+            client.verify_device_project_workspace_resource(
+                owner_user_id=OWNER_ID, actor_id=OWNER_ID, client_id=CLIENT_ID,
+                device_id=DEVICE_ID, device_token="short",
+                lab_project_id="lab_veste", resource_id=RESOURCE_ID,
+                workspace_session_id="session_veste",
+            )
+        self.assertEqual(calls, [])
+
     def test_session_targets_and_action_flow_do_not_store_token(self):
         seen: list[tuple[str, str, str]] = []
         polls = {"count": 0}

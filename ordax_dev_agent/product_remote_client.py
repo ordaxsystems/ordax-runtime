@@ -28,6 +28,9 @@ _PROFILE_KEY = re.compile(r"[a-z][a-z0-9._-]{1,79}")
 _GITHUB_REPOSITORY = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}"
 )
+_RESOURCE_ID = re.compile(r"resource_[A-Za-z0-9_-]{8,160}")
+_LAB_ID = re.compile(r"[A-Za-z0-9_-]{1,180}")
+_DEVICE_TOKEN = re.compile(r"[\x21-\x7e]{32,512}")
 
 
 @dataclass
@@ -116,6 +119,35 @@ class ProductRemoteClient:
         if _CLIENT_ID.fullmatch(normalized) is None:
             raise ValueError("Product MCP client_id must be a canonical UUID")
         return normalized
+
+    @classmethod
+    def _device_headers(cls, device_id: Any, device_token: Any) -> dict[str, str]:
+        normalized_device = cls._uuid(device_id, "device_id")
+        if not isinstance(device_token, str) or _DEVICE_TOKEN.fullmatch(device_token) is None:
+            raise ValueError("Product device credential is invalid")
+        return {
+            "X-Ordax-Device-Id": normalized_device,
+            "X-Ordax-Device-Token": device_token,
+        }
+
+    @staticmethod
+    def _workspace_identity(
+        *, actor_id: Any, lab_project_id: Any, workspace_session_id: Any,
+        resource_id: Any,
+    ) -> dict[str, str]:
+        actor = ProductRemoteClient._uuid(actor_id, "actor_id")
+        if not isinstance(lab_project_id, str) or _LAB_ID.fullmatch(lab_project_id) is None:
+            raise ValueError("lab_project_id is invalid")
+        if not isinstance(workspace_session_id, str) or _LAB_ID.fullmatch(workspace_session_id) is None:
+            raise ValueError("workspace_session_id is invalid")
+        if not isinstance(resource_id, str) or _RESOURCE_ID.fullmatch(resource_id) is None:
+            raise ValueError("resource_id is invalid")
+        return {
+            "actor_id": actor,
+            "lab_project_id": lab_project_id,
+            "workspace_session_id": workspace_session_id,
+            "resource_id": resource_id,
+        }
 
     def _request(
         self, method: str, url: str, *, deadline: float | None = None, **kwargs: Any,
@@ -322,6 +354,119 @@ class ProductRemoteClient:
             "repository_id": body["repository_id"],
             "repository_full_name": returned_repository,
         }
+
+    def register_owner_project_workspace_resource(
+        self,
+        access_token: str,
+        *,
+        device_id: str,
+        device_token: str,
+        actor_id: str,
+        client_id: str,
+        lab_project_id: str,
+        repository_full_name: str,
+        resource_id: str,
+        workspace_session_id: str,
+    ) -> dict[str, Any]:
+        """Register one Runtime-picked resource under the existing read grant.
+
+        Owner OAuth and the existing Device credential are supplied per call;
+        neither credential is retained by this client. No filesystem path,
+        grant ID, capability or expiry is accepted from the caller.
+        """
+        normalized_device = self._uuid(device_id, "device_id")
+        normalized_client = self._client_id(client_id)
+        identity = self._workspace_identity(
+            actor_id=actor_id, lab_project_id=lab_project_id,
+            workspace_session_id=workspace_session_id, resource_id=resource_id,
+        )
+        repository = str(repository_full_name or "").strip()
+        if _GITHUB_REPOSITORY.fullmatch(repository) is None:
+            raise ValueError("repository_full_name must be owner/repository")
+        response = self._request(
+            "POST",
+            f"{self.base_url}/v3/owner/project-workspace-resources",
+            headers={
+                **self._headers(access_token),
+                **self._device_headers(normalized_device, device_token),
+                "content-type": "application/json",
+            },
+            json={
+                **identity,
+                "client_id": normalized_client,
+                "repository_full_name": repository,
+            },
+        )
+        return self._body(response)
+
+    def verify_device_project_workspace_resource(
+        self,
+        *,
+        owner_user_id: str,
+        actor_id: str,
+        client_id: str,
+        device_id: str,
+        device_token: str,
+        lab_project_id: str,
+        resource_id: str,
+        workspace_session_id: str,
+    ) -> dict[str, Any]:
+        """Re-check live workspace authority over the canonical Device route."""
+        normalized_owner = self._uuid(owner_user_id, "owner_user_id")
+        normalized_client = self._client_id(client_id)
+        normalized_device = self._uuid(device_id, "device_id")
+        identity = self._workspace_identity(
+            actor_id=actor_id, lab_project_id=lab_project_id,
+            workspace_session_id=workspace_session_id, resource_id=resource_id,
+        )
+        response = self._request(
+            "POST",
+            f"{self.base_url}/v3/device/transport/workspace-proof",
+            headers={
+                **self._device_headers(normalized_device, device_token),
+                "accept": "application/json",
+                "content-type": "application/json",
+            },
+            json={
+                "owner_user_id": normalized_owner,
+                **identity,
+                "client_id": normalized_client,
+            },
+        )
+        return self._body(response)
+
+    def revoke_owner_project_workspace_resource(
+        self,
+        access_token: str,
+        *,
+        client_id: str,
+        device_id: str,
+        device_token: str,
+        resource_id: str,
+    ) -> dict[str, Any]:
+        normalized_client = self._client_id(client_id)
+        normalized_device = self._uuid(device_id, "device_id")
+        if not isinstance(resource_id, str) or _RESOURCE_ID.fullmatch(resource_id) is None:
+            raise ValueError("resource_id is invalid")
+        response = self._request(
+            "DELETE",
+            f"{self.base_url}/v3/owner/project-workspace-resources/"
+            f"{quote(resource_id, safe='')}",
+            headers={
+                **self._headers(access_token),
+                **self._device_headers(normalized_device, device_token),
+            },
+            params={"client_id": normalized_client},
+        )
+        body = self._body(response)
+        if (set(body) != {"ok", "resource_id", "revoked"}
+                or body.get("resource_id") != resource_id
+                or body.get("revoked") is not True):
+            raise ProductRemoteError(
+                "product_remote_invalid_response", response.status_code,
+                "Workspace revocation receipt is invalid",
+            )
+        return body
 
     def replace_owner_remote_grant_group(
         self,

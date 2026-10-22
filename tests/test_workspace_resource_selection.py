@@ -63,7 +63,7 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
         self.scope_calls = 0
         self.picker = self.make_picker()
 
-    def live(self, actor, device, resource):
+    def live(self, actor, device, resource, _scope=None):
         self.calls += 1
         if not self.allowed or self.revoked:
             return None
@@ -86,7 +86,8 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             repository_full_name=repo,
         )
 
-    def make_picker(self, *, choose=None, confirm=None, lookup=None, scope_lookup=None):
+    def make_picker(self, *, choose=None, confirm=None, lookup=None, scope_lookup=None,
+                    register=None, revoke=None):
         def select(project):
             self.selected.append(project.root)
             return project.root
@@ -103,6 +104,8 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
                 scope_lookup if scope_lookup is not None else self.canonical_scope
             ),
             live_authority=lookup if lookup is not None else self.live,
+            register_resource=register,
+            revoke_resource=revoke,
             clock=lambda: self.clock[0],
         )
 
@@ -129,6 +132,56 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
         self.assertNotIn(str(self.root), str(result))
         self.assertNotIn("fixture only", str(result))
         self.assertGreaterEqual(self.calls, 4)
+
+    def test_registered_selection_requires_exact_server_proof_and_can_be_revoked(self):
+        self.allowed = True
+        registered = []
+        revoked = []
+        picker = self.make_picker(
+            register=lambda scope, actor, rid: (
+                registered.append((scope, actor, rid))
+                or self.live(actor, self.device, rid, scope)
+            ),
+            revoke=lambda scope, actor, rid: revoked.append((scope, actor, rid)),
+        )
+        resource = picker.choose_for_owner(self.REPOSITORY, self.actor)
+        self.assertTrue(resource.startswith("resource_"))
+        self.assertEqual(len(registered), 1)
+        self.assertEqual(registered[0][1], self.actor)
+        self.assertTrue(picker._selections[resource].bound)
+        self.assertEqual(picker.as_port(local_policy=lambda _root: True).verify_binding(
+            self.actor, self.device, resource,
+        )["resourceId"], resource)
+
+        picker.revoke_for_owner(self.actor, resource)
+        self.assertEqual(revoked, [registered[0]])
+        self.assertNotIn(resource, picker._selections)
+
+    def test_unconfirmed_or_mismatched_platform_resource_is_revoked_and_never_stored(self):
+        self.allowed = True
+        revoked = []
+        picker = self.make_picker(
+            register=lambda _scope, actor, rid: replace(
+                self.live(actor, self.device, rid),
+                allowed_actions=frozenset({"read", "write"}),
+            ),
+            revoke=lambda scope, actor, rid: revoked.append((scope, actor, rid)),
+        )
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_grant_unverified"):
+            picker.choose_for_owner(self.REPOSITORY, self.actor)
+        self.assertEqual(len(revoked), 1)
+        self.assertEqual(picker._selections, {})
+
+    def test_resource_registration_requires_trusted_actor_before_opening_picker(self):
+        selected = []
+        picker = self.make_picker(
+            choose=lambda project: selected.append(project.root) or project.root,
+            register=lambda *_: self.live(self.actor, self.device, "resource_fake"),
+            revoke=lambda *_: None,
+        )
+        with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_actor_scope_unavailable"):
+            picker.choose_for_owner(self.REPOSITORY)
+        self.assertEqual(selected, [])
 
     def test_native_picker_alias_is_accepted_only_for_identical_safe_root(self):
         # Temp on Windows can be returned using an 8.3 RUNNER~1 ancestor
@@ -221,7 +274,7 @@ class WorkspaceResourceSelectionTests(unittest.TestCase):
             replace(valid, expires_at=datetime.now(timezone.utc).replace(tzinfo=None)),
         )
         for authority in invalid:
-            picker = self.make_picker(lookup=lambda _actor, _device, rid, value=authority:
+            picker = self.make_picker(lookup=lambda _actor, _device, rid, _scope, value=authority:
                 replace(value, resource_id=rid) if isinstance(value, LiveWorkspaceAuthority) else value)
             other = self.choose(picker)
             port = picker.as_port(local_policy=lambda _root: True)

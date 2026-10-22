@@ -88,6 +88,7 @@ class _LocalSelection:
     root_device: int
     root_inode: int
     prepared_at: float
+    actor: WorkspaceActor | None = None
     bound: bool = False
 
 
@@ -102,12 +103,17 @@ class WorkspaceResourceSelection:
         choose_directory: Callable[[Project], Path | None],
         confirm_owner: Callable[[Project, Path], bool],
         canonical_project_scope: Callable[[str, str], OwnerCanonicalProjectScope | None],
-        live_authority: Callable[[WorkspaceActor, str, str], LiveWorkspaceAuthority | None],
+        live_authority: Callable[[WorkspaceActor, str, str, OwnerCanonicalProjectScope], LiveWorkspaceAuthority | None],
+        register_resource: Callable[[OwnerCanonicalProjectScope, WorkspaceActor, str], LiveWorkspaceAuthority] | None = None,
+        revoke_resource: Callable[[OwnerCanonicalProjectScope, WorkspaceActor, str], object] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not (_uuid(device_id) and callable(choose_directory)
                 and callable(confirm_owner) and callable(canonical_project_scope)
                 and callable(live_authority)
+                and (register_resource is None or callable(register_resource))
+                and (revoke_resource is None or callable(revoke_resource))
+                and ((register_resource is None) == (revoke_resource is None))
                 and callable(clock)):
             raise ValueError("workspace_selection_trusted_host_required")
         self._config = config
@@ -116,6 +122,8 @@ class WorkspaceResourceSelection:
         self._confirm = confirm_owner
         self._canonical_scope = canonical_project_scope
         self._live = live_authority
+        self._register = register_resource
+        self._revoke = revoke_resource
         self._clock = clock
         self._selections: dict[str, _LocalSelection] = {}
         self._lock = threading.RLock()
@@ -144,7 +152,60 @@ class WorkspaceResourceSelection:
             raise ProjectWorkspaceDenied("workspace_project_scope_unavailable")
         return scope
 
-    def choose_for_owner(self, canonical_repository_full_name: str) -> str:
+    @staticmethod
+    def _matches_live_authority(
+        proof: object,
+        actor: WorkspaceActor,
+        device_id: str,
+        resource_id: str,
+        scope: OwnerCanonicalProjectScope,
+    ) -> bool:
+        if not isinstance(proof, LiveWorkspaceAuthority):
+            return False
+        if not all(_uuid(v) for v in (
+            proof.owner_user_id, proof.space_id, proof.canonical_project_id,
+            proof.client_id, proof.device_id, proof.grant_id,
+        )):
+            return False
+        if (proof.owner_user_id, proof.space_id, proof.canonical_project_id,
+            proof.client_id, proof.device_id) != (
+            scope.owner_user_id, scope.space_id, scope.project_id,
+            scope.client_id, scope.device_id,
+        ):
+            return False
+        if (proof.lab_project_id, proof.actor_id, proof.client_id,
+            proof.workspace_session_id, proof.device_id, proof.resource_id) != (
+            actor.project_id, actor.actor_id, actor.client_id,
+            actor.workspace_session_id, device_id, resource_id,
+        ):
+            return False
+        now = datetime.now(timezone.utc)
+        return (
+            isinstance(proof.issued_at, datetime)
+            and proof.issued_at.tzinfo is not None
+            and isinstance(proof.expires_at, datetime)
+            and proof.expires_at.tzinfo is not None
+            and proof.issued_at <= now < proof.expires_at
+            and proof.expires_at <= proof.issued_at + _MAX_LIFESPAN
+            and proof.allowed_actions == frozenset({"read"})
+        )
+
+    def _revoke_unconfirmed(self, scope, actor, resource_id) -> None:
+        if self._revoke is None:
+            return
+        try:
+            self._revoke(scope, actor, resource_id)
+        except Exception:
+            # No usable local reference is retained. A remote orphan is bounded
+            # by the Platform's short resource lifetime and cannot authorize a
+            # different actor or local root.
+            pass
+
+    def choose_for_owner(
+        self,
+        canonical_repository_full_name: str,
+        actor: WorkspaceActor | None = None,
+    ) -> str:
         """Trusted user-session GUI entrypoint; returns ONLY an opaque ID.
 
         This method must never be exposed via MCP/LLM, HTTP or renderer-supplied
@@ -153,6 +214,12 @@ class WorkspaceResourceSelection:
         # Authenticate the Product project/Space binding before opening a
         # native dialog. A repository label is not an authorization by itself.
         scope = self._owner_project_scope(canonical_repository_full_name)
+        if self._register is not None and (
+            not isinstance(actor, WorkspaceActor)
+            or actor.actor_id != scope.owner_user_id
+            or actor.client_id != scope.client_id
+        ):
+            raise ProjectWorkspaceDenied("workspace_actor_scope_unavailable")
         project = self._registered_project(canonical_repository_full_name)
         original = capture_workspace_root_identity(project.root)
         try:
@@ -191,8 +258,10 @@ class WorkspaceResourceSelection:
         if self._owner_project_scope(canonical_repository_full_name) != scope:
             raise ProjectWorkspaceDenied("workspace_project_scope_changed")
 
-        # Project paths remain private to Runtime. No cloud request or grant is
-        # created here. Until Platform issuance succeeds the ID cannot be used.
+        # The path remains private to Runtime. The optional production path
+        # registers the opaque reference under the existing canonical read
+        # grant; the App never receives the path or any grant credentials.
+        resource_id = "resource_" + secrets.token_urlsafe(24)
         with self._lock:
             now = self._clock()
             for key, item in tuple(self._selections.items()):
@@ -203,18 +272,73 @@ class WorkspaceResourceSelection:
                     self._selections.pop(key, None)
             if len(self._selections) >= _MAX_SELECTIONS:
                 raise ProjectWorkspaceDenied("workspace_selection_limit")
-            resource_id = "resource_" + secrets.token_urlsafe(24)
-            while resource_id in self._selections:
-                resource_id = "resource_" + secrets.token_urlsafe(24)
-            self._selections[resource_id] = _LocalSelection(
-                canonical_repository_full_name, scope, selected, *original, now,
-            )
+            if resource_id in self._selections:
+                raise ProjectWorkspaceDenied("workspace_selection_collision")
+
+        if self._register is not None:
+            try:
+                proof = self._register(scope, actor, resource_id)
+            except Exception:
+                self._revoke_unconfirmed(scope, actor, resource_id)
+                raise ProjectWorkspaceDenied("workspace_resource_registration_unavailable") from None
+            if not self._matches_live_authority(proof, actor, self._device_id, resource_id, scope):
+                self._revoke_unconfirmed(scope, actor, resource_id)
+                raise ProjectWorkspaceDenied("workspace_grant_unverified")
+            try:
+                unchanged = (
+                    capture_workspace_root_identity(selected) == original
+                    and self._registered_project(canonical_repository_full_name).root == selected
+                    and self._owner_project_scope(canonical_repository_full_name) == scope
+                )
+            except Exception:
+                unchanged = False
+            if not unchanged:
+                self._revoke_unconfirmed(scope, actor, resource_id)
+                raise ProjectWorkspaceDenied("workspace_selection_changed")
+
+        stored = False
+        with self._lock:
+            now = self._clock()
+            for key, item in tuple(self._selections.items()):
+                elapsed = now - item.prepared_at
+                if elapsed > _MAX_REFERENCE_SECONDS or (
+                    not item.bound and elapsed > _PENDING_SECONDS
+                ):
+                    self._selections.pop(key, None)
+            if len(self._selections) < _MAX_SELECTIONS and resource_id not in self._selections:
+                self._selections[resource_id] = _LocalSelection(
+                    canonical_repository_full_name, scope, selected, *original, now,
+                    actor=actor,
+                    bound=self._register is not None,
+                )
+                stored = True
+        if not stored:
+            self._revoke_unconfirmed(scope, actor, resource_id)
+            raise ProjectWorkspaceDenied("workspace_selection_limit")
         return resource_id
 
     def discard_local_selection(self, resource_id: str) -> None:
         """Invalidate Runtime's reference; does NOT revoke the Product grant."""
         with self._lock:
             self._selections.pop(resource_id, None)
+
+    def revoke_for_owner(self, actor: WorkspaceActor, resource_id: str) -> None:
+        """Revoke one resource through Platform, then discard its local root."""
+        if not isinstance(actor, WorkspaceActor) or self._revoke is None:
+            raise ProjectWorkspaceDenied("workspace_resource_revoke_unavailable")
+        with self._lock:
+            selected = self._selections.get(resource_id)
+        if (selected is None or selected.actor != actor
+                or actor.actor_id != selected.project_scope.owner_user_id
+                or actor.client_id != selected.project_scope.client_id):
+            raise ProjectWorkspaceDenied("workspace_resource_revoke_unavailable")
+        try:
+            self._revoke(selected.project_scope, actor, resource_id)
+        except Exception:
+            raise ProjectWorkspaceDenied("workspace_resource_revoke_unavailable") from None
+        with self._lock:
+            if self._selections.get(resource_id) is selected:
+                self._selections.pop(resource_id, None)
 
     def resolve_live(
         self, actor: WorkspaceActor, device_id: str, resource_id: str,
@@ -226,6 +350,8 @@ class WorkspaceResourceSelection:
             selected = self._selections.get(resource_id)
             if selected is None:
                 return None
+            if selected.actor is not None and selected.actor != actor:
+                return None
             elapsed = self._clock() - selected.prepared_at
             if elapsed > _MAX_REFERENCE_SECONDS or (
                 not selected.bound and elapsed > _PENDING_SECONDS
@@ -236,37 +362,11 @@ class WorkspaceResourceSelection:
         # Never use the picker record as authorization. Re-consult live Product
         # authority on EVERY port verification and snapshot (including postscan).
         try:
-            proof = self._live(actor, device_id, resource_id)
+            proof = self._live(actor, device_id, resource_id, selected.project_scope)
         except Exception:
             return None
-        now = datetime.now(timezone.utc)
-        if not isinstance(proof, LiveWorkspaceAuthority):
-            return None
-        if not all(_uuid(v) for v in (
-            proof.owner_user_id, proof.space_id, proof.canonical_project_id,
-            proof.client_id, proof.device_id, proof.grant_id,
-        )):
-            return None
-        pinned = selected.project_scope
-        if (proof.owner_user_id, proof.space_id, proof.canonical_project_id,
-            proof.client_id, proof.device_id) != (
-            pinned.owner_user_id, pinned.space_id, pinned.project_id,
-            pinned.client_id, pinned.device_id,
-        ):
-            return None
-        if (proof.lab_project_id, proof.actor_id, proof.client_id,
-            proof.workspace_session_id, proof.device_id, proof.resource_id) != (
-            actor.project_id, actor.actor_id, actor.client_id,
-            actor.workspace_session_id, device_id, resource_id,
-        ):
-            return None
-        if (not isinstance(proof.issued_at, datetime)
-                or proof.issued_at.tzinfo is None
-                or not isinstance(proof.expires_at, datetime)
-                or proof.expires_at.tzinfo is None
-                or proof.issued_at > now
-                or not now < proof.expires_at <= proof.issued_at + _MAX_LIFESPAN
-                or proof.allowed_actions != frozenset({"read"})):
+        if not self._matches_live_authority(proof, actor, device_id, resource_id,
+                                            selected.project_scope):
             return None
         try:
             current = self._registered_project(selected.repository_full_name)

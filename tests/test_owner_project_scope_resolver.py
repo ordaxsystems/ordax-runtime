@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,6 +30,7 @@ class AuthenticatedOwnerProjectScopeResolverTests(unittest.TestCase):
         self.owner, self.client, self.device = _uuid(), _uuid(), _uuid()
         self.space, self.project = _uuid(), _uuid()
         self.token = ["owner.private.bearer.fixture"]
+        self.device_token = "d" * 64
         self.consent_active = True
         self.clients = [self.client]
         self.token_subject = self.owner
@@ -53,15 +55,57 @@ class AuthenticatedOwnerProjectScopeResolverTests(unittest.TestCase):
             client_id=kwargs.get("client_id", self.client),
             device_id=kwargs.get("device_id", self.device),
             access_token=kwargs.get("access_token", lambda: self.token[0]),
+            device_token=kwargs.get("device_token", lambda: self.device_token),
             clock=lambda: 1_800_000_000,
         )
+
+    def workspace_proof(self, body):
+        issued = datetime.now(timezone.utc)
+        grant = {
+            "grant_id": _uuid(),
+            "owner_user_id": self.owner,
+            "space_id": self.scope_space,
+            "project_id": self.scope_project,
+            "lab_project_id": body["lab_project_id"],
+            "actor_id": body["actor_id"],
+            "client_id": body["client_id"],
+            "workspace_session_id": body["workspace_session_id"],
+            "device_id": self.device,
+            "resource_id": body["resource_id"],
+            "allowed_actions": ["read"],
+            "issued_by": "trusted-runtime-picker",
+            "issued_at": issued.isoformat(),
+            "valid_until": (issued + timedelta(hours=1)).isoformat(),
+            "revoked_at": None,
+            "active": True,
+        }
+        return {"ok": True, "schema": "ordax.project-workspace-resource/1", "grant": grant}
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.calls.append((request.method, request.url.path,
                            request.headers.get("authorization", "")))
         if callable(self.on_call):
             self.on_call(request, len(self.calls))
-        if request.headers.get("authorization") != "Bearer " + self.token[0]:
+        owner_auth = request.headers.get("authorization") == "Bearer " + self.token[0]
+        device_auth = (
+            request.headers.get("x-ordax-device-id") == self.device
+            and request.headers.get("x-ordax-device-token") == self.device_token
+        )
+        if request.url.path == "/v3/device/transport/workspace-proof":
+            if request.method != "POST" or not device_auth:
+                return httpx.Response(401, json={"ok": False, "error": "device_auth_required"})
+            return httpx.Response(200, json=self.workspace_proof(httpx.Response(200, content=request.content).json()))
+        if request.url.path == "/v3/owner/project-workspace-resources":
+            if request.method != "POST" or not owner_auth or not device_auth:
+                return httpx.Response(401, json={"ok": False, "error": "workspace_authorization_required"})
+            return httpx.Response(200, json=self.workspace_proof(httpx.Response(200, content=request.content).json()))
+        if request.url.path.startswith("/v3/owner/project-workspace-resources/"):
+            resource = request.url.path.rsplit("/", 1)[-1]
+            if (request.method != "DELETE" or not owner_auth or not device_auth
+                    or request.url.params.get("client_id") != self.client):
+                return httpx.Response(401, json={"ok": False, "error": "workspace_authorization_required"})
+            return httpx.Response(200, json={"ok": True, "resource_id": resource, "revoked": True})
+        if not owner_auth:
             return httpx.Response(401, json={"ok": False, "error": "product_auth_required"})
         if request.method != "GET":
             return httpx.Response(405, json={"ok": False, "error": "method_not_allowed"})
@@ -238,6 +282,37 @@ class AuthenticatedOwnerProjectScopeResolverTests(unittest.TestCase):
                 broker.as_port(local_policy=lambda _root: True).verify_binding(
                     WorkspaceActor(_uuid(), self.client, "session_a", "lab_a"),
                     self.device, opaque)
+
+    def test_resource_registration_live_verification_and_revoke_use_existing_owner_and_device_auth(self):
+        scope = self.resolver(self.REPO, self.device)
+        actor = WorkspaceActor(self.owner, self.client, "session_veste", "lab_veste")
+        resource_id = "resource_0123456789abcdefghijklmnopqrstuvwxyz"
+
+        registered = self.resolver.register_workspace_resource(scope, actor, resource_id)
+        self.assertEqual((registered.owner_user_id, registered.canonical_project_id),
+                         (self.owner, self.project))
+        self.assertEqual(registered.resource_id, resource_id)
+        live = self.resolver.live_workspace_authority(actor, self.device, resource_id, scope)
+        self.assertIsNotNone(live)
+        self.assertEqual(live.grant_id, registered.grant_id)
+        self.resolver.revoke_workspace_resource(scope, actor, resource_id)
+
+        paths = [path for _method, path, _auth in self.calls]
+        self.assertIn("/v3/owner/project-workspace-resources", paths)
+        self.assertIn("/v3/device/transport/workspace-proof", paths)
+        self.assertTrue(any(method == "DELETE" and path.endswith("/" + resource_id)
+                            for method, path, _auth in self.calls))
+        self.assertNotIn(self.device_token, repr(self.resolver))
+
+    def test_resource_registration_requires_device_credential_provider(self):
+        scope = self.resolver(self.REPO, self.device)
+        actor = WorkspaceActor(self.owner, self.client, "session_veste", "lab_veste")
+        without_device_token = self.make_resolver(device_token=None)
+        with self.assertRaisesRegex(ProjectWorkspaceDenied,
+                                    "workspace_resource_registration_unavailable"):
+            without_device_token.register_workspace_resource(
+                scope, actor, "resource_0123456789abcdefghijklmnopqrstuvwxyz",
+            )
 
 
 if __name__ == "__main__":
