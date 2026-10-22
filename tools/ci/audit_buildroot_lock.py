@@ -127,12 +127,12 @@ def audit(
     boot, _ = read_requirements(bootstrap, lock=True)
     direct_build = read_build_only_requirements(build_requirements)
     builders = set(boot) | direct_build
-    # Keep the original authoritative lock and report exclusions explicitly.
-    # A build tool appearing in a runtime import chain needs a separate
-    # package-graph proof: this inventory itself cannot authorize execution.
-    runtime_names = sorted(set(pinned) - builders)
-    if not runtime_names:
-        raise RuntimeBuildrootAuditError("no native Runtime dependencies identified")
+    # Audit ALL pinned entries. Build tools can also be imported transitively
+    # at runtime, so the mere presence of a name in bootstrap.lock is NOT
+    # evidence that it can be dropped from the native dependency closure.
+    # Conservative false positives block promotion rather than hide a real
+    # Runtime package; reachability needs a separate verified import graph.
+    runtime_names = sorted(pinned)
     py_version = buildroot_python_version(buildroot)
     buildroot_minor = ".".join(py_version.split(".")[:2])
     issues = []
@@ -165,7 +165,7 @@ def audit(
         "bootstrap_sha256": hashlib.sha256(bootstrap.read_bytes()).hexdigest(),
         "lock_python_minor": lock_python,
         "buildroot_python_version": py_version,
-        "build_tool_only_names": sorted(builders & set(pinned)),
+        "build_tool_overlap_names": sorted(builders & set(pinned)),
         "runtime_packages_examined": len(runtime_names),
         "packages": packages,
         "issues": issues,
