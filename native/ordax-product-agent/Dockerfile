@@ -13,8 +13,6 @@ RUN python -m pip install --no-deps --no-build-isolation . && \
     python -m PyInstaller --noconfirm --clean --onefile \
       --name ordax-product-agent --distpath /output --workpath /build/work \
       --specpath /build --paths /source \
-      --collect-submodules ordax_dev_agent --collect-submodules ordax_core \
-      --collect-submodules ordax_connector --collect-submodules mcp_blender_unity \
       --copy-metadata ordax-runtime native/ordax-product-agent/entrypoint.py
 
 FROM alpine:3.22.5@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6

@@ -30,6 +30,7 @@ class NativeProductPackageTests(unittest.TestCase):
         self.assertFalse(proof["network_used"])
         self.assertFalse(proof["device_credential_used"])
         self.assertEqual(proof["graphical_actions"], [])
+        self.assertGreater(proof["registered_action_count"], 100)
         self.assertEqual(proof["probes"], ["filesystem", "terminal", "supervised-process"])
 
     def test_run_requires_explicit_owner_usb_profile_before_loading_identity(self):

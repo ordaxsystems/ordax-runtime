@@ -57,6 +57,21 @@ def self_test() -> dict:
             "computer_access": {"enabled": True, "full_access": True, "allowed_roots": [str(root)]},
         }))
         registry = ActionRegistry(config, computer_adapter={})
+        # Validate the frozen entrypoint's canonical action composition, not
+        # just the few commands exercised by this offline executable probe.
+        # PyInstaller follows those imports without collecting every unrelated
+        # submodule by name. A missing Owner capability must fail the build.
+        required = {
+            "computer.terminal_exec", "computer.process_start",
+            "computer.process_status", "computer.process_stop",
+            "computer.text_write", "computer.text_read",
+            "workspace.repository_catalog", "git.command",
+            "orchestrator.status", "intelligence.app_catalog",
+            "blender.inspect",
+        }
+        missing = required.difference(registry.names)
+        if missing:
+            raise RuntimeError("native_package_actions_missing:" + ",".join(sorted(missing)))
         target = root / "probe.txt"
         written = registry.execute("computer.text_write", {
             "path": str(target), "content": "native-package-probe\n", "create": True,
@@ -89,6 +104,7 @@ def self_test() -> dict:
                     raise RuntimeError("native_package_process_stop_probe_failed")
         return {"ok": True, "profile": "owner-development-usb", "network_used": False,
                 "device_credential_used": False, "graphical_actions": [],
+                "registered_action_count": len(registry.names),
                 "probes": ["filesystem", "terminal", "supervised-process"]}
 
 
