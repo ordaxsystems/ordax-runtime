@@ -40,7 +40,7 @@ class ProductWorkspaceLiveProofTests(unittest.TestCase):
             "revoked_at":None,"active":True,
         }}
 
-    def project(self, response=..., **kwargs):
+    def decode(self, response=..., **kwargs):
         return project_workspace_live_proof(
             self.reply if response is ... else response,
             scope=kwargs.get("scope",self.scope),
@@ -51,7 +51,7 @@ class ProductWorkspaceLiveProofTests(unittest.TestCase):
         )
 
     def test_sql_projection_yields_only_exact_scoped_read_authority(self):
-        proof=self.project()
+        proof=self.decode()
         self.assertIsInstance(proof,LiveWorkspaceAuthority)
         self.assertEqual(proof.owner_user_id,self.owner)
         self.assertEqual(proof.canonical_project_id,self.project)
@@ -75,17 +75,17 @@ class ProductWorkspaceLiveProofTests(unittest.TestCase):
                 else _uuid()
             )
             with self.subTest(field=key):
-                self.assertIsNone(self.project(sample))
-        self.assertIsNone(self.project(scope=replace(self.scope,owner_user_id=_uuid())))
-        self.assertIsNone(self.project(scope=replace(self.scope,space_id=_uuid())))
-        self.assertIsNone(self.project(scope=replace(self.scope,project_id=_uuid())))
-        self.assertIsNone(self.project(scope=replace(self.scope,client_id=_uuid())))
-        self.assertIsNone(self.project(scope=replace(self.scope,device_id=_uuid())))
-        self.assertIsNone(self.project(actor=replace(self.actor,actor_id=_uuid())))
-        self.assertIsNone(self.project(actor=replace(self.actor,project_id="other_project")))
-        self.assertIsNone(self.project(actor=replace(self.actor,client_id=_uuid())))
-        self.assertIsNone(self.project(device_id=_uuid()))
-        self.assertIsNone(self.project(resource_id="resource_"+uuid.uuid4().hex))
+                self.assertIsNone(self.decode(sample))
+        self.assertIsNone(self.decode(scope=replace(self.scope,owner_user_id=_uuid())))
+        self.assertIsNone(self.decode(scope=replace(self.scope,space_id=_uuid())))
+        self.assertIsNone(self.decode(scope=replace(self.scope,project_id=_uuid())))
+        self.assertIsNone(self.decode(scope=replace(self.scope,client_id=_uuid())))
+        self.assertIsNone(self.decode(scope=replace(self.scope,device_id=_uuid())))
+        self.assertIsNone(self.decode(actor=replace(self.actor,actor_id=_uuid())))
+        self.assertIsNone(self.decode(actor=replace(self.actor,project_id="other_project")))
+        self.assertIsNone(self.decode(actor=replace(self.actor,client_id=_uuid())))
+        self.assertIsNone(self.decode(device_id=_uuid()))
+        self.assertIsNone(self.decode(resource_id="resource_"+uuid.uuid4().hex))
 
     def test_revoked_inactive_wrong_profile_write_or_untrusted_picker_denies(self):
         for field,value in (
@@ -98,7 +98,7 @@ class ProductWorkspaceLiveProofTests(unittest.TestCase):
             sample=copy.deepcopy(self.reply)
             sample["grant"][field]=value
             with self.subTest(field=field,value=value):
-                self.assertIsNone(self.project(sample))
+                self.assertIsNone(self.decode(sample))
 
     def test_missing_extra_and_non_object_fields_fail_closed(self):
         for reply in (
@@ -111,15 +111,15 @@ class ProductWorkspaceLiveProofTests(unittest.TestCase):
             dict(self.reply, grant=None),
         ):
             with self.subTest(reply=str(reply)[:60]):
-                self.assertIsNone(self.project(reply))
+                self.assertIsNone(self.decode(reply))
         for key in self.reply["grant"]:
             sample=copy.deepcopy(self.reply)
             del sample["grant"][key]
             with self.subTest(missing=key):
-                self.assertIsNone(self.project(sample))
+                self.assertIsNone(self.decode(sample))
         sample=copy.deepcopy(self.reply)
         sample["grant"]["path"]="C:\\Users\\Private"
-        self.assertIsNone(self.project(sample))
+        self.assertIsNone(self.decode(sample))
 
     def test_original_24h_lifetime_and_precise_boundaries(self):
         samples=(
@@ -139,22 +139,22 @@ class ProductWorkspaceLiveProofTests(unittest.TestCase):
             sample=copy.deepcopy(self.reply)
             sample["grant"][key]=value
             with self.subTest(field=key,value=value):
-                self.assertIsNone(self.project(sample))
+                self.assertIsNone(self.decode(sample))
         future=copy.deepcopy(self.reply)
         future["grant"]["issued_at"]=(self.now-timedelta(hours=23)).isoformat()
         future["grant"]["valid_until"]=(self.now+timedelta(hours=2)).isoformat()
-        self.assertIsNone(self.project(future))  # original lifetime 25h
+        self.assertIsNone(self.decode(future))  # original lifetime 25h
         accepted=copy.deepcopy(self.reply)
         accepted["grant"]["issued_at"]=(self.now-timedelta(hours=23)).isoformat()
         accepted["grant"]["valid_until"]=(self.now+timedelta(hours=1)).isoformat()
-        self.assertIsNotNone(self.project(accepted))
+        self.assertIsNotNone(self.decode(accepted))
 
     def test_noncanonical_actor_and_resource_fail_before_projection(self):
-        self.assertIsNone(self.project(actor=replace(self.actor,project_id="../project")))
-        self.assertIsNone(self.project(actor=replace(self.actor,workspace_session_id="untrusted id")))
-        self.assertIsNone(self.project(resource_id="../private"))
-        self.assertIsNone(self.project(scope=replace(self.scope,owner_user_id="owner")))
-        self.assertIsNone(self.project(now=datetime(2026,10,22,9,15)))
+        self.assertIsNone(self.decode(actor=replace(self.actor,project_id="../project")))
+        self.assertIsNone(self.decode(actor=replace(self.actor,workspace_session_id="untrusted id")))
+        self.assertIsNone(self.decode(resource_id="../private"))
+        self.assertIsNone(self.decode(scope=replace(self.scope,owner_user_id="owner")))
+        self.assertIsNone(self.decode(now=datetime(2026,10,22,9,15)))
 
 
 if __name__=="__main__":
