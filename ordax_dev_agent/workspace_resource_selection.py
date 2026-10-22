@@ -27,6 +27,7 @@ from .project_workspace_port import (
 from .projects import Project, resolve_project_for_repository
 
 _PENDING_SECONDS = 300
+_MAX_REFERENCE_SECONDS = 24 * 60 * 60
 _MAX_SELECTIONS = 64
 _MAX_LIFESPAN = timedelta(hours=24)
 
@@ -135,12 +136,20 @@ class WorkspaceResourceSelection:
         # Project paths remain private to Runtime. No cloud request or grant is
         # created here. Until Platform issuance succeeds the ID cannot be used.
         with self._lock:
+            now = self._clock()
+            for key, item in tuple(self._selections.items()):
+                elapsed = now - item.prepared_at
+                if elapsed > _MAX_REFERENCE_SECONDS or (
+                    not item.bound and elapsed > _PENDING_SECONDS
+                ):
+                    self._selections.pop(key, None)
             if len(self._selections) >= _MAX_SELECTIONS:
                 raise ProjectWorkspaceDenied("workspace_selection_limit")
             resource_id = "resource_" + secrets.token_urlsafe(24)
+            while resource_id in self._selections:
+                resource_id = "resource_" + secrets.token_urlsafe(24)
             self._selections[resource_id] = _LocalSelection(
-                canonical_repository_full_name, selected, *original,
-                self._clock(),
+                canonical_repository_full_name, selected, *original, now,
             )
         return resource_id
 
@@ -159,7 +168,10 @@ class WorkspaceResourceSelection:
             selected = self._selections.get(resource_id)
             if selected is None:
                 return None
-            if not selected.bound and self._clock() - selected.prepared_at > _PENDING_SECONDS:
+            elapsed = self._clock() - selected.prepared_at
+            if elapsed > _MAX_REFERENCE_SECONDS or (
+                not selected.bound and elapsed > _PENDING_SECONDS
+            ):
                 self._selections.pop(resource_id, None)
                 return None
 
@@ -200,6 +212,12 @@ class WorkspaceResourceSelection:
         with self._lock:
             # No resurrection if Owner discarded selection during remote lookup.
             if self._selections.get(resource_id) is not selected:
+                return None
+            elapsed = self._clock() - selected.prepared_at
+            if elapsed > _MAX_REFERENCE_SECONDS or (
+                not selected.bound and elapsed > _PENDING_SECONDS
+            ):
+                self._selections.pop(resource_id, None)
                 return None
             if not selected.bound:
                 self._selections[resource_id] = replace(selected, bound=True)
