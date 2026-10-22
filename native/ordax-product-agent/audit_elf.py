@@ -319,6 +319,16 @@ class _CpioMember:
         return self.kind == stat.S_IFLNK
 
 
+def _cpio_loader_search_path(name: str) -> bool:
+    # Ignore Buildroot firmware in /lib/firmware and all unrelated files.
+    # Only the standard root library directories and their direct entries
+    # participate in this auditor's explicitly limited loader-name search.
+    return any(name == root or
+               (name.startswith(root + "/") and
+                "/" not in name[len(root) + 1:])
+               for root in ROOTFS_LIBRARY_DIRS)
+
+
 def _read_cpio_libraries(path: Path) -> dict:
     """Index standard-library paths in OS-owned newc CPIO, without extraction.
 
@@ -374,6 +384,9 @@ def _read_cpio_libraries(path: Path) -> dict:
                     rest = stream.read(1 << 20)
                     if not rest:
                         break
+                    if len(rest) > ROOTFS_MAX_CPIO_EXPANDED_BYTES - expanded:
+                        raise NativeAbiError("native_rootfs_cpio_unpacked_limit")
+                    expanded += len(rest)
                     if any(rest):
                         raise NativeAbiError("native_rootfs_cpio_trailing_data")
                 return entries
@@ -384,7 +397,7 @@ def _read_cpio_libraries(path: Path) -> dict:
             if name not in (".", "./"):
                 normalized = _tar_member_name(name)
             take(-(ROOTFS_CPIO_HEADER_BYTES + namesize) % 4)
-            is_library = normalized is not None and _library_namespace(normalized)
+            is_library = normalized is not None and _cpio_loader_search_path(normalized)
             kind = stat.S_IFMT(mode)
             if is_library:
                 if normalized in entries:
