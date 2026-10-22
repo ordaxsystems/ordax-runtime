@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 import struct
 import unittest
+import zlib
 
 SCRIPT = Path(__file__).resolve().parents[1] / "native/ordax-product-agent/audit_elf.py"
 spec = importlib.util.spec_from_file_location("ordax_native_abi", SCRIPT)
@@ -49,6 +50,24 @@ def fake_elf(*, interpreter=None, needed=()):
         struct.pack_into("<IIQQQQQQ", buf, 64 + index * 56,
                          2, 4, 320, 320, 0, len(entries) * 16, len(entries) * 16, 8)
     return bytes(buf)
+
+
+def fake_carchive(*, name="libsample.so", payload=None, compression=1, kind=b"b",
+                  suffix=b""):
+    """Append one authentic PyInstaller CArchive-formatted TOC and cookie."""
+    module = fake_elf() if payload is None else payload
+    body = zlib.compress(module) if compression else module
+    encoded = name.encode("utf-8") + b"\0"
+    record = struct.pack("!iIIIBc", 18 + len(encoded), 0, len(body),
+                         len(module), compression, kind) + encoded
+    cookie = struct.pack("!8sIIII64s", module_abi.CARCHIVE_MAGIC,
+                         len(body) + len(record) + 88,
+                         len(body), len(record), 312, b"libpython3.12.so.1.0")
+    return fake_elf() + body + record + cookie + suffix
+
+
+# The same canonical parser is used for the bootloader and frozen ELF members.
+module_abi = module
 
 
 class IndependentNativeAbiTests(unittest.TestCase):
@@ -117,6 +136,44 @@ class IndependentNativeAbiTests(unittest.TestCase):
         self.assertFalse(result["independent_base_abi_ready"])
         self.assertFalse(result["alpine_build_provenance"])
         self.assertEqual(result["blockers"], ["external-dynamic-elf-interpreter"])
+
+    def test_actual_pyinstaller_archive_entries_have_bound_inventory(self):
+        result = module.inspect_embedded_elf(
+            fake_carchive(payload=fake_elf(needed=("libz.so.1",)),
+                          suffix=b"appended-unsigned-bytes"),
+            outer_needed=("libc.musl-x86_64.so.1",),
+        )
+        self.assertEqual(result["native_entry_count"], 1)
+        self.assertEqual(result["needed_libraries"],
+                         ["libc.musl-x86_64.so.1", "libz.so.1"])
+        self.assertEqual(result["unprovided_needed_names"],
+                         ["libc.musl-x86_64.so.1", "libz.so.1"])
+        self.assertEqual(len(result["inventory_sha256"]), 64)
+        self.assertFalse(result["independent_base_compatibility_proven"])
+        self.assertFalse(result["install_authorized"])
+
+    def test_embedded_elf_inventory_rejects_missing_cookie(self):
+        with self.assertRaisesRegex(module.NativeAbiError, "cookie_missing"):
+            module.inspect_embedded_elf(fake_elf())
+
+    def test_embedded_elf_inventory_rejects_unsafe_native_name(self):
+        with self.assertRaisesRegex(module.NativeAbiError, "name_invalid"):
+            module.inspect_embedded_elf(fake_carchive(name="../libz.so"))
+
+    def test_embedded_elf_inventory_rejects_non_elf_native_member(self):
+        with self.assertRaisesRegex(module.NativeAbiError, "non_elf_binary"):
+            module.inspect_embedded_elf(fake_carchive(payload=b"x" * 512))
+
+    def test_embedded_elf_inventory_rejects_incorrect_toc_size(self):
+        candidate = bytearray(fake_carchive())
+        cookie = candidate.rfind(module.CARCHIVE_MAGIC)
+        struct.pack_into("!I", candidate, cookie + 16, 1)
+        with self.assertRaisesRegex(module.NativeAbiError, "layout_invalid"):
+            module.inspect_embedded_elf(bytes(candidate))
+
+    def test_embedded_elf_inventory_rejects_wrong_member_type(self):
+        with self.assertRaisesRegex(module.NativeAbiError, "misclassified"):
+            module.inspect_embedded_elf(fake_carchive(kind=b"x"))
 
     def test_wrong_architecture_is_not_independent(self):
         artifact = bytearray(fake_elf())
