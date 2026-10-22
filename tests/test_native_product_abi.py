@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import importlib.util
+import gzip
 import hashlib
 import io
 from pathlib import Path
+import stat
 import struct
 import tarfile
 import tempfile
@@ -93,6 +95,31 @@ def make_buildroot_rootfs(entries):
                 member.mode = 0o755
                 archive.addfile(member, io.BytesIO(body))
     return temp, path
+
+
+def make_buildroot_cpio(entries):
+    """Canonical newc stream with 4-byte alignment, compressed as OS rootfs."""
+    temporary = tempfile.TemporaryDirectory()
+    path = Path(temporary.name) / "rootfs.cpio.gz"
+    with gzip.open(path, "wb") as archive:
+        def record(name, payload, mode):
+            raw_name = name.encode() + b"\0"
+            fields = [
+                1, mode, 0, 0, 1, 0, len(payload),
+                0, 0, 0, 0, len(raw_name), 0,
+            ]
+            archive.write(b"070701" + b"".join(f"{v:08x}".encode() for v in fields))
+            archive.write(raw_name)
+            archive.write(b"\0" * (-(110 + len(raw_name)) % 4))
+            archive.write(payload)
+            archive.write(b"\0" * (-len(payload) % 4))
+        record(".", b"", stat.S_IFDIR | 0o755)
+        for name, value in entries:
+            mode = stat.S_IFLNK | 0o777 if isinstance(value, str) else stat.S_IFREG | 0o755
+            body = value.encode() if isinstance(value, str) else value
+            record(name, body, mode)
+        record("TRAILER!!!", b"", 0)
+    return temporary, path
 
 
 class IndependentNativeAbiTests(unittest.TestCase):
@@ -227,6 +254,79 @@ class IndependentNativeAbiTests(unittest.TestCase):
     def test_embedded_elf_inventory_rejects_wrong_member_type(self):
         with self.assertRaisesRegex(module.NativeAbiError, "misclassified"):
             module.inspect_embedded_elf(fake_carchive(kind=b"x"))
+
+    def test_real_os_cpio_format_uses_the_same_elf_dependency_auditor(self):
+        temp, rootfs = make_buildroot_cpio([
+            ("lib/ld-musl-x86_64.so.1", "../usr/lib/libc.musl-x86_64.so.1"),
+            ("usr/lib/libc.musl-x86_64.so.1", fake_elf()),
+            ("usr/lib/libz.so.1", fake_elf(needed=("libc.musl-x86_64.so.1",))),
+            ("usr/bin/ignored-by-elf-auditor", b"not-an-ELF"),
+        ])
+        self.addCleanup(temp.cleanup)
+        candidate = fake_elf(
+            interpreter="/lib/ld-musl-x86_64.so.1",
+            needed=("libz.so.1", "libc.musl-x86_64.so.1"),
+        )
+        proof = module.inspect_rootfs_abi(candidate, rootfs, archive_format="cpio")
+        self.assertEqual(proof["target_rootfs_cpio_sha256"],
+                         hashlib.sha256(rootfs.read_bytes()).hexdigest())
+        self.assertIsNone(proof["target_rootfs_tar_sha256"])
+        self.assertTrue(proof["interpreter_found"])
+        self.assertEqual(proof["unresolved_rootfs_libraries"], [])
+        self.assertTrue(proof["default_directory_name_resolution_complete"])
+        self.assertEqual(proof["resolved_rootfs_libraries"]["libz.so.1"]["target_path"],
+                         "usr/lib/libz.so.1")
+        self.assertFalse(proof["full_runtime_abi_compatible"])
+        self.assertFalse(proof["device_install_authorized"])
+
+    def test_real_os_cpio_without_dynamic_loader_remains_fail_closed(self):
+        temp, rootfs = make_buildroot_cpio([
+            ("usr/bin/isolated-static-tool", fake_elf()),
+            ("lib/not-a-dynamic-linker", fake_elf()),
+        ])
+        self.addCleanup(temp.cleanup)
+        proof = module.inspect_rootfs_abi(
+            fake_elf(interpreter="/lib/ld-musl-x86_64.so.1",
+                     needed=("libz.so.1",)),
+            rootfs, archive_format="cpio",
+        )
+        self.assertFalse(proof["interpreter_found"])
+        self.assertEqual(proof["unresolved_rootfs_libraries"], ["libz.so.1"])
+        self.assertFalse(proof["default_directory_name_resolution_complete"])
+
+    def test_cpio_duplicate_library_and_truncated_payload_rejected(self):
+        temp, rootfs = make_buildroot_cpio([
+            ("./lib/libz.so.1", fake_elf()),
+            ("lib/libz.so.1", fake_elf()),
+        ])
+        self.addCleanup(temp.cleanup)
+        with self.assertRaisesRegex(module.NativeAbiError, "duplicate_library_path"):
+            module.inspect_rootfs_abi(
+                fake_elf(needed=("libz.so.1",)), rootfs, archive_format="cpio"
+            )
+        with open(rootfs, "rb") as stream:
+            data = stream.read()
+        rootfs.write_bytes(data[:max(10, len(data)//2)])
+        with self.assertRaises((EOFError, OSError, module.NativeAbiError)):
+            module.inspect_rootfs_abi(
+                fake_elf(needed=("libz.so.1",)), rootfs, archive_format="cpio"
+            )
+
+    def test_cpio_library_symlink_escape_and_cycle_rejected(self):
+        fixtures = [
+            ([("lib/libz.so.1", "../../../outside.so")], "symlink_escape"),
+            ([("lib/libz.so.1", "loop.so"),
+              ("lib/loop.so", "libz.so.1")], "symlink_cycle"),
+        ]
+        for entries, diagnostic in fixtures:
+            with self.subTest(diagnostic=diagnostic):
+                temp, rootfs = make_buildroot_cpio(entries)
+                self.addCleanup(temp.cleanup)
+                with self.assertRaisesRegex(module.NativeAbiError, diagnostic):
+                    module.inspect_rootfs_abi(
+                        fake_elf(needed=("libz.so.1",)), rootfs,
+                        archive_format="cpio",
+                    )
 
     def test_buildroot_rootfs_resolves_real_loader_and_transitive_libraries(self):
         # The dynamic loader and libz are actually in this exact rootfs, but
