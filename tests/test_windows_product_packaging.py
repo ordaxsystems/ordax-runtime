@@ -229,7 +229,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertEqual(lock["authority"], "none")
         self.assertEqual(lock["studio_component_version"], source["version"])
         self.assertEqual(lock["studio_source_commit"], source["commit"])
-        self.assertEqual(lock["version"], "0.15.11")
+        self.assertEqual(lock["version"], "0.15.12")
         self.assertIn('Join-Path $repoRoot "windows-distribution.lock.json"', build)
         self.assertIn('$distributionVersion = [string]$distributionLock.version', build)
         self.assertIn('$Version = $distributionVersion', build)
