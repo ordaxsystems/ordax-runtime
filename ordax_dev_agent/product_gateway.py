@@ -73,6 +73,10 @@ class ProductAuditSink(Protocol):
 
 
 PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
+    "orchestrator.app_read": ProductActionSpec(
+        name="orchestrator.app_read", local_action="orchestrator.app_read",
+        allowed_fields=frozenset(), project_required=False,
+    ),
     "intelligence.app_catalog": ProductActionSpec(
         name="intelligence.app_catalog",
         local_action="intelligence.app_catalog",

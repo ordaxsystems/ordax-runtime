@@ -52,6 +52,7 @@ COMPUTER_DEVICE_ACTIONS = frozenset(
 )
 
 DEVICE_SCOPED_ACTIONS = frozenset({
+    "orchestrator.app_read",
     *COMPUTER_DEVICE_ACTIONS,
     *APP_INTELLIGENCE_DEVICE_ACTIONS,
 })

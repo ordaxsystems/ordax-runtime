@@ -1,0 +1,10 @@
+{
+  "schema": "ordax.orchestrator-contract-pin/1",
+  "repository": "ordaxsystems/ordax-apps",
+  "sourceCommit": "8bff30f3a0749a26b268a8ec3f8e127dd95e1b6f",
+  "sourcePath": "prototypes/ordax-orchestrator/product/src/orchestrator-contract.mjs",
+  "sourceBlob": "ccfa686be5af8c7339604341f1ac3e73dad0e78b",
+  "projectionSha256": "777d282ff025d1e8e772c2b8dd612d7c4f0ccde21a873a800dd02d33a1258387",
+  "contract": "ordax.orchestrator/1",
+  "authority": "none"
+}
