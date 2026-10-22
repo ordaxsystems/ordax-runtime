@@ -119,7 +119,27 @@ python3 native/ordax-product-agent/audit_elf.py \
   --require-rootfs-name-resolution
 ```
 
-The report binds the **rootfs TAR SHA-256**, inspects the target loader and
+The actual Owner/Development QEMU artifact publishes
+`ordax-independent/rootfs.cpio.gz`, **not** `rootfs.tar`. The same canonical
+auditor supports that exact published artifact without extracting files:
+
+```sh
+python3 native/ordax-product-agent/audit_elf.py \
+  --binary out/ordax-product-agent \
+  --recipe native/ordax-product-agent/Dockerfile \
+  --rootfs-cpio /verified/ordax-independent/rootfs.cpio.gz \
+  --require-rootfs-name-resolution
+```
+
+The CPIO adapter parses only Buildroot's `newc` format, bounds total inflated
+bytes and file counts, discards firmware and other irrelevant OS files without
+extracting or staging them, and reuses the **same** ELF parser, symlink resolution
+and dependency graph. The report binds the SHA-256 of the **exact compressed
+CPIO** in `target_rootfs_cpio_sha256`; the TAR option retains
+`target_rootfs_tar_sha256`. Supply a separately authenticated GitHub/OS rootfs
+artifact: this consumer cannot authenticate its producer.
+
+The report binds the **actual source archive SHA-256**, inspects the target loader and
 ELF files in standard `/lib{,64}` and `/usr/lib{,64}` namespaces, follows
 in-archive symlinks without extraction, checks transitive `DT_NEEDED` names,
 and identifies missing or ambiguous libraries. It fails closed for truncated,
