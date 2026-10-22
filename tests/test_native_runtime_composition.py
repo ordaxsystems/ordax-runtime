@@ -53,8 +53,7 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
     def test_native_denial_cannot_fall_back_to_desktop_credential(self):
         (self.state / "device-token.cloudflare-v3.txt").write_text("a" * 64)
         with self.assertRaisesRegex(RuntimeError, "identity mismatch"):
-            build_control_plane(self.config, device_credential_provider=lambda: None,
-                    native_access_enabled=lambda: True)
+            build_control_plane(self.config, device_credential_provider=lambda: None)
 
     def test_incomplete_native_configuration_fails_before_starting_services(self):
         for config in (
