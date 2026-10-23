@@ -303,22 +303,28 @@ def _wait_for_native_access(
     delay: float,
     stop_requested: threading.Event,
     native_access_enabled: Callable[[], bool] | None,
+    wake_signal: threading.Event | None = None,
 ) -> bool:
-    """Wait on the existing loop without delaying local revocation.
+    """Use the existing loop for shutdown, local revocation and optional wake.
 
-    Only the Native host polls its OS-owned local policy during idle/retry.
-    Remote claim cadence is unchanged and no independent poller is created.
+    An advisory wake never dispatches work. Every action remains subject to
+    the canonical PostgreSQL claim and device/local policy checks.
     """
-    if native_access_enabled is None:
+    if wake_signal is None and native_access_enabled is None:
         return not stop_requested.wait(delay)
     deadline = time.monotonic() + max(0.0, delay)
     while not stop_requested.is_set():
         if not _native_local_access_granted(native_access_enabled):
             return False
+        if wake_signal is not None and wake_signal.is_set():
+            return True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return True
-        stop_requested.wait(min(1.0, remaining))
+        if wake_signal is None:
+            stop_requested.wait(min(1.0, remaining))
+        else:
+            wake_signal.wait(min(1.0, remaining))
     return False
 
 
@@ -538,6 +544,12 @@ def run(
     next_heartbeat = 0.0
     idle_claim_misses = 0
     transport_failures = 0
+    next_claim_due = 0.0
+    wake_listener = None
+    if config.product_wake_enabled:
+        from .product_wake_signal import ProductWakeListener
+        wake_listener = ProductWakeListener(control, stop_requested, native_access_enabled)
+        wake_listener.start()
 
     try:
         while not stop:
@@ -568,6 +580,23 @@ def run(
                     runtime.setdefault("startup_seconds", round(time.monotonic() - started_monotonic, 3))
                     next_heartbeat = now + 20.0
 
+                if wake_listener is not None:
+                    if wake_listener.wake.is_set():
+                        wake_listener.wake.clear()
+                        next_claim_due = 0.0
+                    if now < next_claim_due:
+                        # The wake listener replaces repetitive empty claims,
+                        # not device heartbeat, authorization or OS local policy.
+                        idle_wait = max(0.10, min(
+                            next_claim_due - time.monotonic(),
+                            next_heartbeat - time.monotonic(),
+                        ))
+                        _wait_for_native_access(
+                            idle_wait, stop_requested, native_access_enabled,
+                            wake_listener.wake,
+                        )
+                        continue
+
                 claim_started = time.monotonic()
                 job = control.claim_next_job()
                 transport_failures = 0
@@ -580,10 +609,23 @@ def run(
                     idle_delay = product_idle_claim_delay_seconds(
                         idle_claim_misses, config.poll_seconds,
                     )
-                    # The WebSocket transport already waits for work; avoid an extra idle gap.
+                    # When the nonauthoritative wake channel is connected,
+                    # reconcile a lost message every five minutes. Heartbeats
+                    # still occur on their normal independent 20-second clock.
+                    if wake_listener is not None and wake_listener.connected.is_set():
+                        idle_delay = 300.0
+                    next_claim_due = time.monotonic() + idle_delay
                     idle_wait = (0.10 if getattr(control, "uses_long_poll", False)
                                  and claim_seconds >= 1.0 else max(0.10, idle_delay))
-                    _wait_for_native_access(idle_wait, stop_requested, native_access_enabled)
+                    if wake_listener is not None:
+                        idle_wait = max(0.10, min(
+                            next_claim_due - time.monotonic(),
+                            next_heartbeat - time.monotonic(),
+                        ))
+                    _wait_for_native_access(
+                        idle_wait, stop_requested, native_access_enabled,
+                        wake_listener.wake if wake_listener is not None else None,
+                    )
                     continue
 
                 idle_claim_misses = 0
@@ -742,6 +784,9 @@ def run(
                 runtime["state"] = "stopping" if stop else "ready"
     finally:
         runtime["state"] = "stopping"
+        stop_requested.set()
+        if wake_listener is not None:
+            wake_listener.close()
         try:
             control.heartbeat(
                 host_actions,
