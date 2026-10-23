@@ -10,7 +10,7 @@
 
 ## Repository and PR state after follow-up — 2026-10-23
 
-The current Runtime `main` is `ea8c863736ef4482c216235a994aa4b01e0e8322`.
+At PR #226 merge, Runtime `main` advanced from `ea8c863736ef4482c216235a994aa4b01e0e8322` to `95b48c91283c605cd8950e238d0d7542e4e479fc`.
 
 - PR #175 merged at `b2049e72811ebb81d3e56f5341dd51e77c954206`. Its Linux recovery CI, Runtime Contracts, and Windows Product Build passed; no physical OrdaX OS execution is claimed.
 - PR #114 merged at `c26af984970a5db8bae37444273c3fd2505d58c3`. It exposes the Product origin validated during Electron account authorization. Windows Product Build, Install Smoke, Packaging Contracts, Product MCP Minimum SDK and Runtime Contracts passed on its head. The pin remains canonical Apps Studio 0.15.9; no Apps source was changed.
@@ -18,6 +18,32 @@ The current Runtime `main` is `ea8c863736ef4482c216235a994aa4b01e0e8322`.
 - PR #121 was closed as duplicate product-level documentation; its canonical source belongs to Apps.
 - Runtime #205 remains a draft aligned with Platform #274, which is still draft and SQL proposal-only. Runtime #208 was closed without merge because its separate staged endpoints are absent from #274; its branch remains preserved for reference. No migration, deployment, grant issuance, authenticated Owner host composition or Apps capability is enabled.
 - CI results above validate source/build/install-smoke workflows only. They do not prove a production MCP action, physical Windows recovery, or execution under an OrdaX OS supervisor.
+
+## Follow-up after PR #226 — review snapshot
+
+PR #226 merged the audit follow-up at `95b48c91283c605cd8950e238d0d7542e4e479fc`. At the start of this review, that was the remote `main` SHA. The status paragraph above now records the merge commit rather than its pre-merge parent.
+
+### Runtime PR #205
+
+- PR #205 is the only open Runtime PR. It is still draft at head `01f8bcde2d38266fc3f7cfdad5da8f2532e6fcc6`, based on `f6b4c38f1dcb356714a32c54b9a02fc17661751b`; GitHub reports `mergeable=false`.
+- Static review of its changed resolver, HTTP client, and selection broker found no route to workspace reading without interactive Owner confirmation and a fresh exact-scope read-only proof. This is a source review only; the host composition and Apps port are absent.
+- Existing checks on that old head passed Runtime Contracts, Packaging Contracts, Native Runtime Composition, Product MCP Minimum SDK, Windows Product Build, and Install Smoke. Signing, signed-release smoke, release governance, and Owner/Dev attestation were skipped. These checks do not validate a rebased branch or live Platform/Windows integration.
+- Platform #274 remains draft and its SQL is proposal-only. Do not enable the resource lifecycle or merge #205 until the external contract, authenticated Owner/Device host composition, Apps integration, and required post-reconciliation checks are complete.
+
+### Open issue triage at this snapshot
+
+| Issue | Current evidence and next owner gate |
+| --- | --- |
+| #184 | The typed workspace-resource lifecycle remains pending. Runtime #205 is source-only; Platform #274 and the Apps host integration are not enabled. |
+| #149 | Latest Owner/Dev evidence keeps `rollbackReady=false` and `applyAllowed=false`; the installed 0.15.9 bytes have no proven byte-exact rollback. No machine update was performed. |
+| #127 | The recorded real-device result is a fail-closed `product_grant_not_resolved` denial, not a positive interaction E2E. Runtime `full_access` does not imply a remote grant; the grant/profile and target-discovery contract requires its canonical authority owner. |
+| #49 | Production Authenticode signing is not available in the latest recorded gate; no approved signing service/runner is in place. Keep production publication closed until signing custody and final-byte verification exist. |
+| #61 | The current Windows build script still embeds `https://mcp.ordax.com.br`. The issue requires a versioned Control Plane release reference; do not substitute a URL without that owner's canonical provenance contract. |
+| #67 | The issue's source evidence is from 2026-10-09, while the Runtime lock now pins Apps Studio 0.15.9. Refresh the Apps source/composition evidence before changing the lock or claiming the Conversation surface is integrated. |
+| #7 | Bounded action-result compatibility still depends on the OS-owned Studio Runtime v3 contract; no duplicate result service belongs in Runtime. |
+| #1 | The bootstrap/migration issue remains open. Revalidate current consumers and legacy references before closing it or deleting legacy code; no deletion is justified by the issue title alone. |
+
+No changes were made to `ordax-apps`, `ordax-os`, or `ordax-platform`. The issue list is a Runtime handoff snapshot, not evidence that cross-repository or physical gates passed.
 
 ## Findings
 
