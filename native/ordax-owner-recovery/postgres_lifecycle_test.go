@@ -11,7 +11,24 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestCanonicalOwnerIdlePollDelayIsBoundedAndResetsAfterClaim(t *testing.T) {
+	if got := canonicalOwnerNextIdlePollDelay(0, false); got != canonicalOwnerIdlePollInterval {
+		t.Fatalf("initial idle delay = %s, want %s", got, canonicalOwnerIdlePollInterval)
+	}
+	current := canonicalOwnerIdlePollInterval
+	for _, want := range []time.Duration{24 * time.Second, 30 * time.Second, 30 * time.Second} {
+		current = canonicalOwnerNextIdlePollDelay(current, false)
+		if current != want {
+			t.Fatalf("idle delay = %s, want %s", current, want)
+		}
+	}
+	if got := canonicalOwnerNextIdlePollDelay(current, true); got != canonicalOwnerIdlePollInterval {
+		t.Fatalf("post-claim idle delay = %s, want %s", got, canonicalOwnerIdlePollInterval)
+	}
+}
 
 func TestCanonicalOwnerIterationEmptyQueueOnly(t *testing.T) {
 	calls := []string{}
@@ -43,8 +60,12 @@ func TestCanonicalOwnerIterationEmptyQueueOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	transport := canonicalDeviceTransport{baseURL: server.URL, deviceID: cfg.DeviceID, deviceToken: cfg.DeviceToken, httpClient: server.Client()}
-	if err := canonicalOwnerIteration(c, transport); err != nil {
+	claimed, err := canonicalOwnerIteration(c, transport)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if claimed {
+		t.Fatal("empty queue reported a claimed job")
 	}
 	if len(calls) != 2 {
 		t.Fatalf("unexpected operations: %v", calls)
@@ -123,8 +144,12 @@ func TestCanonicalOwnerCompleteJobLifecycle(t *testing.T) {
 		}
 		return actionResult{OK: true, Summary: "tested", Data: map[string]any{}}
 	}
-	if err := canonicalOwnerIterationWithExecutor(c, transport, fake); err != nil {
+	claimed, err := canonicalOwnerIterationWithExecutor(c, transport, fake)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !claimed {
+		t.Fatal("complete job lifecycle did not report a claim")
 	}
 	if executions != 1 || len(calls) != 4 {
 		t.Fatalf("executions=%d calls=%v", executions, calls)

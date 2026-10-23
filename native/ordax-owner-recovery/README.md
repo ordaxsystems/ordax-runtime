@@ -5,6 +5,8 @@ This directory owns the **portable Linux transport** for the internal
 at `/v3/device/transport/*`, with a tiny typed recovery surface.
 The old D1/WebSocket execution path is not compiled or available.
 Transport overrides are rejected; no fallback authority is permitted.
+When the queue stays empty, the idle wait grows from 12 to 30 seconds and resets
+after a claimed job, reducing steady-state requests while bounding pickup delay.
 
 It is not a second Device Agent and it is not a Stable/MVP component.
 
