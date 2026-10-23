@@ -109,6 +109,15 @@ def _classify_native_bootstrap_failure(stderr: str, returncode: int) -> dict:
             if re.search(r"(?m)^RuntimeError: " + re.escape(reason) + r"\s*$", stderr):
                 report["native_reason"] = reason
                 break
+        # Canonical native_main.self_test() uses these stable machine codes.
+        # Do not print the appended action names, traceback or any user paths.
+        if "native_reason" not in report:
+            m = re.search(
+                r"(?m)^RuntimeError: (native_package_[a-z0-9_]+)(?::[^\\n]*)?$",
+                stderr,
+            )
+            if m:
+                report["native_reason"] = m.group(1)
         return report
     if returncode == 124:
         return {"failure": "native_bootstrap_timeout"}
