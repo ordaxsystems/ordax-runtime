@@ -113,7 +113,7 @@ def _classify_native_bootstrap_failure(stderr: str, returncode: int) -> dict:
         # Do not print the appended action names, traceback or any user paths.
         if "native_reason" not in report:
             m = re.search(
-                r"(?m)^RuntimeError: (native_package_[a-z0-9_]+)(?::[^\\n]*)?$",
+                r"(?m)^RuntimeError: (native_package_[a-z0-9_]+)(?::.*)?$",
                 stderr,
             )
             if m:
