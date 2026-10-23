@@ -81,6 +81,27 @@ print("ORDAX_NATIVE_BOOTSTRAP_PROOF=" + json.dumps({
 """
 
 
+
+def _classify_native_bootstrap_failure(stderr: str, returncode: int) -> dict:
+    """Classify real Native Python/loader failures without publishing tracebacks.
+
+    The runner and stdout may contain sensitive paths; only recognized exception
+    class names and shared-library basenames are exposed in CI diagnostics.
+    """
+    missing = MISSING_MODULE.search(stderr)
+    if missing:
+        return {"failure": "native_missing_import", "missing_module": missing.group(1)}
+    shared = re.search(r"Error loading shared library ([A-Za-z0-9_.+-]+)", stderr)
+    if shared:
+        return {"failure": "native_missing_shared_library", "shared_library": shared.group(1)}
+    exceptions = re.findall(r"(?m)^([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception)):\s*.*$", stderr)
+    if exceptions:
+        return {"failure": "native_bootstrap_exception", "exception_type": exceptions[-1]}
+    if returncode == 124:
+        return {"failure": "native_bootstrap_timeout"}
+    return {"failure": "native_bootstrap_failed", "native_exit_code": returncode}
+
+
 def checked_file(path: Path, *, limit: int) -> Path:
     if not path.is_file() or path.is_symlink():
         raise ProofError("private Buildroot executable or loader missing/unsafe")
@@ -144,14 +165,9 @@ def probe(receipt_path: Path, target_tar: Path, extracted_root: Path) -> dict:
         "device_execution_proven": False,
     }
     if execution.returncode:
-        missing = MISSING_MODULE.search(execution.stderr)
-        summary["failure"] = (
-            "native_missing_import" if missing else
-            "native_bootstrap_timeout" if execution.returncode == 124 else
-            "native_bootstrap_failed"
-        )
-        if missing:
-            summary["missing_module"] = missing.group(1)
+        summary.update(_classify_native_bootstrap_failure(
+            execution.stderr, execution.returncode
+        ))
         return summary
     lines = [line.removeprefix(MARKER) for line in execution.stdout.splitlines()
              if line.startswith(MARKER)]
