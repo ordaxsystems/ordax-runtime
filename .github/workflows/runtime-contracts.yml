@@ -28,6 +28,7 @@ jobs:
           python -m unittest
           tests.test_native_runtime_composition
           tests.test_native_private_buildroot_target
+          tests.test_native_buildroot_agent_probe
           tests.test_product_device_control_plane
           tests.test_product_central_session
           tests.test_terminal_outbox
