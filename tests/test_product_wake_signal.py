@@ -44,6 +44,8 @@ class ProductWakeTests(unittest.TestCase):
                          "wss://mcp.ordax.com.br/v3/device/transport/wake")
         for origin in (
             "http://mcp.ordax.com.br",
+            "https://evil.example.org",
+            "https://mcp.ordax.com.br:444",
             "https://someuser:secret@mcp.ordax.com.br",
             "https://mcp.ordax.com.br/mcp",
             "https://mcp.ordax.com.br?grant=full",
