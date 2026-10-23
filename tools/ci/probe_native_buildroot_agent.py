@@ -17,7 +17,11 @@ import sys
 import tarfile
 import tempfile
 
-from tools.ci.audit_independent_python_proof import ProofError, reconcile
+if __name__ == "__main__" and not __package__:
+    # Direct file-path invocation places tools/ci on sys.path.
+    from audit_independent_python_proof import ProofError, reconcile
+else:
+    from tools.ci.audit_independent_python_proof import ProofError, reconcile
 
 
 # Must remain the actual Native entrypoint and Product HTTPX transport,
