@@ -14,8 +14,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from websockets.sync.client import connect
-
 from .browser_capture import BrowserCaptureError, _cdp_call, find_chromium
 from .models import ActionResult
 
@@ -310,6 +308,10 @@ class BrowserSessionActions:
             raise ValueError("browser session is not running or is not owned by ORDAX")
         target = self._browser_target(state, create_url=preferred_url)
         self._assert_automation_url_allowed(str(target.get("url") or ""))
+        # Loading the registry must not require the optional CDP WebSocket
+        # dependency; only an actual browser page operation needs it.
+        from websockets.sync.client import connect
+
         with connect(str(target["webSocketDebuggerUrl"]), open_timeout=3, close_timeout=1) as ws:
             return fn(ws, state, target)
 
