@@ -5,8 +5,19 @@
 - Canonical repository verified before edits: `C:\Users\TONECOS\Documents\github\ordax-runtime`.
 - `origin`: `https://github.com/ordaxsystems/ordax-runtime.git`.
 - Initial audited base: `main` at `9154cb977bbad9f007e7734ebfbeeb4997e7db57` (PR #224). This follow-up reconciles the existing PR #175 with `main` at `db43388cf7d6c36cfaee5439c93a357f12b1929b`, after PRs #225 and #159 were integrated.
-- Current follow-up is isolated in `C:\Users\TONECOS\Documents\github\ordax-runtime-operational-readiness-20261023` on the existing `fix/owner-recovery-canonical-only-20261021` branch. The `ordax-apps`, `ordax-os`, and `ordax-platform` repositories were not modified.
-- PR #159's Windows auto-start and recovery changes are merged. #205/#208 cover workspace lifecycle/issuance; #114/#121/#136 remain distinct pending work. This follow-up does not duplicate those scopes.
+- The #175 follow-up was prepared in an isolated Runtime checkout. The `ordax-apps`, `ordax-os`, and `ordax-platform` repositories were not modified; status after subsequent merges is recorded below.
+- At the time of the original audit, PR #159 was merged while #205/#208, #114/#121/#136 were open. Their current status is recorded below.
+
+## Repository and PR state after follow-up — 2026-10-23
+
+The current Runtime `main` is `ea8c863736ef4482c216235a994aa4b01e0e8322`.
+
+- PR #175 merged at `b2049e72811ebb81d3e56f5341dd51e77c954206`. Its Linux recovery CI, Runtime Contracts, and Windows Product Build passed; no physical OrdaX OS execution is claimed.
+- PR #114 merged at `c26af984970a5db8bae37444273c3fd2505d58c3`. It exposes the Product origin validated during Electron account authorization. Windows Product Build, Install Smoke, Packaging Contracts, Product MCP Minimum SDK and Runtime Contracts passed on its head. The pin remains canonical Apps Studio 0.15.9; no Apps source was changed.
+- PR #136 merged at `ea8c863736ef4482c216235a994aa4b01e0e8322`. It updates canonical repository ownership and scope terminology, with a documentation regression test. The two focused tests passed locally; required Runtime, Product MCP, Native Composition, Packaging, Windows Product Build and Install Smoke checks passed in CI.
+- PR #121 was closed as duplicate product-level documentation; its canonical source belongs to Apps.
+- Runtime PRs #205 and #208 remain drafts. Their lifecycle/issuance paths depend on Platform PR #274, still draft with SQL in proposals only. No migration, deployment, grant issuance, authenticated Owner host composition or Apps capability is enabled by these drafts.
+- CI results above validate source/build/install-smoke workflows only. They do not prove a production MCP action, physical Windows recovery, or execution under an OrdaX OS supervisor.
 
 ## Findings
 
@@ -78,7 +89,7 @@ the existing contracts; this PR changes none of them.
 
 ### Owner Linux recovery transport
 
-The existing PR #175 removes the Owner Linux agent's D1/WebSocket execution
+Merged PR #175 removed the Owner Linux agent's D1/WebSocket execution
 path and its Gorilla WebSocket dependency. It uses only the existing
 PostgreSQL-backed `/v3/device/transport/*` endpoints and rejects the obsolete
 `ORDAX_OWNER_TRANSPORT` selector. Its fixed capability set remains
@@ -92,9 +103,9 @@ An idle cycle performs a heartbeat and a claim. The follow-up starts at 12
 seconds and grows to a 30-second cap after repeated empty claims, resetting
 after a claimed job. At the cap that is about 5,760 transport requests per idle
 device per day; this is a calculated budget, not observed Platform database
-load. The Linux CI workflow must pass on the rebased source before merge. Its
-static artifact is built for Linux/amd64; neither installation under the real
-OrdaX OS supervisor nor execution on an OS device is claimed. The OS owner must
+load. Linux CI passed on the revised PR #175 head before merge. Its static artifact
+is built for Linux/amd64; neither installation under the real OrdaX OS
+supervisor nor execution on an OS device is claimed. The OS owner must
 still confirm the actual target architecture, credential-provider handoff,
 single presence ownership, packaging, and lifecycle before pinning a release.
 
@@ -124,9 +135,9 @@ single presence ownership, packaging, and lifecycle before pinning a release.
   environment does not include the Runtime's `httpx`/MCP dependencies. Its
   regression is included for the repository's full Runtime Contracts workflow.
 - PR #159's merged revision passed its Windows install/upgrade CI smoke. PR #175
-  is rebased onto the current `main`; its Linux workflow and Runtime contract
-  checks are required on the revised head. The local Windows host did not
-  complete a Linux Go cross-build, so no local Go build result is claimed.
+  merged after Linux and Runtime Contract checks passed on its revised head. The
+  local Windows host did not complete a Linux Go cross-build, so no local Go
+  build result is claimed.
 - GitHub CI and physical Windows/OrdaX OS/MCP integration are separate gates;
   none is represented as passed by these local checks.
 
