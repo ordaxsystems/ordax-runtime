@@ -142,3 +142,4 @@ jobs:
           tests.test_managed_runtime_legacy_migration_contract
           tests.test_managed_runtime_precompile_contract
           tests.test_device_setup_legacy_bridge_path
+          tests.test_runtime_cross_product_ownership_contract
