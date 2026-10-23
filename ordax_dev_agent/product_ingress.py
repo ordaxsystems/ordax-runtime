@@ -7,6 +7,7 @@ server must never be repeated merely because its response was lost.
 """
 from __future__ import annotations
 
+import socket
 import time
 from typing import Callable, TypeVar
 
@@ -16,7 +17,7 @@ _PRIMARY = "https://mcp.ordax.com.br"
 _RESTRICTED = "https://ordax-mcp.ordaxsystems.workers.dev"
 _TRANSPORT_OPS = frozenset({
     "heartbeat", "claim", "start", "lease", "progress",
-    "report", "recover-report",
+    "report", "recover-report", "wake",
 })
 _SESSION_PATH = "/v3/product/device/central-session"
 _T = TypeVar("_T")
@@ -45,6 +46,33 @@ class TrustedProductIngress:
             return True
         prefix = "/v3/device/transport/"
         return path.startswith(prefix) and path[len(prefix):] in _TRANSPORT_OPS
+
+    def websocket(self, path: str, connect: Callable[[str], _T]) -> _T:
+        """Use the SAME canonical ingress selector for wake-only WSS.
+
+        Only a TCP/DNS/connect timeout before a successful handshake may use
+        the existing restricted hostname. TLS certificate errors and HTTP
+        401/403/invalid WebSocket handshakes are not connectivity failures and
+        must not initiate failover. The restricted host is the same Worker,
+        OAuth and PostgreSQL authority; this does not introduce a fallback
+        execution system, token, job queue or grant decision.
+        """
+        if path != "/v3/device/transport/wake":
+            raise ValueError("Only the Product wake endpoint supports WebSocket ingress")
+
+        def establish(https_url: str) -> _T:
+            if not https_url.startswith("https://"):
+                raise ValueError("Product WebSocket requires the pinned TLS origin")
+            wss_url = "wss://" + https_url[len("https://"):]
+            try:
+                return connect(wss_url)
+            except (ConnectionError, TimeoutError, socket.gaierror) as error:
+                # Explicit connect-stage network error types only. In
+                # particular, ssl.SSLError / invalid HTTP status must not
+                # be converted to a connect error and retried elsewhere.
+                raise httpx.ConnectError("Product wake TCP connection failed") from error
+
+        return self.request(path, establish)
 
     def request(self, path: str, send: Callable[[str], _T]) -> _T:
         """send(url) must use TLS verification and reject HTTP redirects.
