@@ -41,6 +41,28 @@ class BuildrootOfflineProbeTests(unittest.TestCase):
         self.assertEqual((self.destination / "usr/bin/python3.14").read_bytes(),
                          b"verified-private-python")
 
+    def test_accepts_canonical_buildroot_root_directory_header(self):
+        # The real OS-owned Buildroot target starts with the '.' directory.
+        with tarfile.open(self.tar, mode="w") as archive:
+            root = tarfile.TarInfo(".")
+            root.type = tarfile.DIRTYPE
+            archive.addfile(root)
+            code = tarfile.TarInfo("./usr/bin/python3.14")
+            payload = b"private Python"
+            code.size = len(payload)
+            archive.addfile(code, io.BytesIO(payload))
+        actual = hashlib.sha256(self.tar.read_bytes()).hexdigest()
+        _stage_verified_target(self.tar, actual, self.destination)
+        self.assertEqual(
+            (self.destination / "usr/bin/python3.14").read_bytes(), payload
+        )
+
+    def test_root_member_cannot_be_symlink(self):
+        self.make_tar([(".", ("link", "/etc"))])
+        actual = hashlib.sha256(self.tar.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ProofError, "root TAR member is not"):
+            _stage_verified_target(self.tar, actual, self.destination)
+
     def test_rejects_tampered_bytes_even_with_same_filename(self):
         with self.assertRaisesRegex(ProofError, "changed since OS receipt"):
             _stage_verified_target(self.tar, "0" * 64, self.destination)
