@@ -35,6 +35,19 @@ class ProofError(ValueError):
 MAX_TARGET_TAR_BYTES = 1024 * 1024 * 1024
 MAX_TARGET_TAR_ENTRIES = 200000
 PYTHON_TARGET_PATH = re.compile(r"usr/bin/python3\.\d+\Z")
+# Protocol identifiers from the OS-owned private SDK receipt; never a second
+# toolchain builder, package roster or installable component.
+SDK_PREFIX = "ordax-native-product-runtime-sdk"
+SDK_ARCHIVE_NAME = SDK_PREFIX + ".tar.gz"
+SDK_MAX_BYTES = 1536 * 1024 * 1024
+SDK_MAX_ENTRIES = 350000
+SDK_COMPILER = re.compile(
+    re.escape(SDK_PREFIX) + r"/bin/x86_64-[A-Za-z0-9_.+-]*linux-musl-gcc\Z"
+)
+SDK_SYSROOT_HEADER = re.compile(
+    re.escape(SDK_PREFIX)
+    + r"/x86_64-[A-Za-z0-9_.+-]*linux-musl/sysroot/usr/include/stdio\.h\Z"
+)
 
 
 def verify_private_target_tar(target_tar: Path, receipt: dict) -> dict:
@@ -176,6 +189,116 @@ def verify_private_target_tar(target_tar: Path, receipt: dict) -> dict:
     }
 
 
+def verify_private_sdk_tar(sdk_tar: Path, receipt: dict) -> dict:
+    """Check OS-owned SAME-BUILD SDK bytes against the existing Python proof.
+
+    No extraction, relocation, binary execution or independent SDK builder.
+    An SDK does not establish native dependency closure or install authority.
+    """
+    import os
+    import posixpath
+    import stat
+    import tarfile
+
+    abi = receipt.get("python_abi")
+    target = receipt.get("private_target_build_input")
+    claimed = receipt.get("private_sdk_build_input")
+    if not all(isinstance(item, dict) for item in (abi, target, claimed)):
+        raise ProofError("private SDK requires OS-issued target and SDK receipts")
+    python_sha = abi.get("python_sha256")
+    if (not isinstance(python_sha, str) or not SHA.fullmatch(python_sha)
+            or target.get("python_sha256") != python_sha
+            or claimed.get("python_sha256") != python_sha):
+        raise ProofError("private SDK and target Python identity mismatch")
+    try:
+        fd = os.open(
+            sdk_tar, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0),
+        )
+    except OSError as exc:
+        raise ProofError("private SDK archive missing or unsafe") from exc
+
+    required = {
+        SDK_PREFIX + "/relocate-sdk.sh": False,
+        SDK_PREFIX + "/share/buildroot/sdk-location": False,
+    }
+    compiler = False
+    sysroot_header = False
+    seen = set()
+    with os.fdopen(fd, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= SDK_MAX_BYTES:
+            raise ProofError("private SDK archive size/type invalid")
+        digest = hashlib.sha256()
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+        stream.seek(0)
+        try:
+            with tarfile.open(fileobj=stream, mode="r:gz") as archive:
+                for index, member in enumerate(archive, start=1):
+                    if index > SDK_MAX_ENTRIES:
+                        raise ProofError("private SDK archive entry limit exceeded")
+                    name = member.name.removeprefix("./").rstrip("/")
+                    canonical = posixpath.normpath(name)
+                    if (member.name.startswith("/") or canonical != name
+                            or (canonical != SDK_PREFIX
+                                and not canonical.startswith(SDK_PREFIX + "/"))):
+                        raise ProofError("private SDK archive path is noncanonical")
+                    if name in seen and (name in required
+                                         or SDK_COMPILER.fullmatch(name)
+                                         or SDK_SYSROOT_HEADER.fullmatch(name)):
+                        raise ProofError("private SDK has duplicate required member")
+                    seen.add(name)
+                    if name == SDK_PREFIX:
+                        if not member.isdir():
+                            raise ProofError("private SDK root must be a directory")
+                        continue
+                    if name in required:
+                        if not member.isfile() or member.size <= 0:
+                            raise ProofError("private SDK required metadata invalid")
+                        required[name] = True
+                    if SDK_COMPILER.fullmatch(name):
+                        if not (member.isfile() or member.issym()) or compiler:
+                            raise ProofError("private SDK compiler invalid")
+                        compiler = True
+                    if SDK_SYSROOT_HEADER.fullmatch(name):
+                        if not member.isfile() or sysroot_header:
+                            raise ProofError("private SDK sysroot header invalid")
+                        sysroot_header = True
+        except (tarfile.TarError, EOFError, OSError) as exc:
+            raise ProofError("private SDK archive cannot be read") from exc
+        after = os.fstat(stream.fileno())
+        if ((before.st_dev, before.st_ino, before.st_size,
+             before.st_mtime_ns, before.st_ctime_ns)
+                != (after.st_dev, after.st_ino, after.st_size,
+                    after.st_mtime_ns, after.st_ctime_ns)):
+            raise ProofError("private SDK archive changed during verification")
+    if not all(required.values()) or not compiler or not sysroot_header:
+        raise ProofError("private SDK compiler/sysroot/relocation closure incomplete")
+    observed = {
+        "schema": "ordax.private-buildroot-runtime-sdk-input/1",
+        "file_name": SDK_ARCHIVE_NAME,
+        "sdk_prefix": SDK_PREFIX,
+        "sha256": digest.hexdigest(),
+        "size_bytes": before.st_size,
+        "python_sha256": python_sha,
+        "purpose": "native-runtime-cross-compile-input-only",
+        "runtime_agent_packaged": False,
+        "device_install_authorized": False,
+    }
+    if claimed != observed:
+        raise ProofError("private SDK archive does not match OS-owned provenance")
+    return {
+        "private_sdk_tar_sha256": observed["sha256"],
+        "private_sdk_tar_bytes": observed["size_bytes"],
+        "python_elf_sha256": python_sha,
+        "same_build_private_sdk_verified": True,
+        "native_dependency_closure_proven": False,
+        "runtime_agent_packaged": False,
+        "device_install_authorized": False,
+    }
+
+
 def load_json(path: Path, limit: int) -> tuple[dict, str]:
     if not path.is_file() or path.is_symlink() or not 2 <= path.stat().st_size <= limit:
         raise ProofError("private Buildroot proof input missing, unsafe or oversized")
@@ -190,7 +313,8 @@ def load_json(path: Path, limit: int) -> tuple[dict, str]:
 
 
 def reconcile(receipt_path: Path, os_source_path: Path, lock_path: Path,
-              private_target_tar: Path | None = None) -> dict:
+              private_target_tar: Path | None = None,
+              private_sdk_tar: Path | None = None) -> dict:
     receipt, receipt_sha = load_json(receipt_path, 64 * 1024)
     os_source, source_sha = load_json(os_source_path, 128 * 1024)
     profile = os_source.get("component_profiles", {}).get(COMPONENT)
@@ -268,8 +392,12 @@ def reconcile(receipt_path: Path, os_source_path: Path, lock_path: Path,
                 "runtime_locked": pinned.get(name), "buildroot_built": version,
             })
     not_proven = sorted(set(pinned) - set(built))
+    if private_sdk_tar is not None and private_target_tar is None:
+        raise ProofError("private SDK requires verified same-build target TAR")
     private_target_result = (verify_private_target_tar(private_target_tar, receipt)
                              if private_target_tar is not None else None)
+    private_sdk_result = (verify_private_sdk_tar(private_sdk_tar, receipt)
+                          if private_sdk_tar is not None else None)
     return {
         "schema": "ordax.native-private-buildroot-lock-reconciliation/1",
         "os_source_sha256": source_sha,
@@ -290,6 +418,7 @@ def reconcile(receipt_path: Path, os_source_path: Path, lock_path: Path,
         "device_execution_proven": False,
         "external_os_artifact_authenticity_verified_here": False,
         "private_os_build_input_verification": private_target_result,
+        "private_os_sdk_build_input_verification": private_sdk_result,
     }
 
 
@@ -304,12 +433,21 @@ def main() -> int:
                         help="Exact OS-owned non-installable Buildroot target tar")
     parser.add_argument("--require-private-target", action="store_true",
                         help="Fail if authenticated native target TAR was not supplied")
+    parser.add_argument("--private-sdk-tar", type=Path,
+                        help="Official same-build OS SDK archive, never installed")
+    parser.add_argument("--require-private-sdk", action="store_true",
+                        help="Require an OS-issued SDK and its verified target TAR")
     args = parser.parse_args()
     try:
         if args.require_private_target and args.private_target_tar is None:
             raise ProofError("private Buildroot target TAR required")
+        if args.require_private_sdk and args.private_sdk_tar is None:
+            raise ProofError("private Buildroot SDK TAR required")
+        if args.private_sdk_tar is not None and args.private_target_tar is None:
+            raise ProofError("private SDK requires verified same-build target TAR")
         result = reconcile(args.receipt, args.os_source, args.requirements,
-                           private_target_tar=args.private_target_tar)
+                           private_target_tar=args.private_target_tar,
+                           private_sdk_tar=args.private_sdk_tar)
     except (ProofError, OSError, UnicodeError, ValueError) as exc:
         print(json.dumps({"error": str(exc), "device_install_authorized": False}, sort_keys=True))
         return 2
