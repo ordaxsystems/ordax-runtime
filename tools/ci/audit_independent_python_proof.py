@@ -12,12 +12,11 @@ import json
 from pathlib import Path
 import re
 
-if __name__ == "__main__":
-    # Direct CLI: Python places tools/ci on sys.path, not repository root.
+if __name__ == "__main__" and not __package__:
+    # Direct file-path invocation inserts tools/ci into sys.path.
     from audit_buildroot_lock import read_requirements
 else:
-    # Test harnesses may import this module using spec_from_file_location;
-    # use the canonical absolute package path for all imported invocations.
+    # Imported module, spec loader or python -m with repository on sys.path.
     from tools.ci.audit_buildroot_lock import read_requirements
 
 RECEIPT_SCHEMA = "ordax.private-native-python-build-proof/1"
