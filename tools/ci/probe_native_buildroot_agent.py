@@ -96,7 +96,20 @@ def _classify_native_bootstrap_failure(stderr: str, returncode: int) -> dict:
         return {"failure": "native_missing_shared_library", "shared_library": shared.group(1)}
     exceptions = re.findall(r"(?m)^([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception)):\s*.*$", stderr)
     if exceptions:
-        return {"failure": "native_bootstrap_exception", "exception_type": exceptions[-1]}
+        report = {"failure": "native_bootstrap_exception", "exception_type": exceptions[-1]}
+        # Only known stable Native offline-gate error codes are exposed. No
+        # tracebacks, absolute paths or arbitrary exception messages leak.
+        allowlisted = (
+            "native_bootstrap_network_forbidden",
+            "native_offline_self_test_not_proven",
+            "native_product_transport_identity_mismatch",
+            "native_offline_probe_claimed_remote_attestation",
+        )
+        for reason in allowlisted:
+            if re.search(r"(?m)^RuntimeError: " + re.escape(reason) + r"\s*$", stderr):
+                report["native_reason"] = reason
+                break
+        return report
     if returncode == 124:
         return {"failure": "native_bootstrap_timeout"}
     return {"failure": "native_bootstrap_failed", "native_exit_code": returncode}
