@@ -41,6 +41,24 @@ conta, autorizador, credenciais ou grants e **não** permite invocação de
 arquivos, terminal, controle do computador ou instalação. A autorização
 Product permanece exclusiva da plataforma e do Runtime.
 
+O Runtime preserva essa semântica de liveness e publica no objeto `runtime`
+de `/status` os campos aditivos `action_registry_ready`,
+`product_dispatch_ready` e `product_readiness_code`. Prontidão de despacho
+Product exige ActionRegistry carregado, controle remoto configurado, identidade
+pareada e heartbeat Product bem-sucedido nos últimos 60 segundos. Durante uma
+ação longa, falha de heartbeat passa o transporte para `reconnecting` sem
+apagar o estado `busy`; uma recuperação volta a `connected`. Os códigos
+incluem `action_registry_unavailable`, `remote_control_not_configured`,
+`pairing_required`, `transport_reconnecting`, `heartbeat_not_observed`,
+`heartbeat_stale`, `credential_recovery_required` e `local_access_disabled`.
+
+Esses campos não provam que um MCP remoto está online, que uma ação específica
+tem grant, nem que um comando foi executado ou auditado. A interface deve
+mostrar separadamente presença local, saúde do endpoint MCP e prontidão do
+dispatcher Runtime. O agregador `StudioApi.product_status` conserva o campo
+legado `device_agent.ok` para compatibilidade e acrescenta
+`device_agent.product_dispatch_ready` e `device_agent.product_readiness_code`.
+
 **Não** transformar `/status` ou `/health` em token, proxy de comandos,
 API de execução ou canal temporário de migração. O cutover do Studio 0.14.1
 para o instalador oficial exige ponte com autenticação do processo/usuário,

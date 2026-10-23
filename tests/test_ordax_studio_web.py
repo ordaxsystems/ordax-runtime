@@ -320,6 +320,14 @@ class OrdaxStudioWebTests(unittest.TestCase):
                             "enabled": True, "state": "ready", "summary": "ready",
                             "blender_version": "5.2.2", "file": str(project / "scene.blend"),
                         }}}),
+                        ActionResult(True, "resilience", {"resilience": {
+                            "scheduled_task": {"exists": True, "state": "Running"},
+                            "local_health": {"ok": True},
+                        }}),
+                        ActionResult(True, "health", {"adapters": {"blender": {
+                            "enabled": True, "state": "ready", "summary": "ready",
+                            "blender_version": "5.2.2", "file": str(project / "scene.blend"),
+                        }}}),
                     ]
                     local_response = Mock()
                     local_response.is_success = True
@@ -330,8 +338,23 @@ class OrdaxStudioWebTests(unittest.TestCase):
                             "state": "ready",
                             "paired": True,
                             "transport_state": "connected",
+                            "product_dispatch_ready": True,
+                            "product_readiness_code": "ready",
                             "last_transport_error": None,
                             "last_transport_recovered_at": None,
+                        }
+                    }
+                    unready_runtime_response = Mock()
+                    unready_runtime_response.is_success = True
+                    unready_runtime_response.status_code = 200
+                    unready_runtime_response.headers = {"content-type": "application/json"}
+                    unready_runtime_response.json.return_value = {
+                        "runtime": {
+                            "state": "ready",
+                            "paired": True,
+                            "transport_state": "connected",
+                            "product_dispatch_ready": False,
+                            "product_readiness_code": "heartbeat_stale",
                         }
                     }
                     remote_response = Mock()
@@ -342,19 +365,34 @@ class OrdaxStudioWebTests(unittest.TestCase):
                         "ok": True, "product_auth_configured": True,
                         "capabilities": ["product_typed_actions_v2"],
                     }
-                    get.side_effect = [local_response, remote_response]
+                    get.side_effect = [
+                        local_response, remote_response,
+                        unready_runtime_response, remote_response,
+                    ]
                     result = api.product_status()
+                    remote_only_result = api.product_status()
             self.assertTrue(result["ok"])
             self.assertTrue(result["data"]["device_agent"]["ok"])
             self.assertEqual("ready", result["data"]["device_agent"]["runtime_state"])
             self.assertTrue(result["data"]["device_agent"]["paired"])
             self.assertEqual("connected", result["data"]["device_agent"]["transport_state"])
+            self.assertTrue(result["data"]["device_agent"]["product_dispatch_ready"])
+            self.assertEqual("ready", result["data"]["device_agent"]["product_readiness_code"])
+            self.assertEqual(
+                "Device Agent pronto para despacho Product",
+                result["data"]["device_agent"]["summary"],
+            )
             self.assertTrue(result["data"]["remote_mcp"]["ok"])
             self.assertTrue(result["data"]["remote_mcp"]["oauth"])
             self.assertTrue(result["data"]["remote_mcp"]["typed_actions_v2"])
             self.assertTrue(result["data"]["computer_control"]["input"])
             self.assertTrue(result["data"]["blender_live"]["ok"])
-            self.assertEqual(2, get.call_count)
+            self.assertTrue(remote_only_result["data"]["device_agent"]["ok"])
+            self.assertFalse(remote_only_result["data"]["device_agent"]["product_dispatch_ready"])
+            self.assertEqual("heartbeat_stale", remote_only_result["data"]["device_agent"]["product_readiness_code"])
+            self.assertIn("despacho Product indisponível", remote_only_result["data"]["device_agent"]["summary"])
+            self.assertTrue(remote_only_result["data"]["remote_mcp"]["ok"])
+            self.assertEqual(4, get.call_count)
             get.assert_any_call("http://127.0.0.1:8765/status", timeout=1.5, follow_redirects=False)
             get.assert_any_call("https://example.test/health", timeout=4.0, follow_redirects=False)
 

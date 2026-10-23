@@ -91,6 +91,15 @@ def _mark_transport_delivery_error(runtime: dict, error: Exception) -> None:
     runtime["last_result"] = {"ok": False, "summary": summary}
 
 
+def _mark_transport_unavailable(runtime: dict, error: Exception) -> None:
+    """Record a failed background heartbeat without changing the active job state."""
+    runtime["transport_state"] = "reconnecting"
+    runtime["last_transport_error"] = {
+        "summary": str(error),
+        "at": time.time(),
+    }
+
+
 def _mark_transport_healthy(runtime: dict) -> None:
     previous = runtime.get("transport_state")
     runtime["transport_state"] = "connected"
@@ -99,6 +108,72 @@ def _mark_transport_healthy(runtime: dict) -> None:
         if runtime.get("job_phase") == "delivery-error":
             runtime["job_phase"] = "idle"
         runtime["last_result"] = {"ok": True, "summary": "control plane connection recovered"}
+
+
+def product_dispatch_readiness(
+    runtime: dict,
+    *,
+    action_registry_ready: bool,
+    remote_control_configured: bool,
+    now: float | None = None,
+) -> dict[str, bool | str]:
+    """Report Product dispatch readiness separately from process liveness.
+
+    A recent successful Product heartbeat, the paired device identity, and the
+    local action registry are required. This does not grant or authorize any
+    individual action.
+    """
+    def unavailable(code: str) -> dict[str, bool | str]:
+        return {"product_dispatch_ready": False, "product_readiness_code": code}
+
+    state = str(runtime.get("state") or "unknown")
+    if not action_registry_ready:
+        return unavailable("action_registry_unavailable")
+    if state == "credential-recovery-required":
+        return unavailable("credential_recovery_required")
+    if state == "local-disabled":
+        return unavailable("local_access_disabled")
+    if not remote_control_configured:
+        return unavailable("remote_control_not_configured")
+    if not runtime.get("paired"):
+        return unavailable("pairing_required")
+    if state not in {"ready", "busy"}:
+        return unavailable("runtime_not_ready")
+    transport_state = str(runtime.get("transport_state") or "unknown")
+    if transport_state != "connected":
+        return unavailable(
+            "transport_reconnecting" if transport_state == "reconnecting"
+            else "transport_not_connected"
+        )
+    try:
+        heartbeat_at = float(runtime.get("last_heartbeat_at"))
+        current_time = time.time() if now is None else float(now)
+    except (TypeError, ValueError):
+        return unavailable("heartbeat_not_observed")
+    if not math.isfinite(heartbeat_at) or not math.isfinite(current_time):
+        return unavailable("heartbeat_not_observed")
+    heartbeat_age = current_time - heartbeat_at
+    if heartbeat_age < -5.0 or heartbeat_age > 60.0:
+        return unavailable("heartbeat_stale")
+    return {"product_dispatch_ready": True, "product_readiness_code": "ready"}
+
+
+def _runtime_status_snapshot(
+    runtime: dict,
+    *,
+    action_registry_ready: bool,
+    remote_control_configured: bool,
+    now: float | None = None,
+) -> dict:
+    snapshot = dict(runtime)
+    snapshot.update(product_dispatch_readiness(
+        runtime,
+        action_registry_ready=action_registry_ready,
+        remote_control_configured=remote_control_configured,
+        now=now,
+    ))
+    snapshot["action_registry_ready"] = bool(action_registry_ready)
+    return snapshot
 
 
 
@@ -386,6 +461,14 @@ def run(
         "last_transport_recovered_at": None,
     }
     registry = None
+    remote_control_configured = False
+
+    def runtime_status_snapshot() -> dict:
+        return _runtime_status_snapshot(
+            runtime,
+            action_registry_ready=registry is not None,
+            remote_control_configured=remote_control_configured,
+        )
 
     def status_payload() -> dict:
         runtime["uptime_seconds"] = round(time.monotonic() - started_monotonic, 2)
@@ -395,11 +478,11 @@ def run(
                 "agent_version": __version__,
                 "actions": [],
                 "projects": [],
-                "runtime": dict(runtime),
+                "runtime": runtime_status_snapshot(),
             }
         base = registry.agent_status({}).data
         base["agent_version"] = __version__
-        base["runtime"] = dict(runtime)
+        base["runtime"] = runtime_status_snapshot()
         return base
 
     def health_payload() -> dict:
@@ -682,7 +765,9 @@ def run(
                             control.heartbeat(host_actions, agent_version=__version__,
                                               status="busy")
                             runtime["last_heartbeat_at"] = time.time()
+                            _mark_transport_healthy(runtime)
                         except Exception as error:
+                            _mark_transport_unavailable(runtime, error)
                             print(f"busy heartbeat error: {error}", file=sys.stderr)
 
                 keepalive_thread = threading.Thread(

@@ -644,8 +644,15 @@ class StudioApi:
 
         transport_state = str(runtime_status.get("transport_state") or "unknown")
         runtime_state = str(runtime_status.get("state") or "unknown")
+        product_dispatch_ready = runtime_status.get("product_dispatch_ready") is True
+        product_readiness_code = str(
+            runtime_status.get("product_readiness_code")
+            or ("runtime_status_unavailable" if not runtime_status else "readiness_unreported")
+        )
         device_agent = {
             "ok": bool(scheduled.get("exists")) and str(scheduled.get("state") or "").lower() == "running" and bool(local_health),
+            "product_dispatch_ready": product_dispatch_ready,
+            "product_readiness_code": product_readiness_code,
             "configured": bool(config.device_id),
             "scheduled_task_exists": bool(scheduled.get("exists")),
             "scheduled_task_state": scheduled.get("state"),
@@ -656,7 +663,15 @@ class StudioApi:
             "transport_state": transport_state,
             "last_transport_error": runtime_status.get("last_transport_error"),
             "last_transport_recovered_at": runtime_status.get("last_transport_recovered_at"),
-            "summary": "Device Agent ativo" if local_health else (resilience.summary if not resilience.ok else "Device Agent sem health local"),
+            "summary": (
+                "Device Agent pronto para despacho Product"
+                if product_dispatch_ready
+                else (
+                    f"Processo local observado; despacho Product indisponível ({product_readiness_code})"
+                    if local_health
+                    else (resilience.summary if not resilience.ok else "Device Agent sem health local")
+                )
+            ),
         }
 
         base_url = str(config.product_mcp_url or "").rstrip("/")
