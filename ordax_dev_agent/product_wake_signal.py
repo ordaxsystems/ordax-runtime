@@ -42,6 +42,9 @@ class ProductWakeListener:
         connect_websocket: Callable = connect,
     ) -> None:
         self.url = trusted_wake_url(str(getattr(control, "base_http_url")))
+        # Reuse the SAME selector used by heartbeat/claim on this agent.
+        # No second ingress state machine or credentials may be created.
+        self._trusted_ingress = getattr(control, "_trusted_ingress")
         self.headers = {
             "x-ordax-device-id": str(getattr(control, "device_id")),
             "x-ordax-device-token": str(getattr(control, "device_token")),
@@ -77,14 +80,17 @@ class ProductWakeListener:
                 self.wake.set()
                 return
             try:
-                with self._connect(
-                    self.url,
-                    additional_headers=self.headers,
-                    open_timeout=10,
-                    close_timeout=3,
-                    ping_interval=20,
-                    ping_timeout=10,
-                    max_size=32,
+                with self._trusted_ingress.websocket(
+                    WAKE_PATH,
+                    lambda url: self._connect(
+                        url,
+                        additional_headers=self.headers,
+                        open_timeout=10,
+                        close_timeout=3,
+                        ping_interval=20,
+                        ping_timeout=10,
+                        max_size=32,
+                    ),
                 ) as socket:
                     self.connected.set()
                     self.wake.set()  # reconcile a job accepted during reconnect
