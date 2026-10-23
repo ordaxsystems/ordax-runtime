@@ -40,6 +40,12 @@ python3 -m tools.ci.probe_native_buildroot_agent \
   --extracted-private-root /sandbox/verified-target
 ```
 
+Alternatively replace `--extracted-private-root /sandbox/verified-target` with
+`--stage-private-target` to verify and extract the exact OS target TAR to a
+fresh disposable directory via one file descriptor, SHA-256 before/after,
+strict member preflight and Python's standard `tarfile` `data` extraction
+filter. The same canonical probe and all non-installation guarantees apply.
+
 This runs the **existing** `ordax_dev_agent.native_main.self_test()` and
 constructs the canonical Product HTTP client using the private Buildroot
 CPython/musl interpreter and this checkout's source. Device credentials

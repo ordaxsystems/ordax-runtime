@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import tarfile
 import tempfile
 
 from tools.ci.audit_independent_python_proof import (
@@ -175,14 +176,100 @@ def probe(receipt_path: Path, target_tar: Path, extracted_root: Path) -> dict:
     return summary
 
 
+
+def stage_verified_target(target_tar: Path, expected_sha256: str, destination: Path) -> None:
+    """Safely stage one verified OS Buildroot target in a NEW temporary directory.
+
+    A development-only input for the existing canonical probe(), never an
+    installation, alternate agent, SDK builder or OS rootfs replacement.
+    """
+    if destination.exists() or destination.is_symlink():
+        raise ProofError("private probe staging directory already exists")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+        raise ProofError("private probe target hash invalid")
+    try:
+        fd = os.open(target_tar, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError as exc:
+        raise ProofError("private probe target TAR missing or unsafe") from exc
+    with os.fdopen(fd, "rb") as source:
+        before = os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 1024 * 1024 * 1024:
+            raise ProofError("private probe target TAR size/type invalid")
+        h = hashlib.sha256()
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            h.update(block)
+        if h.hexdigest() != expected_sha256:
+            raise ProofError("private probe target bytes changed since OS receipt")
+        source.seek(0)
+        try:
+            with tarfile.open(fileobj=source, mode="r:") as archive:
+                seen = set()
+                total = 0
+                for n, member in enumerate(archive, 1):
+                    if n > 200000:
+                        raise ProofError("private probe TAR entry limit exceeded")
+                    if member.name in (".", "./"):
+                        if not member.isdir():
+                            raise ProofError("private probe root TAR member is not a directory")
+                        continue
+                    name = member.name.removeprefix("./").rstrip("/")
+                    if (not name or name in seen or name.startswith("/")
+                            or any(part in ("", ".", "..") for part in name.split("/"))):
+                        raise ProofError("private probe TAR path is unsafe or duplicated")
+                    if not (member.isfile() or member.isdir() or member.issym()):
+                        raise ProofError("private probe TAR contains special files or hard links")
+                    seen.add(name)
+                    if member.isfile():
+                        total += member.size
+                        if total > 1024 * 1024 * 1024:
+                            raise ProofError("private probe TAR expanded size limit exceeded")
+            destination.mkdir(mode=0o700)
+            source.seek(0)
+            with tarfile.open(fileobj=source, mode="r:") as archive:
+                archive.extractall(destination, filter="data")
+        except ProofError:
+            raise
+        except (tarfile.TarError, OSError, ValueError) as exc:
+            raise ProofError("private probe target extraction was rejected") from exc
+        source.seek(0)
+        final = hashlib.sha256()
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            final.update(block)
+        after = os.fstat(source.fileno())
+        if (final.hexdigest() != expected_sha256 or
+                (before.st_dev, before.st_ino, before.st_size,
+                 before.st_mtime_ns, before.st_ctime_ns) !=
+                (after.st_dev, after.st_ino, after.st_size,
+                 after.st_mtime_ns, after.st_ctime_ns)):
+            raise ProofError("private probe TAR changed during extraction")
+
+
+def probe_staged(receipt_path: Path, target_tar: Path) -> dict:
+    """Verify, stage and execute the existing single canonical probe."""
+    receipt, _ = load_json(receipt_path, 64 * 1024)
+    verified = verify_private_target_tar(target_tar, receipt)
+    if verified.get("os_private_build_input_verified") is not True:
+        raise ProofError("private OS target verification failed")
+    with tempfile.TemporaryDirectory(prefix="ordax-native-private-staging-") as temp:
+        root = Path(temp) / "target"
+        stage_verified_target(target_tar, verified["private_target_tar_sha256"], root)
+        return probe(receipt_path, target_tar, root)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--private-target-tar", type=Path, required=True)
-    parser.add_argument("--extracted-private-root", type=Path, required=True)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--extracted-private-root", type=Path)
+    group.add_argument("--stage-private-target", action="store_true",
+                       help="Stage the verified OS Buildroot TAR in disposable storage")
     args = parser.parse_args()
     try:
-        result = probe(args.receipt, args.private_target_tar, args.extracted_private_root)
+        result = (probe_staged(args.receipt, args.private_target_tar)
+                  if args.stage_private_target else
+                  probe(args.receipt, args.private_target_tar, args.extracted_private_root))
     except (ProofError, OSError, ValueError) as exc:
         print(json.dumps({
             "schema": RESULT_SCHEMA, "failure": str(exc),
