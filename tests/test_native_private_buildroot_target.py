@@ -124,6 +124,17 @@ class NativePrivateBuildrootTargetTests(unittest.TestCase):
             with self.subTest(receipt=receipt), self.assertRaisesRegex(ProofError, "no OS-issued"):
                 verify_private_target_tar(self.target, receipt)
 
+    def test_strict_module_cli_does_not_treat_missing_archive_as_success(self):
+        process = subprocess.run(
+            [sys.executable, "-m", "tools.ci.audit_independent_python_proof",
+             "--receipt", str(self.folder / "absent.json"),
+             "--os-source", str(self.folder / "absent-source.json"),
+             "--require-private-target"],
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(process.returncode, 2, process.stderr)
+        self.assertIn("private Buildroot target TAR required", process.stdout)
+
     def test_strict_cli_does_not_treat_missing_archive_as_success(self):
         process = subprocess.run(
             [sys.executable, "tools/ci/audit_independent_python_proof.py",
