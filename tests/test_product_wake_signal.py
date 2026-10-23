@@ -1,11 +1,15 @@
 """Offline wake protocol tests; no SQL, auth, network, local privileges or grants."""
 from __future__ import annotations
 
+import json
 import threading
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.product_wake_signal import (
     ProductWakeListener, WAKE_MESSAGE, trusted_wake_url,
 )
@@ -116,6 +120,27 @@ class ProductWakeTests(unittest.TestCase):
         stop.set()
         listener.close()
         self.assertEqual(socket.closed[:1], [(1008, "invalid_product_wake")])
+
+    def test_wake_mode_defaults_off_and_requires_explicit_owner_setting(self):
+        with TemporaryDirectory() as folder:
+            local = Path(folder)
+            settings_dir = local / "OrdaX" / "DevAgent"
+            settings_dir.mkdir(parents=True)
+            settings = settings_dir / "agent-settings.json"
+            with patch.dict("os.environ", {"LOCALAPPDATA": str(local)}, clear=True):
+                self.assertFalse(AgentConfig.from_env().product_wake_enabled)
+                settings.write_text(json.dumps({"product_wake_enabled": True}), encoding="utf-8")
+                self.assertTrue(AgentConfig.from_env().product_wake_enabled)
+                with patch.dict("os.environ", {"ORDAX_PRODUCT_WAKE_MODE": "disabled"}):
+                    self.assertFalse(AgentConfig.from_env().product_wake_enabled)
+                with patch.dict("os.environ", {"ORDAX_PRODUCT_WAKE_MODE": "enabled"}):
+                    self.assertTrue(AgentConfig.from_env().product_wake_enabled)
+                with patch.dict("os.environ", {"ORDAX_PRODUCT_WAKE_MODE": "unexpected"}):
+                    with self.assertRaises(ValueError):
+                        AgentConfig.from_env()
+                settings.write_text(json.dumps({"product_wake_enabled": "enabled"}), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    AgentConfig.from_env()
 
     def test_local_owner_revoke_prevents_signalling_handshake(self):
         stop = threading.Event()
