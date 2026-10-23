@@ -73,6 +73,27 @@ class NativeBuildrootSourceBootstrapTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["PYTHONHOME"], str(self.root / "usr"))
         self.assertEqual(kwargs["timeout"], 60)
 
+    def test_exception_failure_reports_only_type_not_sensitive_traceback(self):
+        process = self.completed(
+            exit_code=1,
+            error="Traceback (most recent call last):\n"
+                  "  File '/home/runner/private/source.py', line 2\n"
+                  "RuntimeError: private session_token_should_not_be_logged\n",
+        )
+        with patch.object(target.subprocess, "run", return_value=process):
+            report = target.probe(self.receipt, self.tar, self.root)
+        self.assertEqual(report["failure"], "native_bootstrap_exception")
+        self.assertEqual(report["exception_type"], "RuntimeError")
+        self.assertNotIn("session_token", json.dumps(report))
+        self.assertFalse(report["device_install_authorized"])
+
+    def test_native_loader_failure_reports_only_library_name(self):
+        failure = target._classify_native_bootstrap_failure(
+            "Error loading shared library libmissing.so.1: No such file\n", 127
+        )
+        self.assertEqual(failure["failure"], "native_missing_shared_library")
+        self.assertEqual(failure["shared_library"], "libmissing.so.1")
+
     def test_missing_import_is_reported_without_leaking_traceback(self):
         result = self.completed(exit_code=1, error=(
             "Traceback (most recent call last):\n"
