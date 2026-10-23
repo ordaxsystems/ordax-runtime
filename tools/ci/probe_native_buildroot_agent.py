@@ -200,7 +200,7 @@ def stage_verified_target(target_tar: Path, expected_sha256: str, destination: P
         for block in iter(lambda: source.read(1024 * 1024), b""):
             h.update(block)
         if h.hexdigest() != expected_sha256:
-            raise ProofError("private probe target bytes differ from OS receipt")
+            raise ProofError("private probe target bytes changed since OS receipt")
         source.seek(0)
         try:
             with tarfile.open(fileobj=source, mode="r:") as archive:
@@ -211,14 +211,14 @@ def stage_verified_target(target_tar: Path, expected_sha256: str, destination: P
                         raise ProofError("private probe TAR entry limit exceeded")
                     if member.name in (".", "./"):
                         if not member.isdir():
-                            raise ProofError("private probe root TAR member must be directory")
+                            raise ProofError("private probe root TAR member is not a directory")
                         continue
                     name = member.name.removeprefix("./").rstrip("/")
                     if (not name or name in seen or name.startswith("/")
                             or any(part in ("", ".", "..") for part in name.split("/"))):
-                        raise ProofError("private probe TAR path unsafe or duplicated")
+                        raise ProofError("private probe TAR path is unsafe or duplicated")
                     if not (member.isfile() or member.isdir() or member.issym()):
-                        raise ProofError("private probe TAR contains special file or hardlink")
+                        raise ProofError("private probe TAR contains special files or hard links")
                     seen.add(name)
                     if member.isfile():
                         total += member.size
@@ -231,7 +231,7 @@ def stage_verified_target(target_tar: Path, expected_sha256: str, destination: P
         except ProofError:
             raise
         except (tarfile.TarError, OSError, ValueError) as exc:
-            raise ProofError("private probe TAR extraction rejected") from exc
+            raise ProofError("private probe target extraction was rejected") from exc
         source.seek(0)
         final = hashlib.sha256()
         for block in iter(lambda: source.read(1024 * 1024), b""):
