@@ -27,6 +27,8 @@ class AgentConfig:
     workspace_root: Path | None = None
     # Trusted host-owned authority paths; never loaded from remote payloads.
     protected_roots: tuple[Path, ...] = ()
+    # Off until the canonical MCP Worker wake DO rollout is validated.
+    product_wake_enabled: bool = False
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
@@ -55,6 +57,16 @@ class AgentConfig:
         if not isinstance(settings.get("adapters", []), list):
             raise ValueError("adapters must be a list of locally installed adapter names")
 
+        wake_setting = settings.get("product_wake_enabled", False)
+        if not isinstance(wake_setting, bool):
+            raise ValueError("product_wake_enabled must be a boolean")
+        wake_override = os.environ.get("ORDAX_PRODUCT_WAKE_MODE")
+        if wake_override is not None and wake_override not in {"enabled", "disabled"}:
+            raise ValueError("ORDAX_PRODUCT_WAKE_MODE must be 'enabled' or 'disabled'")
+        wake_enabled = (
+            wake_setting if wake_override is None else wake_override == "enabled"
+        )
+
         projects = settings.get("projects")
         default_project = settings.get("default_project", "hordax")
         if (
@@ -76,6 +88,7 @@ class AgentConfig:
             default_project=default_project,
             adapters=tuple(settings.get("adapters", [])),
             control_plane_protocol="cloudflare-v3",
+            product_wake_enabled=wake_enabled,
             device_id=os.environ.get(
                 "ORDAX_DEVICE_ID",
                 settings.get("device_id"),
@@ -159,6 +172,7 @@ class AgentConfig:
             "product_mcp_url_configured": bool(self.product_mcp_url),
             "product_mcp_url": self.product_mcp_url,
             "control_plane_protocol": self.control_plane_protocol,
+            "product_wake_enabled": self.product_wake_enabled,
             "device_id_configured": bool(self.device_id),
             "device_id": self.device_id,
         }
