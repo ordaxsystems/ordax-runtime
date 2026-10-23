@@ -25,6 +25,40 @@ lock/recipe hashes and the offline proof. Byte-for-byte reproducibility has not
 been established. This is an unsigned candidate, not an installable signed OS
 component or evidence of physical notebook execution.
 
+## Execute the actual OS-private interpreter with the canonical agent source
+
+After independently authenticating an `ordax-os` Buildroot Private Python
+artifact, extract its **non-installable** target TAR only into a disposable
+Linux CI sandbox. The exact TAR must be passed back to the canonical
+read-only reconciler; the extracted tree supplies executable bytes, not a
+new runtime owner.
+
+```sh
+python3 -m tools.ci.probe_native_buildroot_agent \
+  --receipt /verified/native-python-provenance.json \
+  --private-target-tar /verified/native-python-build-input.rootfs.tar \
+  --extracted-private-root /sandbox/verified-target
+```
+
+Alternatively replace `--extracted-private-root /sandbox/verified-target` with
+`--stage-private-target` to verify and extract the exact OS target TAR to a
+fresh disposable directory via one file descriptor, SHA-256 before/after,
+strict member preflight and Python's standard `tarfile` `data` extraction
+filter. The same canonical probe and all non-installation guarantees apply.
+
+This runs the **existing** `ordax_dev_agent.native_main.self_test()` and
+constructs the canonical Product HTTP client using the private Buildroot
+CPython/musl interpreter and this checkout's source. Device credentials
+and remote network calls are prohibited; test process/file operations use
+the disposable *host* Linux environment, so the result is **not** a QEMU,
+signed component or physical device proof. Missing external imports are
+reported as `native_missing_import` plus the first module name.
+Exit code **0** means only offline source bootstrap worked; **1** means
+bootstrap did not work; **2** means evidence/input validation failed.
+Every result keeps `device_install_authorized=false` and
+`full_native_runtime_dependency_closure_proven=false` even on success.
+Never run this probe with a privileged OS root or on a production notebook.
+
 ## Verified Buildroot-private Python versus Runtime lock
 
 The OS-owned experimental Independent Base job [39736013343](https://github.com/ordaxsystems/ordax-os/actions/runs/39736013343)
@@ -61,48 +95,6 @@ matching versions may turn on `device_install_authorized`,
 `device_execution_proven` or `full_native_runtime_dependency_closure_proven`.
 The next compatible native build must use OS-owned Buildroot inputs and
 verify the complete Runtime import graph and kernel execution.
-
-## Probe the real Native agent on the verified private Buildroot Python
-
-The OS migration's independent Native component now publishes
-`native-python-build-input.rootfs.tar`,
-`ordax-native-product-runtime-sdk.tar.gz`, and
-`native-python-provenance.json`. These inputs belong to **ordax-os**;
-the SDK is generated from the same Buildroot `O=...` compilation, and
-**neither artifact is an installable runtime**. Obtain them from an
-authenticated, successful OS workflow run and verify its source commit.
-
-To probe the **canonical** device executor against that Python and its
-musl libraries, use a checked-out `ordax-runtime` source tree:
-
-```sh
-python3 -m tools.ci.probe_native_buildroot_agent \
-  --receipt /verified/native-python-provenance.json \
-  --os-source /verified/ordax-os/bootstrap/independent-base/source.json \
-  --private-target-tar /verified/native-python-build-input.rootfs.tar \
-  --private-sdk-tar /verified/ordax-native-product-runtime-sdk.tar.gz \
-  --source-tree . \
-  --requirements native/ordax-product-agent/requirements.lock
-```
-
-The probe **first** runs the existing Runtime reconciliation to validate
-the OS target and SDK receipts and original bytes. It then stages the target
-**only** in a disposable private directory, rejecting unsafe archive paths,
-special entries, tampering and out-of-root links, and invokes the existing
-`ordax_dev_agent.native_main.self_test` and
-`ProductDeviceControlPlane` using the target's actual musl loader and
-CPython, without opening a Product connection or using live credentials.
-
-A returned failure is a **real blocker**, not a reason to skip the
-test or fabricate a successful MCP session. In particular, supervised
-subprocess execution under a foreign host may need a properly mounted
-isolated Linux rootfs for the absolute musl ELF interpreter; the same
-probe must subsequently be exercised inside OS-owned QEMU. Passing this
-host-only test does **not** prove agent packaging, closure, desktop
-graphics, attested session, signed delivery or notebook functionality.
-The result always retains `device_install_authorized=false` and
-`attested_session=false`. Do not extract the verified input over the
-running OS, `/lib`, or a USB component slot.
 
 ## Independent Base / kernel-only ABI gate
 

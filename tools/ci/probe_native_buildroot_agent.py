@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Probe the ONE native OrdaX agent against an OS-owned private Buildroot Python.
+"""Run the canonical Native agent against a verified private Buildroot Python.
 
-This is a read-only, offline development gate, NOT a builder, installer,
-signed runtime candidate, or a proof of device attestation.
+Diagnostic only. The OS owns the Python/TAR; this never installs to a device,
+creates credentials, grants MCP access or certifies the full Runtime closure.
+Run inside a disposable Linux CI container with networking disabled.
 """
 from __future__ import annotations
 
@@ -11,40 +12,50 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
-import sys
 import tarfile
 import tempfile
 
-if __name__ == "__main__" and not __package__:
-    # Direct file-path invocation places tools/ci on sys.path.
-    from audit_independent_python_proof import ProofError, reconcile
-else:
-    from tools.ci.audit_independent_python_proof import ProofError, reconcile
+from tools.ci.audit_independent_python_proof import (
+    ProofError,
+    load_json,
+    verify_private_target_tar,
+)
 
-
-# Must remain the actual Native entrypoint and Product HTTPX transport,
-# not a copied action registry or a second device dispatcher.
-_OFFLINE_BOOTSTRAP = r"""
+ROOT = Path(__file__).resolve().parents[2]
+RESULT_SCHEMA = "ordax.native-buildroot-agent-bootstrap-probe/1"
+MARKER = "ORDAX_NATIVE_BOOTSTRAP_PROOF="
+MISSING_MODULE = re.compile(r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]")
+# This subprocess is intentionally NOT an OS action service. No device state,
+# MCP tokens or Product network endpoints may be supplied to it.
+CHILD = """
 import json
+import socket
+import sys
 import tempfile
 from pathlib import Path
 
+def network_forbidden(*args, **kwargs):
+    raise RuntimeError("native_bootstrap_network_forbidden")
+
+socket.socket.connect = network_forbidden
+socket.socket.connect_ex = network_forbidden
+socket.create_connection = network_forbidden
+
+sys.path.insert(0, sys.argv[1])
 from ordax_dev_agent.native_main import native_config, self_test
 from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
 
 proof = self_test()
 if not proof.get("ok") or proof.get("network_used") or proof.get("device_credential_used"):
-    raise RuntimeError("canonical native offline self-test failed closed")
-if proof.get("graphical_actions"):
-    raise RuntimeError("graphical device adapter was not proven")
-
-device_id = "22222222-2222-4222-8222-222222222222"
-with tempfile.TemporaryDirectory(prefix="ordax-native-agent-") as temporary:
+    raise RuntimeError("native_offline_self_test_not_proven")
+with tempfile.TemporaryDirectory(prefix="ordax-native-device-probe-") as temporary:
     root = Path(temporary)
     private = root / "private"
     private.mkdir(mode=0o700)
+    device_id = "22222222-2222-4222-8222-222222222222"
     config = native_config(private, root, device_id)
     control = ProductDeviceControlPlane(
         config,
@@ -53,204 +64,220 @@ with tempfile.TemporaryDirectory(prefix="ordax-native-agent-") as temporary:
         },
     )
     try:
-        if control.runtime_kind != "ordax-os":
-            raise RuntimeError("wrong canonical runtime")
+        if control.runtime_kind != "ordax-os" or control.device_id != device_id:
+            raise RuntimeError("native_product_transport_identity_mismatch")
         if control.product_central_session.status.confirmed:
-            raise RuntimeError("offline probe must never claim an attested session")
+            raise RuntimeError("native_offline_probe_claimed_remote_attestation")
     finally:
         control.product_central_session.close()
         control.http.close()
-
-print(json.dumps({
-    "native_self_test_ok": True,
-    "action_count": proof["registered_action_count"],
-    "product_httpx_client_initialized": True,
+print("ORDAX_NATIVE_BOOTSTRAP_PROOF=" + json.dumps({
+    "offline_actions_proven": True,
+    "product_httpx_client_constructed": True,
+    "registered_action_count": proof["registered_action_count"],
     "network_used": False,
     "device_credential_used": False,
-    "attested_session": False,
-    "runtime_agent_packaged": False,
-    "device_install_authorized": False,
 }, sort_keys=True))
 """
 
 
-def _stage_verified_target(target_tar: Path, expected_sha256: str, destination: Path) -> None:
-    """Extract only into a fresh private staging directory using Python's data filter.
+def checked_file(path: Path, *, limit: int) -> Path:
+    if not path.is_file() or path.is_symlink():
+        raise ProofError("private Buildroot executable or loader missing/unsafe")
+    st = path.stat()
+    if not stat.S_ISREG(st.st_mode) or not 0 < st.st_size <= limit:
+        raise ProofError("private Buildroot executable or loader size/type invalid")
+    return path
 
-    Never extract directly to an OS base, host /, component slot or USB.
-    Rehash from the SAME opened descriptor before and after extraction. Existing
-    receipt/target/package metadata verification happens before this function.
-    """
-    if destination.exists():
-        raise ProofError("private probe staging directory already exists")
-    destination.mkdir(mode=0o700)
-    try:
-        descriptor = os.open(
-            target_tar, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+
+def probe(receipt_path: Path, target_tar: Path, extracted_root: Path) -> dict:
+    if os.name != "posix" or not Path("/proc/self").exists():
+        raise ProofError("Native Buildroot smoke requires a disposable Linux host")
+    if extracted_root.is_symlink() or not extracted_root.is_dir():
+        raise ProofError("private Buildroot extraction root missing/unsafe")
+    receipt, _ = load_json(receipt_path, 64 * 1024)
+    # The existing reconciler is the sole verifier of the OS-issued TAR.
+    tar_proof = verify_private_target_tar(target_tar, receipt)
+    python_rel = receipt["python_abi"]["python_executable"]
+    root = extracted_root.resolve(strict=True)
+    binary = checked_file(root / python_rel, limit=128 * 1024 * 1024)
+    actual = hashlib.sha256(binary.read_bytes()).hexdigest()
+    if actual != tar_proof["python_elf_sha256"]:
+        raise ProofError("extracted Buildroot Python differs from verified TAR")
+    loader = root / "lib/ld-musl-x86_64.so.1"
+    if not loader.exists() or loader.is_symlink() and loader.resolve().parent != (root / "lib"):
+        raise ProofError("private Buildroot loader missing or outside target root")
+    loader = checked_file(loader.resolve(), limit=16 * 1024 * 1024)
+    for directory in (root / "usr/lib/python3.14", root / "usr/lib", root / "lib"):
+        if not directory.is_dir() or directory.is_symlink():
+            raise ProofError("private Buildroot stdlib/library root unavailable")
+    if not (ROOT / "ordax_dev_agent/native_main.py").is_file():
+        raise ProofError("canonical checked-out Native agent source unavailable")
+    with tempfile.TemporaryDirectory(prefix="ordax-native-bootstrap-execution-") as scratch:
+        # -I isolates Python from user/site environment. Interpreter/stdlib/libs
+        # are the OS private target, never the host's Python packages.
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": scratch,
+            "LANG": "C",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONHOME": str(root / "usr"),
+            "LD_LIBRARY_PATH": str(root / "lib") + ":" + str(root / "usr/lib"),
+        }
+        command = [str(loader), str(binary), "-I", "-B", "-c", CHILD, str(ROOT)]
+        try:
+            execution = subprocess.run(
+                command, cwd=scratch, env=env,
+                text=True, capture_output=True, timeout=60, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            execution = subprocess.CompletedProcess(command, 124, "", "timeout")
+    summary = {
+        "schema": RESULT_SCHEMA,
+        "private_python_sha256": actual,
+        "os_target_tar_verified": True,
+        "canonical_runtime_source": True,
+        "offline_bootstrap_proven": False,
+        "full_native_runtime_dependency_closure_proven": False,
+        "native_runtime_agent_packaged": False,
+        "device_install_authorized": False,
+        "device_execution_proven": False,
+    }
+    if execution.returncode:
+        missing = MISSING_MODULE.search(execution.stderr)
+        summary["failure"] = (
+            "native_missing_import" if missing else
+            "native_bootstrap_timeout" if execution.returncode == 124 else
+            "native_bootstrap_failed"
         )
+        if missing:
+            summary["missing_module"] = missing.group(1)
+        return summary
+    lines = [line.removeprefix(MARKER) for line in execution.stdout.splitlines()
+             if line.startswith(MARKER)]
+    if len(lines) != 1:
+        summary["failure"] = "native_bootstrap_proof_missing"
+        return summary
+    try:
+        proof = json.loads(lines[0])
+    except json.JSONDecodeError:
+        summary["failure"] = "native_bootstrap_proof_invalid"
+        return summary
+    if (proof.get("offline_actions_proven") is not True
+            or proof.get("product_httpx_client_constructed") is not True
+            or proof.get("network_used") is not False
+            or proof.get("device_credential_used") is not False
+            or type(proof.get("registered_action_count")) is not int
+            or proof["registered_action_count"] < 100):
+        summary["failure"] = "native_bootstrap_proof_invalid"
+        return summary
+    summary["offline_bootstrap_proven"] = True
+    summary["registered_action_count"] = proof["registered_action_count"]
+    return summary
+
+
+
+def stage_verified_target(target_tar: Path, expected_sha256: str, destination: Path) -> None:
+    """Safely stage one verified OS Buildroot target in a NEW temporary directory.
+
+    A development-only input for the existing canonical probe(), never an
+    installation, alternate agent, SDK builder or OS rootfs replacement.
+    """
+    if destination.exists() or destination.is_symlink():
+        raise ProofError("private probe staging directory already exists")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+        raise ProofError("private probe target hash invalid")
+    try:
+        fd = os.open(target_tar, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError as exc:
-        raise ProofError("private probe target is missing or unsafe") from exc
-    with os.fdopen(descriptor, "rb") as source:
-        first = os.fstat(source.fileno())
-        if not stat.S_ISREG(first.st_mode) or not 0 < first.st_size <= 1024 * 1024 * 1024:
-            raise ProofError("private probe target is not a bounded regular file")
+        raise ProofError("private probe target TAR missing or unsafe") from exc
+    with os.fdopen(fd, "rb") as source:
+        before = os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 1024 * 1024 * 1024:
+            raise ProofError("private probe target TAR size/type invalid")
         h = hashlib.sha256()
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            h.update(chunk)
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            h.update(block)
         if h.hexdigest() != expected_sha256:
-            raise ProofError("private probe target bytes changed since OS receipt")
+            raise ProofError("private probe target bytes differ from OS receipt")
         source.seek(0)
         try:
             with tarfile.open(fileobj=source, mode="r:") as archive:
-                # Fail before extraction on specials, duplicates and path aliasing.
                 seen = set()
-                count = 0
-                for member in archive:
-                    count += 1
-                    if count > 200000:
-                        raise ProofError("private probe archive entry limit exceeded")
-                    # Buildroot rootfs.tar begins with a canonical '.' directory.
-                    # A root file/link remains forbidden; only this directory
-                    # header is allowed, with no destination path created.
+                total = 0
+                for n, member in enumerate(archive, 1):
+                    if n > 200000:
+                        raise ProofError("private probe TAR entry limit exceeded")
                     if member.name in (".", "./"):
                         if not member.isdir():
-                            raise ProofError("private probe root TAR member is not a directory")
+                            raise ProofError("private probe root TAR member must be directory")
                         continue
                     name = member.name.removeprefix("./").rstrip("/")
                     if (not name or name in seen or name.startswith("/")
                             or any(part in ("", ".", "..") for part in name.split("/"))):
-                        raise ProofError("private probe archive path is unsafe or duplicated")
+                        raise ProofError("private probe TAR path unsafe or duplicated")
                     if not (member.isfile() or member.isdir() or member.issym()):
-                        raise ProofError("private probe refuses special files and hard links")
+                        raise ProofError("private probe TAR contains special file or hardlink")
                     seen.add(name)
-                source.seek(0)
-                with tarfile.open(fileobj=source, mode="r:") as archive:
-                    # "data" rejects outside-root links, devices, unsafe permissions
-                    # and traversal; unlike fully_trusted it is safe for untrusted tar.
-                    archive.extractall(destination, filter="data")
+                    if member.isfile():
+                        total += member.size
+                        if total > 1024 * 1024 * 1024:
+                            raise ProofError("private probe TAR expanded size limit exceeded")
+            destination.mkdir(mode=0o700)
+            source.seek(0)
+            with tarfile.open(fileobj=source, mode="r:") as archive:
+                archive.extractall(destination, filter="data")
         except ProofError:
-            # Preserve an actionable canonical policy rejection; it must not
-            # be disguised as an unrelated low-level TAR extraction failure.
             raise
         except (tarfile.TarError, OSError, ValueError) as exc:
-            raise ProofError("private probe target extraction was rejected") from exc
+            raise ProofError("private probe TAR extraction rejected") from exc
         source.seek(0)
-        after_digest = hashlib.sha256()
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            after_digest.update(chunk)
-        last = os.fstat(source.fileno())
-        if (after_digest.hexdigest() != expected_sha256
-                or (first.st_dev, first.st_ino, first.st_size,
-                    first.st_mtime_ns, first.st_ctime_ns) !=
-                   (last.st_dev, last.st_ino, last.st_size,
-                    last.st_mtime_ns, last.st_ctime_ns)):
-            raise ProofError("private probe archive changed during staging")
+        final = hashlib.sha256()
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            final.update(block)
+        after = os.fstat(source.fileno())
+        if (final.hexdigest() != expected_sha256 or
+                (before.st_dev, before.st_ino, before.st_size,
+                 before.st_mtime_ns, before.st_ctime_ns) !=
+                (after.st_dev, after.st_ino, after.st_size,
+                 after.st_mtime_ns, after.st_ctime_ns)):
+            raise ProofError("private probe TAR changed during extraction")
 
 
-def offline_probe(receipt: Path, os_source: Path, lock: Path, target_tar: Path,
-                  source_tree: Path, sdk_tar: Path | None = None) -> dict:
-    """Return a precise, non-installable diagnostic or fail closed."""
-    required = (
-        "ordax_dev_agent/native_main.py",
-        "ordax_dev_agent/product_device_control_plane.py",
-        "ordax_core/__init__.py",
-        "ordax_connector/capabilities.py",
-        "mcp_blender_unity/__init__.py",
-    )
-    source_tree = source_tree.resolve(strict=True)
-    if any(not (source_tree / name).is_file() for name in required):
-        raise ProofError("native probe needs complete canonical Runtime source checkout")
-    verified = reconcile(
-        receipt, os_source, lock,
-        private_target_tar=target_tar, private_sdk_tar=sdk_tar,
-    )
-    target_proof = verified.get("private_os_build_input_verification")
-    if not isinstance(target_proof, dict) or target_proof.get("os_private_build_input_verified") is not True:
-        raise ProofError("private target has not passed canonical Runtime verification")
-    if sdk_tar is not None:
-        sdk = verified.get("private_os_sdk_build_input_verification")
-        if not isinstance(sdk, dict) or sdk.get("same_build_private_sdk_verified") is not True:
-            raise ProofError("private SDK has not passed canonical Runtime verification")
-    receipt_data = json.loads(receipt.read_text(encoding="utf-8"))
-    python_relative = receipt_data["python_abi"]["python_executable"]
-    if not python_relative.startswith("usr/bin/python3."):
-        raise ProofError("private Buildroot executable identity is invalid")
-    with tempfile.TemporaryDirectory(prefix="ordax-native-buildroot-probe-") as temporary:
-        base = Path(temporary)
-        staged = base / "target"
-        _stage_verified_target(target_tar, target_proof["private_target_tar_sha256"], staged)
-        loader = staged / "lib/ld-musl-x86_64.so.1"
-        python = staged / python_relative
-        if not loader.is_file() or not python.is_file():
-            raise ProofError("private Buildroot interpreter or musl loader unavailable")
-        version = python.name.removeprefix("python")
-        env = os.environ.copy()
-        for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONINSPECT",
-                    "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH"):
-            env.pop(key, None)
-        env.update({
-            "PYTHONHOME": str(staged / "usr"),
-            "PYTHONPATH": os.pathsep.join((
-                str(source_tree),
-                str(staged / "usr/lib" / ("python" + version) / "site-packages"),
-            )),
-            "LD_LIBRARY_PATH": str(staged / "lib") + ":" + str(staged / "usr/lib"),
-            "PYTHONNOUSERSITE": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "TMPDIR": str(base),
-            "HOME": str(base),
-        })
-        completed = subprocess.run(
-            [str(loader), str(python), "-S", "-s", "-B", "-c", _OFFLINE_BOOTSTRAP],
-            cwd=base, env=env, capture_output=True, text=True, timeout=90,
-            check=False,
-        )
-        if completed.returncode:
-            detail = (completed.stderr + completed.stdout)[-2400:]
-            raise ProofError("canonical Native Buildroot bootstrap failed: " + detail)
-        try:
-            probe = json.loads(completed.stdout.strip().splitlines()[-1])
-        except (IndexError, ValueError) as exc:
-            raise ProofError("canonical Native Buildroot probe did not return JSON") from exc
-        if (probe.get("native_self_test_ok") is not True
-                or probe.get("product_httpx_client_initialized") is not True
-                or any(probe.get(x) is not False
-                       for x in ("network_used", "device_credential_used", "attested_session",
-                                 "runtime_agent_packaged", "device_install_authorized"))):
-            raise ProofError("canonical Native Buildroot bootstrap report is unsafe")
-    return {
-        "schema": "ordax.native-buildroot-offline-agent-probe/1",
-        "private_python_abi": receipt_data["python_abi"]["python_executable"],
-        "private_target_sha256": target_proof["private_target_tar_sha256"],
-        "native_import_and_self_test_proven": True,
-        "agent_observation": probe,
-        "full_native_runtime_dependency_closure_proven": False,
-        "ordax_usb_execution_proven": False,
-        "device_install_authorized": False,
-        "attested_session": False,
-    }
+def probe_staged(receipt_path: Path, target_tar: Path) -> dict:
+    """Verify, stage and execute the existing single canonical probe."""
+    receipt, _ = load_json(receipt_path, 64 * 1024)
+    verified = verify_private_target_tar(target_tar, receipt)
+    if verified.get("os_private_build_input_verified") is not True:
+        raise ProofError("private OS target verification failed")
+    with tempfile.TemporaryDirectory(prefix="ordax-native-private-staging-") as temp:
+        root = Path(temp) / "target"
+        stage_verified_target(target_tar, verified["private_target_tar_sha256"], root)
+        return probe(receipt_path, target_tar, root)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--receipt", type=Path, required=True)
-    parser.add_argument("--os-source", type=Path, required=True)
-    parser.add_argument("--requirements", type=Path,
-                        default=Path("native/ordax-product-agent/requirements.lock"))
     parser.add_argument("--private-target-tar", type=Path, required=True)
-    parser.add_argument("--private-sdk-tar", type=Path)
-    parser.add_argument("--source-tree", type=Path, default=Path("."))
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--extracted-private-root", type=Path)
+    group.add_argument("--stage-private-target", action="store_true",
+                       help="Stage the verified OS Buildroot TAR in disposable storage")
     args = parser.parse_args()
     try:
-        report = offline_probe(args.receipt, args.os_source, args.requirements,
-                               args.private_target_tar, args.source_tree,
-                               sdk_tar=args.private_sdk_tar)
-    except (ProofError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
-        print(json.dumps({"error": str(exc), "device_install_authorized": False}, sort_keys=True))
+        result = (probe_staged(args.receipt, args.private_target_tar)
+                  if args.stage_private_target else
+                  probe(args.receipt, args.private_target_tar, args.extracted_private_root))
+    except (ProofError, OSError, ValueError) as exc:
+        print(json.dumps({
+            "schema": RESULT_SCHEMA, "failure": str(exc),
+            "offline_bootstrap_proven": False, "device_install_authorized": False
+        }, sort_keys=True))
         return 2
-    print(json.dumps(report, sort_keys=True))
-    return 0
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["offline_bootstrap_proven"] else 1
 
 
 if __name__ == "__main__":
