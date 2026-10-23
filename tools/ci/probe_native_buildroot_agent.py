@@ -110,6 +110,13 @@ def _stage_verified_target(target_tar: Path, expected_sha256: str, destination: 
                     count += 1
                     if count > 200000:
                         raise ProofError("private probe archive entry limit exceeded")
+                    # Buildroot rootfs.tar begins with a canonical '.' directory.
+                    # A root file/link remains forbidden; only this directory
+                    # header is allowed, with no destination path created.
+                    if member.name in (".", "./"):
+                        if not member.isdir():
+                            raise ProofError("private probe root TAR member is not a directory")
+                        continue
                     name = member.name.removeprefix("./").rstrip("/")
                     if (not name or name in seen or name.startswith("/")
                             or any(part in ("", ".", "..") for part in name.split("/"))):
