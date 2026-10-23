@@ -94,6 +94,40 @@ class NativeBuildrootSourceBootstrapTests(unittest.TestCase):
         self.assertEqual(failure["failure"], "native_missing_shared_library")
         self.assertEqual(failure["shared_library"], "libmissing.so.1")
 
+    def test_private_container_uses_same_child_with_network_disabled(self):
+        image = "sha256:" + "a" * 64
+        container_result = self.completed()
+        outcomes = [
+            subprocess.CompletedProcess(["docker", "import"], 0, image + "\n", ""),
+            container_result,
+            subprocess.CompletedProcess(["docker", "image", "rm"], 0, "", ""),
+        ]
+        with patch("shutil.which", return_value="/usr/bin/docker"), patch.object(
+            target.subprocess, "run", side_effect=outcomes
+        ) as run:
+            result = target._execute_in_private_rootfs_container(
+                self.tar, "usr/bin/python3.14", target.ROOT,
+            )
+        self.assertEqual(result.returncode, 0)
+        command = run.call_args_list[1].args[0]
+        self.assertEqual(command[:2], ["docker", "run"])
+        self.assertEqual(command[command.index("--network") + 1], "none")
+        self.assertIn("--cap-drop", command)
+        self.assertIn("--read-only", command)
+        self.assertIn("--security-opt", command)
+        self.assertIn("-I", command)
+        self.assertIn(target.CHILD, command)
+        self.assertIn("/usr/bin/python3.14", command)
+        self.assertEqual(run.call_args_list[2].args[0], ["docker", "image", "rm", image])
+
+    def test_private_container_refuses_unknown_compiler_or_missing_engine(self):
+        with patch("shutil.which", return_value=None):
+            with self.assertRaisesRegex(target.ProofError, "container executor unavailable"):
+                target._execute_in_private_rootfs_container(self.tar, "usr/bin/python3.14", target.ROOT)
+        with patch("shutil.which", return_value="/usr/bin/docker"):
+            with self.assertRaisesRegex(target.ProofError, "Python container path invalid"):
+                target._execute_in_private_rootfs_container(self.tar, "../../host-python", target.ROOT)
+
     def test_missing_import_is_reported_without_leaking_traceback(self):
         result = self.completed(exit_code=1, error=(
             "Traceback (most recent call last):\n"
