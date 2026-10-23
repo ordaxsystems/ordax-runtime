@@ -52,10 +52,26 @@ def verify_private_target_tar(target_tar: Path, receipt: dict) -> dict:
     python_path = abi.get("python_executable")
     if not isinstance(python_path, str) or not PYTHON_TARGET_PATH.fullmatch(python_path):
         raise ProofError("private Buildroot target Python entrypoint is invalid")
+    built = receipt.get("httpx_buildroot_source_versions")
+    if (not isinstance(built, dict) or not 1 <= len(built) <= 64
+            or any(not isinstance(name, str) or not PKG.fullmatch(name)
+                   or not isinstance(version, str)
+                   or not re.fullmatch(r"[0-9]+(?:\.[0-9A-Za-z]+)+", version)
+                   for name, version in built.items())):
+        raise ProofError("private Buildroot target package receipt invalid")
+    minor = python_path.removeprefix("usr/bin/python")
+    site_packages = f"usr/lib/python{minor}/site-packages"
+    # Derive the expected metadata paths exclusively from the OS receipt:
+    # there is no second package roster or dependency lock here.
+    metadata = {
+        f"{site_packages}/{name}-{version}.dist-info/METADATA": (name, version)
+        for name, version in built.items()
+    }
     required = {
         python_path: "python",
         "lib/ld-musl-x86_64.so.1": "loader",
         "etc/ssl/certs/ca-certificates.crt": "ca",
+        **{path: "metadata" for path in metadata},
     }
     import os
     import posixpath
@@ -101,6 +117,26 @@ def verify_private_target_tar(target_tar: Path, receipt: dict) -> dict:
                                 python_sha.update(part)
                         if python_sha.hexdigest() != abi.get("python_sha256"):
                             raise ProofError("private Buildroot Python bytes do not match ABI receipt")
+                    elif kind == "metadata":
+                        if not member.isfile() or not 0 < member.size <= 64 * 1024:
+                            raise ProofError("private Buildroot distribution metadata unsafe")
+                        source = archive.extractfile(member)
+                        if source is None:
+                            raise ProofError("private Buildroot distribution metadata unreadable")
+                        with source:
+                            try:
+                                header = source.read(64 * 1024).decode("utf-8").split("\n\n", 1)[0]
+                            except UnicodeDecodeError as exc:
+                                raise ProofError("private Buildroot distribution metadata invalid") from exc
+                        lines = header.splitlines()
+                        fields = {
+                            key: [line.split(":", 1)[1].strip()
+                                  for line in lines if line.startswith(key + ":")]
+                            for key in ("Name", "Version")
+                        }
+                        name, version = metadata[path]
+                        if fields["Name"] != [name] or fields["Version"] != [version]:
+                            raise ProofError("private Buildroot distribution metadata disagrees with OS receipt")
                     elif kind == "loader" and not (member.isfile() or member.issym()):
                         raise ProofError("private Buildroot target musl loader missing")
                     elif kind == "ca" and not (member.isfile() or member.issym()):
@@ -133,6 +169,8 @@ def verify_private_target_tar(target_tar: Path, receipt: dict) -> dict:
         "private_target_tar_bytes": observed["size_bytes"],
         "python_elf_sha256": abi["python_sha256"],
         "os_private_build_input_verified": True,
+        "source_claimed_package_metadata_verified": len(metadata),
+        "full_native_runtime_dependency_closure_proven": False,
         "runtime_agent_packaged": False,
         "device_install_authorized": False,
     }

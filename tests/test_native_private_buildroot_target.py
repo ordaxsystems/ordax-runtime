@@ -18,6 +18,8 @@ from tools.ci.audit_independent_python_proof import (
 
 PYTHON = "usr/bin/python3.14"
 NAME = "native-python-build-input.rootfs.tar"
+DIST_METADATA = "usr/lib/python3.14/site-packages/httpx-0.28.1.dist-info/METADATA"
+DIST_BODY = b"Metadata-Version: 2.4\nName: httpx\nVersion: 0.28.1\n\n"
 
 
 class NativePrivateBuildrootTargetTests(unittest.TestCase):
@@ -34,15 +36,22 @@ class NativePrivateBuildrootTargetTests(unittest.TestCase):
         self.write_target()
         self.receipt = {
             "python_abi": dict(self.abi),
+            "httpx_buildroot_source_versions": {"httpx": "0.28.1"},
             "private_target_build_input": self.provenance(),
         }
 
-    def write_target(self, *, add_loader=True, duplicate_python=False):
+    def write_target(self, *, add_loader=True, duplicate_python=False,
+                     add_metadata=True, duplicate_metadata=False,
+                     metadata_body=DIST_BODY):
         with tarfile.open(self.target, "w") as tar:
             entries = [
                 (PYTHON, self.binary),
                 ("etc/ssl/certs/ca-certificates.crt", b"private CAs"),
             ]
+            if add_metadata:
+                entries.append((DIST_METADATA, metadata_body))
+            if duplicate_metadata:
+                entries.append(("./" + DIST_METADATA, metadata_body))
             if add_loader:
                 entries.append(("lib/ld-musl-x86_64.so.1", b"musl loader"))
             if duplicate_python:
@@ -71,6 +80,38 @@ class NativePrivateBuildrootTargetTests(unittest.TestCase):
         self.assertEqual(report["private_target_tar_sha256"], self.provenance()["sha256"])
         self.assertFalse(report["runtime_agent_packaged"])
         self.assertFalse(report["device_install_authorized"])
+        self.assertEqual(report["source_claimed_package_metadata_verified"], 1)
+        self.assertFalse(report["full_native_runtime_dependency_closure_proven"])
+
+    def test_missing_claimed_distribution_metadata_rejected_even_with_matching_archive_digest(self):
+        self.write_target(add_metadata=False)
+        self.receipt["private_target_build_input"] = self.provenance()
+        with self.assertRaisesRegex(ProofError, "lacks interpreter/loader/certificates"):
+            verify_private_target_tar(self.target, self.receipt)
+
+    def test_untrusted_distribution_version_rejected_even_with_matching_archive_digest(self):
+        self.write_target(metadata_body=b"Metadata-Version: 2.4\nName: httpx\nVersion: 9.9.9\n\n")
+        self.receipt["private_target_build_input"] = self.provenance()
+        with self.assertRaisesRegex(ProofError, "metadata disagrees"):
+            verify_private_target_tar(self.target, self.receipt)
+
+    def test_duplicate_distribution_metadata_rejected(self):
+        self.write_target(duplicate_metadata=True)
+        self.receipt["private_target_build_input"] = self.provenance()
+        with self.assertRaisesRegex(ProofError, "duplicate required entry"):
+            verify_private_target_tar(self.target, self.receipt)
+
+    def test_unjustified_package_claim_rejected(self):
+        self.receipt["httpx_buildroot_source_versions"] = {
+            "httpx": "0.28.1", "anyio": "4.13.0",
+        }
+        with self.assertRaisesRegex(ProofError, "lacks interpreter/loader/certificates"):
+            verify_private_target_tar(self.target, self.receipt)
+
+    def test_invalid_package_receipt_name_rejected(self):
+        self.receipt["httpx_buildroot_source_versions"] = {"../httpx": "0.28.1"}
+        with self.assertRaisesRegex(ProofError, "package receipt invalid"):
+            verify_private_target_tar(self.target, self.receipt)
 
     def test_mismatch_between_claimed_archive_and_bytes_is_rejected(self):
         changed = {
