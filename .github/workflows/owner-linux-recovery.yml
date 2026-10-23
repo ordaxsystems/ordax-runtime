@@ -33,7 +33,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.23.2"
-          cache-dependency-path: native/ordax-owner-recovery/go.sum
+          cache-dependency-path: native/ordax-owner-recovery/go.mod
       - name: Test narrow owner recovery agent
         working-directory: native/ordax-owner-recovery
         run: go test ./...
