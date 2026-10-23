@@ -12,7 +12,12 @@ import json
 from pathlib import Path
 import re
 
-from tools.ci.audit_buildroot_lock import read_requirements
+if __package__:
+    from .audit_buildroot_lock import read_requirements
+else:
+    # Executing the canonical read-only auditor directly by file path is a
+    # supported CLI. The sibling module is already on sys.path in this mode.
+    from audit_buildroot_lock import read_requirements
 
 RECEIPT_SCHEMA = "ordax.private-native-python-build-proof/1"
 SOURCE_SCHEMA = "prototype-ordax.independent-base-experiment/1"
