@@ -25,6 +25,34 @@ lock/recipe hashes and the offline proof. Byte-for-byte reproducibility has not
 been established. This is an unsigned candidate, not an installable signed OS
 component or evidence of physical notebook execution.
 
+## Execute the actual OS-private interpreter with the canonical agent source
+
+After independently authenticating an `ordax-os` Buildroot Private Python
+artifact, extract its **non-installable** target TAR only into a disposable
+Linux CI sandbox. The exact TAR must be passed back to the canonical
+read-only reconciler; the extracted tree supplies executable bytes, not a
+new runtime owner.
+
+```sh
+python3 -m tools.ci.probe_native_buildroot_agent \
+  --receipt /verified/native-python-provenance.json \
+  --private-target-tar /verified/native-python-build-input.rootfs.tar \
+  --extracted-private-root /sandbox/verified-target
+```
+
+This runs the **existing** `ordax_dev_agent.native_main.self_test()` and
+constructs the canonical Product HTTP client using the private Buildroot
+CPython/musl interpreter and this checkout's source. Device credentials
+and remote network calls are prohibited; test process/file operations use
+the disposable *host* Linux environment, so the result is **not** a QEMU,
+signed component or physical device proof. Missing external imports are
+reported as `native_missing_import` plus the first module name.
+Exit code **0** means only offline source bootstrap worked; **1** means
+bootstrap did not work; **2** means evidence/input validation failed.
+Every result keeps `device_install_authorized=false` and
+`full_native_runtime_dependency_closure_proven=false` even on success.
+Never run this probe with a privileged OS root or on a production notebook.
+
 ## Verified Buildroot-private Python versus Runtime lock
 
 The OS-owned experimental Independent Base job [39736013343](https://github.com/ordaxsystems/ordax-os/actions/runs/39736013343)
