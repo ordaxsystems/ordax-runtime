@@ -118,6 +118,10 @@ def _stage_verified_target(target_tar: Path, expected_sha256: str, destination: 
                     # "data" rejects outside-root links, devices, unsafe permissions
                     # and traversal; unlike fully_trusted it is safe for untrusted tar.
                     archive.extractall(destination, filter="data")
+        except ProofError:
+            # Preserve an actionable canonical policy rejection; it must not
+            # be disguised as an unrelated low-level TAR extraction failure.
+            raise
         except (tarfile.TarError, OSError, ValueError) as exc:
             raise ProofError("private probe target extraction was rejected") from exc
         source.seek(0)
