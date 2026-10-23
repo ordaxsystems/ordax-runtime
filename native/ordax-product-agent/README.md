@@ -46,6 +46,18 @@ fresh disposable directory via one file descriptor, SHA-256 before/after,
 strict member preflight and Python's standard `tarfile` `data` extraction
 filter. The same canonical probe and all non-installation guarantees apply.
 
+For **the complete Native supervised-process self-test**, use
+`--stage-private-target --run-in-private-container` on an ephemeral Linux
+runner with Docker. This imports only the already audited OS-private
+Buildroot rootfs into a temporary, immediately deleted test image and runs
+the **same canonical CHILD** inside it, with `--network none`,
+`--cap-drop ALL`, `--read-only` and the Runtime source mounted read-only.
+Unlike executing private Python with an explicit musl loader on Ubuntu,
+subprocesses created through `sys.executable` can now find their ELF
+interpreter inside the private Buildroot `/lib`. This is a **test-only**
+environment, not a new Runtime owner, signed image, USB modification,
+deployment, GPU/compositor proof or attested MCP session.
+
 This runs the **existing** `ordax_dev_agent.native_main.self_test()` and
 constructs the canonical Product HTTP client using the private Buildroot
 CPython/musl interpreter and this checkout's source. Device credentials
