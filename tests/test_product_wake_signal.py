@@ -121,9 +121,27 @@ class ProductWakeTests(unittest.TestCase):
             "wss://ordax-mcp.ordaxsystems.workers.dev/v3/device/transport/wake",
         ])
 
+    def test_known_network_unreachable_uses_the_same_worker_fallback(self):
+        import errno
+        origins = []
+        ingress = TrustedProductIngress("https://mcp.ordax.com.br")
+        def connect(url):
+            origins.append(url)
+            if len(origins) == 1:
+                raise OSError(errno.ENETUNREACH, "network unavailable")
+            return "signed-upstream"
+        actual = ingress.websocket("/v3/device/transport/wake", connect)
+        self.assertEqual(actual, "signed-upstream")
+        self.assertEqual(origins, [
+            "wss://mcp.ordax.com.br/v3/device/transport/wake",
+            "wss://ordax-mcp.ordaxsystems.workers.dev/v3/device/transport/wake",
+        ])
+
     def test_no_failover_on_tls_or_server_handshake_error(self):
+        import errno
         import ssl
         for failure in (ssl.SSLError("certificate_invalid"),
+                        OSError(errno.EACCES, "local permission denied"),
                         ValueError("server refused websocket handshake")):
             seen = []
             policy = TrustedProductIngress("https://mcp.ordax.com.br")
