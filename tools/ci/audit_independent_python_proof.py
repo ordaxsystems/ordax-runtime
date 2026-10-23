@@ -56,7 +56,7 @@ def verify_private_target_tar(target_tar: Path, receipt: dict) -> dict:
     if (not isinstance(built, dict) or not 1 <= len(built) <= 64
             or any(not isinstance(name, str) or not PKG.fullmatch(name)
                    or not isinstance(version, str)
-                   or not re.fullmatch(r"[0-9]+(?:\\.[0-9A-Za-z]+)+", version)
+                   or not re.fullmatch(r"[0-9]+(?:\.[0-9A-Za-z]+)+", version)
                    for name, version in built.items())):
         raise ProofError("private Buildroot target package receipt invalid")
     minor = python_path.removeprefix("usr/bin/python")
@@ -125,7 +125,7 @@ def verify_private_target_tar(target_tar: Path, receipt: dict) -> dict:
                             raise ProofError("private Buildroot distribution metadata unreadable")
                         with source:
                             try:
-                                header = source.read(64 * 1024).decode("utf-8").split("\\n\\n", 1)[0]
+                                header = source.read(64 * 1024).decode("utf-8").split("\n\n", 1)[0]
                             except UnicodeDecodeError as exc:
                                 raise ProofError("private Buildroot distribution metadata invalid") from exc
                         lines = header.splitlines()
