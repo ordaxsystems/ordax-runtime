@@ -94,7 +94,7 @@ jobs:
           python3 -m tools.ci.probe_native_buildroot_agent \
             --receipt "$RUNNER_TEMP/ordax-native-buildroot-target/native-python-provenance.json" \
             --private-target-tar "$RUNNER_TEMP/ordax-native-buildroot-target/native-python-build-input.rootfs.tar" \
-            --stage-private-target | tee "$RUNNER_TEMP/native-agent-bootstrap-result.json"
+            --stage-private-target --run-in-private-container | tee "$RUNNER_TEMP/native-agent-bootstrap-result.json"
       - name: Assert the host-only proof cannot authorize a device
         shell: bash
         run: |
