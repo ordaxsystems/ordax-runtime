@@ -92,8 +92,17 @@ class ProductWakeTests(unittest.TestCase):
     def test_untrusted_signal_cannot_become_action(self):
         stop = threading.Event()
         received = threading.Event()
+        closed = threading.Event()
         socket = MockSocket(received, stop)
-        socket.recv = lambda **_k: {"command": "terminal.exec", "grant": "spoof"}
+        def invalid_message(**_kwargs):
+            received.set()
+            return {"command": "terminal.exec", "grant": "spoof"}
+        socket.recv = invalid_message
+        original_close = socket.close
+        def closed_invalid(**kwargs):
+            original_close(**kwargs)
+            closed.set()
+        socket.close = closed_invalid
         control = SimpleNamespace(
             base_http_url="https://mcp.ordax.com.br",
             device_id="900943fd-8397-471e-bf05-c66ba4de7884",
@@ -101,7 +110,8 @@ class ProductWakeTests(unittest.TestCase):
         )
         listener = ProductWakeListener(control, stop, connect_websocket=lambda *_a, **_k: socket)
         listener.start()
-        self.assertTrue(listener.wake.wait(3))
+        self.assertTrue(received.wait(3))
+        self.assertTrue(closed.wait(3))
         # Cancellation is local, even if a wake connection is blocked.
         stop.set()
         listener.close()
