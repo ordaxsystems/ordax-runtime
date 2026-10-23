@@ -11,8 +11,8 @@ outro aplicativo Studio.
 | --- | --- | --- |
 | Interface portátil, projetos, assistente e assets do Studio | `ordaxsystems/ordax-apps/apps/studio` | Host Bridge / App SDK |
 | Device Agent, Computer Control, Blender/Unity, Git, action executor | `ordaxsystems/ordax-runtime` | Ações tipadas + política local |
-| MCP remoto, OAuth, grants remotos, auditoria e filas Product | `ordaxsystems/ordax-control-plane` (futuro `ordax-platform`) | Product MCP / PostgreSQL |
-| Execução e ports do host no OrdaX OS | `washingtonmsdj/prototipo-ordax-os` | App SDK publicado |
+| MCP remoto, OAuth, grants remotos, auditoria e filas Product | `ordaxsystems/ordax-platform` | Product MCP / PostgreSQL |
+| Execução e ports do host no OrdaX OS | `ordaxsystems/ordax-os` | App SDK publicado |
 | Integração com ChatGPT/Grok | Conector externo do Control Plane | Adapter de provider sem authority |
 
 ## Pontos MCP no Runtime (não confundir com executores)
@@ -87,7 +87,7 @@ transição fechada, não permissão para desenvolver features duplicadas neles.
   falha.
 
 A fonte de produto é `ordax-apps`; `ordax-runtime` é host/executor;
-`ordax-control-plane` é transporte/autoridade remota. A separação é
+`ordax-platform` é transporte/autoridade remota. A separação é
 contrato de segurança, não multiplicação de produtos.
 
 ## Identidade do Product Runtime no OrdaX OS (2026-10-18)
@@ -109,3 +109,23 @@ não inicia serviço, não instancia um segundo Control Plane e não altera
 OAuth, grants, lease, audit, Action Gateway ou execução no OS.
 O pacote assinado do Runtime, health gate e sessão atestada continuam
 pré-requisitos independentes para liberar transporte de ações.
+
+## Nomenclatura interoperável — 2026-10-19
+
+O repositório oficial do Product MCP e da autoridade PostgreSQL é `ordaxsystems/ordax-platform`, **não** um novo projeto `ordax-mcp`, e o OrdaX OS está em `ordaxsystems/ordax-os`. Nomes anteriores no histórico GitHub são compatibilidade de redirects, não owners ativos.
+
+| Termo | Autoridade e fronteira |
+| --- | --- |
+| Conta OrdaX | sujeito do OAuth/Platform; não representa Profile Pack ou Space |
+| Perfil do usuário / Profile Pack | preferências do usuário versus pacote técnico versionado do OS; são conceitos distintos |
+| Space | identidade persistente `ordax_spaces.space_id`; o Studio/Runtime pode exibi-la, mas não criar uma segunda |
+| Projeto de produto | `ordax_projects.project_id` vinculado ao Space, independente do checkout local |
+| Projeto local | diretório/slug sob `ordax_dev_agent.projects`, com estado/segurança locais; só um vínculo explícito pode ligá-lo ao projeto de produto |
+| Workspace | contexto de diretório e interface do Studio/Runtime, não sinônimo de Space da Platform |
+| Target / Dispositivo | máquina autenticada/atestada; descoberta e observação não devem exigir Projeto/Space artificial |
+| Grant | decisão remota por capability/cliente/Space/Projeto/dispositivo quando aplicável, sem substituir política local |
+| MCP tool | porta pública da Platform; não é executor do Runtime nem aplicativo Studio |
+
+`ordax_profile` é um nome público de compatibilidade da integração ChatGPT e devolve o subject da Conta, **não** o Perfil do OS. `computer_processes` observa processos do dispositivo sob grant próprio; `process_list` e `terminal_exec` são hoje ações **nativas por Projeto** e exigem scope canônico resolvido, associação de repositório/dispositivo e grants distintos. A exigência de projeto para essas ações nunca se propaga para autenticação, descoberta, presença ou observação do dispositivo.
+
+O OS pode consumir o mesmo Runtime por contrato sem virar dependência de boot para Platform, Studio ou Flow. Essas convenções não confirmam implantação de migrations, nem aprovam a PR `ordax-platform#222` ou autorizam autoenrollment de projeto/grant.
