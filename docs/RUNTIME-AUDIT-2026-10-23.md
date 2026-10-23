@@ -16,7 +16,7 @@ The current Runtime `main` is `ea8c863736ef4482c216235a994aa4b01e0e8322`.
 - PR #114 merged at `c26af984970a5db8bae37444273c3fd2505d58c3`. It exposes the Product origin validated during Electron account authorization. Windows Product Build, Install Smoke, Packaging Contracts, Product MCP Minimum SDK and Runtime Contracts passed on its head. The pin remains canonical Apps Studio 0.15.9; no Apps source was changed.
 - PR #136 merged at `ea8c863736ef4482c216235a994aa4b01e0e8322`. It updates canonical repository ownership and scope terminology, with a documentation regression test. The two focused tests passed locally; required Runtime, Product MCP, Native Composition, Packaging, Windows Product Build and Install Smoke checks passed in CI.
 - PR #121 was closed as duplicate product-level documentation; its canonical source belongs to Apps.
-- Runtime PRs #205 and #208 remain drafts. Their lifecycle/issuance paths depend on Platform PR #274, still draft with SQL in proposals only. No migration, deployment, grant issuance, authenticated Owner host composition or Apps capability is enabled by these drafts.
+- Runtime #205 remains a draft aligned with Platform #274, which is still draft and SQL proposal-only. Runtime #208 was closed without merge because its separate staged endpoints are absent from #274; its branch remains preserved for reference. No migration, deployment, grant issuance, authenticated Owner host composition or Apps capability is enabled.
 - CI results above validate source/build/install-smoke workflows only. They do not prove a production MCP action, physical Windows recovery, or execution under an OrdaX OS supervisor.
 
 ## Findings
