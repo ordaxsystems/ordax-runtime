@@ -7,7 +7,9 @@ server must never be repeated merely because its response was lost.
 """
 from __future__ import annotations
 
+import errno
 import socket
+import ssl
 import time
 from typing import Callable, TypeVar
 
@@ -66,10 +68,21 @@ class TrustedProductIngress:
             wss_url = "wss://" + https_url[len("https://"):]
             try:
                 return connect(wss_url)
-            except (ConnectionError, TimeoutError, socket.gaierror) as error:
-                # Explicit connect-stage network error types only. In
-                # particular, ssl.SSLError / invalid HTTP status must not
-                # be converted to a connect error and retried elsewhere.
+            except OSError as error:
+                # Whitelist TCP/DNS connection-stage OS errors, including
+                # network-unreachable on Linux and Windows Winsock. Never
+                # fail over certificate failures, protocol/auth responses,
+                # local permission errors or an ambiguous OS failure.
+                network_codes = frozenset({
+                    errno.ECONNREFUSED, errno.ECONNRESET, errno.ENETUNREACH,
+                    errno.EHOSTUNREACH, errno.ETIMEDOUT,
+                    10051, 10054, 10060, 10061, 10065,
+                })
+                if (isinstance(error, ssl.SSLError) or not (
+                    isinstance(error, (ConnectionError, TimeoutError, socket.gaierror))
+                    or error.errno in network_codes
+                )):
+                    raise
                 raise httpx.ConnectError("Product wake TCP connection failed") from error
 
         return self.request(path, establish)
