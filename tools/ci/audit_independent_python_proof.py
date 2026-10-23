@@ -12,7 +12,12 @@ import json
 from pathlib import Path
 import re
 
-from tools.ci.audit_buildroot_lock import read_requirements
+if __name__ == "__main__" and not __package__:
+    # Direct file-path invocation inserts tools/ci into sys.path.
+    from audit_buildroot_lock import read_requirements
+else:
+    # Imported module, spec loader or python -m with repository on sys.path.
+    from tools.ci.audit_buildroot_lock import read_requirements
 
 RECEIPT_SCHEMA = "ordax.private-native-python-build-proof/1"
 SOURCE_SCHEMA = "prototype-ordax.independent-base-experiment/1"
@@ -25,6 +30,112 @@ PKG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 class ProofError(ValueError):
     pass
+
+
+MAX_TARGET_TAR_BYTES = 1024 * 1024 * 1024
+MAX_TARGET_TAR_ENTRIES = 200000
+PYTHON_TARGET_PATH = re.compile(r"usr/bin/python3\.\d+\Z")
+
+
+def verify_private_target_tar(target_tar: Path, receipt: dict) -> dict:
+    """Consume an OS-owned private Buildroot target, never an OS boot payload.
+
+    Read original TAR members and SHA-256 from the SAME regular-file
+    descriptor. The producer remains bootstrap/independent-base/build.py;
+    Runtime independently checks the exact signed-off source bytes instead
+    of trusting an unauthenticated filename or performing any extraction.
+    """
+    abi = receipt.get("python_abi")
+    claimed = receipt.get("private_target_build_input")
+    if not isinstance(abi, dict) or not isinstance(claimed, dict):
+        raise ProofError("private Buildroot target TAR has no OS-issued ABI binding")
+    python_path = abi.get("python_executable")
+    if not isinstance(python_path, str) or not PYTHON_TARGET_PATH.fullmatch(python_path):
+        raise ProofError("private Buildroot target Python entrypoint is invalid")
+    required = {
+        python_path: "python",
+        "lib/ld-musl-x86_64.so.1": "loader",
+        "etc/ssl/certs/ca-certificates.crt": "ca",
+    }
+    import os
+    import posixpath
+    import stat
+    import tarfile
+    try:
+        fd = os.open(
+            target_tar, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0),
+        )
+    except OSError as exc:
+        raise ProofError("private Buildroot target TAR is unavailable or unsafe") from exc
+    found = set()
+    with os.fdopen(fd, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_TARGET_TAR_BYTES:
+            raise ProofError("private Buildroot target TAR size/type invalid")
+        digest = hashlib.sha256()
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+        stream.seek(0)
+        try:
+            with tarfile.open(fileobj=stream, mode="r:") as archive:
+                for index, member in enumerate(archive, start=1):
+                    if index > MAX_TARGET_TAR_ENTRIES:
+                        raise ProofError("private Buildroot target TAR too many members")
+                    raw_name = member.name.removeprefix("./")
+                    path = posixpath.normpath(raw_name)
+                    if path not in required:
+                        continue
+                    if path in found:
+                        raise ProofError("private Buildroot target TAR has duplicate required entry")
+                    kind = required[path]
+                    if kind == "python":
+                        if not member.isfile() or not 0 < member.size <= 128 * 1024 * 1024:
+                            raise ProofError("private Buildroot target Python is not regular")
+                        source = archive.extractfile(member)
+                        if source is None:
+                            raise ProofError("private Buildroot target Python is unreadable")
+                        python_sha = hashlib.sha256()
+                        with source:
+                            for part in iter(lambda: source.read(1024 * 1024), b""):
+                                python_sha.update(part)
+                        if python_sha.hexdigest() != abi.get("python_sha256"):
+                            raise ProofError("private Buildroot Python bytes do not match ABI receipt")
+                    elif kind == "loader" and not (member.isfile() or member.issym()):
+                        raise ProofError("private Buildroot target musl loader missing")
+                    elif kind == "ca" and not (member.isfile() or member.issym()):
+                        raise ProofError("private Buildroot target certificate bundle invalid")
+                    found.add(path)
+        except (tarfile.TarError, EOFError) as exc:
+            raise ProofError("private Buildroot target TAR cannot be read") from exc
+        after = os.fstat(stream.fileno())
+        if ((before.st_dev, before.st_ino, before.st_size,
+             before.st_mtime_ns, before.st_ctime_ns) !=
+            (after.st_dev, after.st_ino, after.st_size,
+             after.st_mtime_ns, after.st_ctime_ns)):
+            raise ProofError("private Buildroot target TAR changed during audit")
+    if found != set(required):
+        raise ProofError("private Buildroot target TAR lacks interpreter/loader/certificates")
+    observed = {
+        "schema": "ordax.private-buildroot-python-build-input/1",
+        "file_name": "native-python-build-input.rootfs.tar",
+        "sha256": digest.hexdigest(),
+        "size_bytes": before.st_size,
+        "python_sha256": abi["python_sha256"],
+        "purpose": "native-runtime-build-input-only",
+        "runtime_agent_packaged": False,
+        "device_install_authorized": False,
+    }
+    if claimed != observed:
+        raise ProofError("private Buildroot target TAR does not match OS-owned provenance")
+    return {
+        "private_target_tar_sha256": observed["sha256"],
+        "private_target_tar_bytes": observed["size_bytes"],
+        "python_elf_sha256": abi["python_sha256"],
+        "os_private_build_input_verified": True,
+        "runtime_agent_packaged": False,
+        "device_install_authorized": False,
+    }
 
 
 def load_json(path: Path, limit: int) -> tuple[dict, str]:
@@ -40,7 +151,8 @@ def load_json(path: Path, limit: int) -> tuple[dict, str]:
     return value, hashlib.sha256(payload).hexdigest()
 
 
-def reconcile(receipt_path: Path, os_source_path: Path, lock_path: Path) -> dict:
+def reconcile(receipt_path: Path, os_source_path: Path, lock_path: Path,
+              private_target_tar: Path | None = None) -> dict:
     receipt, receipt_sha = load_json(receipt_path, 64 * 1024)
     os_source, source_sha = load_json(os_source_path, 128 * 1024)
     profile = os_source.get("component_profiles", {}).get(COMPONENT)
@@ -118,6 +230,8 @@ def reconcile(receipt_path: Path, os_source_path: Path, lock_path: Path) -> dict
                 "runtime_locked": pinned.get(name), "buildroot_built": version,
             })
     not_proven = sorted(set(pinned) - set(built))
+    private_target_result = (verify_private_target_tar(private_target_tar, receipt)
+                             if private_target_tar is not None else None)
     return {
         "schema": "ordax.native-private-buildroot-lock-reconciliation/1",
         "os_source_sha256": source_sha,
@@ -137,6 +251,7 @@ def reconcile(receipt_path: Path, os_source_path: Path, lock_path: Path) -> dict
         "device_install_authorized": False,
         "device_execution_proven": False,
         "external_os_artifact_authenticity_verified_here": False,
+        "private_os_build_input_verification": private_target_result,
     }
 
 
@@ -147,9 +262,16 @@ def main() -> int:
     parser.add_argument("--requirements", type=Path,
                         default=Path("native/ordax-product-agent/requirements.lock"))
     parser.add_argument("--require-alignment", action="store_true")
+    parser.add_argument("--private-target-tar", type=Path,
+                        help="Exact OS-owned non-installable Buildroot target tar")
+    parser.add_argument("--require-private-target", action="store_true",
+                        help="Fail if authenticated native target TAR was not supplied")
     args = parser.parse_args()
     try:
-        result = reconcile(args.receipt, args.os_source, args.requirements)
+        if args.require_private_target and args.private_target_tar is None:
+            raise ProofError("private Buildroot target TAR required")
+        result = reconcile(args.receipt, args.os_source, args.requirements,
+                           private_target_tar=args.private_target_tar)
     except (ProofError, OSError, UnicodeError, ValueError) as exc:
         print(json.dumps({"error": str(exc), "device_install_authorized": False}, sort_keys=True))
         return 2
