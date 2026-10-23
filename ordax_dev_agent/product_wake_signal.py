@@ -16,11 +16,16 @@ from websockets.sync.client import connect
 
 WAKE_PATH = "/v3/device/transport/wake"
 WAKE_MESSAGE = "wake"
+TRUSTED_WAKE_HOSTS = frozenset({
+    "mcp.ordax.com.br",
+    "ordax-mcp.ordaxsystems.workers.dev",
+})
 
 
 def trusted_wake_url(origin: str) -> str:
     parsed = urlsplit(origin.rstrip("/"))
-    if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+    if (parsed.scheme != "https" or parsed.hostname not in TRUSTED_WAKE_HOSTS
+            or parsed.port not in (None, 443) or parsed.username
             or parsed.password or parsed.path not in {"", "/"}
             or parsed.query or parsed.fragment):
         raise ValueError("Product wake requires an HTTPS Product origin without userinfo")
