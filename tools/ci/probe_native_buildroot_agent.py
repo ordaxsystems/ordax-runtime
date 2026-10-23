@@ -81,6 +81,105 @@ print("ORDAX_NATIVE_BOOTSTRAP_PROOF=" + json.dumps({
 """
 
 
+
+def _classify_native_bootstrap_failure(stderr: str, returncode: int) -> dict:
+    """Classify real Native Python/loader failures without publishing tracebacks.
+
+    The runner and stdout may contain sensitive paths; only recognized exception
+    class names and shared-library basenames are exposed in CI diagnostics.
+    """
+    missing = MISSING_MODULE.search(stderr)
+    if missing:
+        return {"failure": "native_missing_import", "missing_module": missing.group(1)}
+    shared = re.search(r"Error loading shared library ([A-Za-z0-9_.+-]+)", stderr)
+    if shared:
+        return {"failure": "native_missing_shared_library", "shared_library": shared.group(1)}
+    exceptions = re.findall(r"(?m)^([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception)):\s*.*$", stderr)
+    if exceptions:
+        report = {"failure": "native_bootstrap_exception", "exception_type": exceptions[-1]}
+        # Only known stable Native offline-gate error codes are exposed. No
+        # tracebacks, absolute paths or arbitrary exception messages leak.
+        allowlisted = (
+            "native_bootstrap_network_forbidden",
+            "native_offline_self_test_not_proven",
+            "native_product_transport_identity_mismatch",
+            "native_offline_probe_claimed_remote_attestation",
+        )
+        for reason in allowlisted:
+            if re.search(r"(?m)^RuntimeError: " + re.escape(reason) + r"\s*$", stderr):
+                report["native_reason"] = reason
+                break
+        # Canonical native_main.self_test() uses these stable machine codes.
+        # Do not print the appended action names, traceback or any user paths.
+        if "native_reason" not in report:
+            m = re.search(
+                r"(?m)^RuntimeError: (native_package_[a-z0-9_]+)(?::.*)?$",
+                stderr,
+            )
+            if m:
+                report["native_reason"] = m.group(1)
+        return report
+    if returncode == 124:
+        return {"failure": "native_bootstrap_timeout"}
+    return {"failure": "native_bootstrap_failed", "native_exit_code": returncode}
+
+
+
+def _execute_in_private_rootfs_container(
+    target_tar: Path, executable: str, source_root: Path,
+) -> subprocess.CompletedProcess:
+    """Run the SAME CHILD in exact OS-owned Buildroot userspace, not host /lib.
+
+    Docker imports only this already validated target into an ephemeral test
+    image. It is never a signed OrdaX agent image or a second build owner.
+    Network, ambient privileges and host filesystem mutation are disabled.
+    """
+    import shutil
+
+    if not shutil.which("docker"):
+        raise ProofError("isolated Buildroot container executor unavailable")
+    if not re.fullmatch(r"usr/bin/python3\.\d+", executable):
+        raise ProofError("private Buildroot Python container path invalid")
+    try:
+        with target_tar.open("rb") as source:
+            imported = subprocess.run(
+                ["docker", "import", "-"], stdin=source, capture_output=True,
+                text=True, timeout=120, check=False,
+            )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ProofError("cannot initialize private Buildroot test image") from exc
+    image_id = imported.stdout.strip()
+    if imported.returncode or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+        raise ProofError("private Buildroot test image import failed")
+    try:
+        command = [
+            "docker", "run", "--rm", "--network", "none",
+            "--read-only", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "--tmpfs", "/tmp:exec,mode=1777",
+            "--user", f"{os.getuid()}:{os.getgid()}",
+            "--mount", f"type=bind,source={source_root},target=/ordax-runtime,readonly",
+            "--workdir", "/tmp",
+            image_id, "/" + executable, "-I", "-B", "-c", CHILD, "/ordax-runtime",
+        ]
+        return subprocess.run(
+            command, cwd=str(source_root), env={
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "HOME": os.environ.get("HOME", "/tmp"),
+            }, capture_output=True, text=True, timeout=90, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ProofError("isolated Buildroot agent execution failed") from exc
+    finally:
+        # Remove only the immutable test image returned by THIS import.
+        subprocess.run(
+            ["docker", "image", "rm", image_id],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=30, check=False,
+        )
+
+
+
 def checked_file(path: Path, *, limit: int) -> Path:
     if not path.is_file() or path.is_symlink():
         raise ProofError("private Buildroot executable or loader missing/unsafe")
@@ -90,7 +189,8 @@ def checked_file(path: Path, *, limit: int) -> Path:
     return path
 
 
-def probe(receipt_path: Path, target_tar: Path, extracted_root: Path) -> dict:
+def probe(receipt_path: Path, target_tar: Path, extracted_root: Path,
+          *, private_container: bool = False) -> dict:
     if os.name != "posix" or not Path("/proc/self").exists():
         raise ProofError("Native Buildroot smoke requires a disposable Linux host")
     if extracted_root.is_symlink() or not extracted_root.is_dir():
@@ -125,13 +225,21 @@ def probe(receipt_path: Path, target_tar: Path, extracted_root: Path) -> dict:
             "LD_LIBRARY_PATH": str(root / "lib") + ":" + str(root / "usr/lib"),
         }
         command = [str(loader), str(binary), "-I", "-B", "-c", CHILD, str(ROOT)]
-        try:
-            execution = subprocess.run(
-                command, cwd=scratch, env=env,
-                text=True, capture_output=True, timeout=60, check=False,
+        if private_container:
+            # Reuse CHILD and the canonical proof classifier, but execute in
+            # the exact Buildroot userspace so the supervisor's subprocess
+            # finds the genuine /lib/ld-musl-x86_64.so.1 inside its own root.
+            execution = _execute_in_private_rootfs_container(
+                target_tar, python_rel, ROOT,
             )
-        except subprocess.TimeoutExpired:
-            execution = subprocess.CompletedProcess(command, 124, "", "timeout")
+        else:
+            try:
+                execution = subprocess.run(
+                    command, cwd=scratch, env=env,
+                    text=True, capture_output=True, timeout=60, check=False,
+                )
+            except subprocess.TimeoutExpired:
+                execution = subprocess.CompletedProcess(command, 124, "", "timeout")
     summary = {
         "schema": RESULT_SCHEMA,
         "private_python_sha256": actual,
@@ -144,14 +252,9 @@ def probe(receipt_path: Path, target_tar: Path, extracted_root: Path) -> dict:
         "device_execution_proven": False,
     }
     if execution.returncode:
-        missing = MISSING_MODULE.search(execution.stderr)
-        summary["failure"] = (
-            "native_missing_import" if missing else
-            "native_bootstrap_timeout" if execution.returncode == 124 else
-            "native_bootstrap_failed"
-        )
-        if missing:
-            summary["missing_module"] = missing.group(1)
+        summary.update(_classify_native_bootstrap_failure(
+            execution.stderr, execution.returncode
+        ))
         return summary
     lines = [line.removeprefix(MARKER) for line in execution.stdout.splitlines()
              if line.startswith(MARKER)]
@@ -245,7 +348,8 @@ def stage_verified_target(target_tar: Path, expected_sha256: str, destination: P
             raise ProofError("private probe TAR changed during extraction")
 
 
-def probe_staged(receipt_path: Path, target_tar: Path) -> dict:
+def probe_staged(receipt_path: Path, target_tar: Path,
+                 *, private_container: bool = False) -> dict:
     """Verify, stage and execute the existing single canonical probe."""
     receipt, _ = load_json(receipt_path, 64 * 1024)
     verified = verify_private_target_tar(target_tar, receipt)
@@ -254,7 +358,8 @@ def probe_staged(receipt_path: Path, target_tar: Path) -> dict:
     with tempfile.TemporaryDirectory(prefix="ordax-native-private-staging-") as temp:
         root = Path(temp) / "target"
         stage_verified_target(target_tar, verified["private_target_tar_sha256"], root)
-        return probe(receipt_path, target_tar, root)
+        return probe(receipt_path, target_tar, root,
+                     private_container=private_container)
 
 
 def main() -> int:
@@ -265,9 +370,14 @@ def main() -> int:
     group.add_argument("--extracted-private-root", type=Path)
     group.add_argument("--stage-private-target", action="store_true",
                        help="Stage the verified OS Buildroot TAR in disposable storage")
+    parser.add_argument("--run-in-private-container", action="store_true",
+                        help="Run existing Native probe in offline ephemeral Buildroot rootfs container")
     args = parser.parse_args()
     try:
-        result = (probe_staged(args.receipt, args.private_target_tar)
+        if args.run_in_private_container and not args.stage_private_target:
+            raise ProofError("private container requires verified staging")
+        result = (probe_staged(args.receipt, args.private_target_tar,
+                               private_container=args.run_in_private_container)
                   if args.stage_private_target else
                   probe(args.receipt, args.private_target_tar, args.extracted_private_root))
     except (ProofError, OSError, ValueError) as exc:

@@ -73,6 +73,61 @@ class NativeBuildrootSourceBootstrapTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["PYTHONHOME"], str(self.root / "usr"))
         self.assertEqual(kwargs["timeout"], 60)
 
+    def test_exception_failure_reports_only_type_not_sensitive_traceback(self):
+        process = self.completed(
+            exit_code=1,
+            error="Traceback (most recent call last):\n"
+                  "  File '/home/runner/private/source.py', line 2\n"
+                  "RuntimeError: private session_token_should_not_be_logged\n",
+        )
+        with patch.object(target.subprocess, "run", return_value=process):
+            report = target.probe(self.receipt, self.tar, self.root)
+        self.assertEqual(report["failure"], "native_bootstrap_exception")
+        self.assertEqual(report["exception_type"], "RuntimeError")
+        self.assertNotIn("session_token", json.dumps(report))
+        self.assertFalse(report["device_install_authorized"])
+
+    def test_native_loader_failure_reports_only_library_name(self):
+        failure = target._classify_native_bootstrap_failure(
+            "Error loading shared library libmissing.so.1: No such file\n", 127
+        )
+        self.assertEqual(failure["failure"], "native_missing_shared_library")
+        self.assertEqual(failure["shared_library"], "libmissing.so.1")
+
+    def test_private_container_uses_same_child_with_network_disabled(self):
+        image = "sha256:" + "a" * 64
+        container_result = self.completed()
+        outcomes = [
+            subprocess.CompletedProcess(["docker", "import"], 0, image + "\n", ""),
+            container_result,
+            subprocess.CompletedProcess(["docker", "image", "rm"], 0, "", ""),
+        ]
+        with patch("shutil.which", return_value="/usr/bin/docker"), patch.object(
+            target.subprocess, "run", side_effect=outcomes
+        ) as run:
+            result = target._execute_in_private_rootfs_container(
+                self.tar, "usr/bin/python3.14", target.ROOT,
+            )
+        self.assertEqual(result.returncode, 0)
+        command = run.call_args_list[1].args[0]
+        self.assertEqual(command[:2], ["docker", "run"])
+        self.assertEqual(command[command.index("--network") + 1], "none")
+        self.assertIn("--cap-drop", command)
+        self.assertIn("--read-only", command)
+        self.assertIn("--security-opt", command)
+        self.assertIn("-I", command)
+        self.assertIn(target.CHILD, command)
+        self.assertIn("/usr/bin/python3.14", command)
+        self.assertEqual(run.call_args_list[2].args[0], ["docker", "image", "rm", image])
+
+    def test_private_container_refuses_unknown_compiler_or_missing_engine(self):
+        with patch("shutil.which", return_value=None):
+            with self.assertRaisesRegex(target.ProofError, "container executor unavailable"):
+                target._execute_in_private_rootfs_container(self.tar, "usr/bin/python3.14", target.ROOT)
+        with patch("shutil.which", return_value="/usr/bin/docker"):
+            with self.assertRaisesRegex(target.ProofError, "Python container path invalid"):
+                target._execute_in_private_rootfs_container(self.tar, "../../host-python", target.ROOT)
+
     def test_missing_import_is_reported_without_leaking_traceback(self):
         result = self.completed(exit_code=1, error=(
             "Traceback (most recent call last):\n"
