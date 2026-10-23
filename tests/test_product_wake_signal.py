@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.product_ingress import TrustedProductIngress
 from ordax_dev_agent.product_wake_signal import (
     ProductWakeListener, WAKE_MESSAGE, trusted_wake_url,
 )
@@ -75,6 +76,7 @@ class ProductWakeTests(unittest.TestCase):
         control = SimpleNamespace(
             base_http_url="https://mcp.ordax.com.br",
             device_id=device, device_token=token,
+            _trusted_ingress=TrustedProductIngress("https://mcp.ordax.com.br"),
         )
         listener = ProductWakeListener(control, stop, connect_websocket=connect)
         listener.start()
@@ -92,6 +94,51 @@ class ProductWakeTests(unittest.TestCase):
         self.assertEqual(socket.closed, [])
         with self.assertRaises(RuntimeError):
             listener.start()  # never duplicate listeners
+
+    def test_primary_tcp_connect_failure_uses_existing_restricted_same_worker_ingress(self):
+        stop = threading.Event()
+        received = threading.Event()
+        socket = MockSocket(received, stop)
+        calls = []
+        def connect(url, **_kwargs):
+            calls.append(url)
+            if url.startswith("wss://mcp.ordax.com.br/"):
+                raise ConnectionRefusedError("primary TCP connect refused")
+            return socket
+        control = SimpleNamespace(
+            base_http_url="https://mcp.ordax.com.br",
+            device_id="900943fd-8397-471e-bf05-c66ba4de7884",
+            device_token="s" * 64,
+            _trusted_ingress=TrustedProductIngress("https://mcp.ordax.com.br"),
+        )
+        listener = ProductWakeListener(control, stop, connect_websocket=connect)
+        self.assertIs(listener._trusted_ingress, control._trusted_ingress)
+        listener.start()
+        self.assertTrue(received.wait(3))
+        listener.close()
+        self.assertEqual(calls[:2], [
+            "wss://mcp.ordax.com.br/v3/device/transport/wake",
+            "wss://ordax-mcp.ordaxsystems.workers.dev/v3/device/transport/wake",
+        ])
+
+    def test_no_failover_on_tls_or_server_handshake_error(self):
+        import ssl
+        for failure in (ssl.SSLError("certificate_invalid"),
+                        ValueError("server refused websocket handshake")):
+            seen = []
+            policy = TrustedProductIngress("https://mcp.ordax.com.br")
+            def connect(url):
+                seen.append(url)
+                raise failure
+            with self.assertRaises(type(failure)):
+                policy.websocket("/v3/device/transport/wake", connect)
+            self.assertEqual(seen, [
+                "wss://mcp.ordax.com.br/v3/device/transport/wake",
+            ])
+        with self.assertRaises(ValueError):
+            TrustedProductIngress("https://mcp.ordax.com.br").websocket(
+                "/v3/device/transport/claim", lambda _: None,
+            )
 
     def test_untrusted_signal_cannot_become_action(self):
         stop = threading.Event()
@@ -111,6 +158,7 @@ class ProductWakeTests(unittest.TestCase):
             base_http_url="https://mcp.ordax.com.br",
             device_id="900943fd-8397-471e-bf05-c66ba4de7884",
             device_token="s" * 64,
+            _trusted_ingress=TrustedProductIngress("https://mcp.ordax.com.br"),
         )
         listener = ProductWakeListener(control, stop, connect_websocket=lambda *_a, **_k: socket)
         listener.start()
@@ -149,6 +197,7 @@ class ProductWakeTests(unittest.TestCase):
             base_http_url="https://mcp.ordax.com.br",
             device_id="900943fd-8397-471e-bf05-c66ba4de7884",
             device_token="s" * 64,
+            _trusted_ingress=TrustedProductIngress("https://mcp.ordax.com.br"),
         )
         listener = ProductWakeListener(
             control, stop, lambda: False,
