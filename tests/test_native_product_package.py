@@ -98,6 +98,47 @@ with tempfile.TemporaryDirectory() as temporary:
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
+    def test_native_agent_bootstraps_without_optional_chromium_websocket_sdk(self):
+        # The OS private Buildroot target provides HTTPX but not the browser
+        # CDP WebSocket SDK. Prove registry and Product transport initialize
+        # using the same code, rather than adding a second Linux dispatcher.
+        code = """import builtins
+import tempfile
+from pathlib import Path
+original_import = builtins.__import__
+def native_import(name, *args, **kwargs):
+    if name == 'websockets' or name.startswith('websockets.'):
+        raise ModuleNotFoundError('Optional browser CDP SDK unavailable')
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = native_import
+from ordax_dev_agent.native_main import native_config, self_test
+from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
+proof = self_test()
+assert proof['ok'] and proof['graphical_actions'] == []
+device = '22222222-2222-4222-8222-222222222222'
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    private = root / 'private'
+    private.mkdir(mode=0o700)
+    config = native_config(private, root, device)
+    transport = ProductDeviceControlPlane(
+        config, device_credential_provider=lambda: {
+            'device_id': device, 'device_token': 'a' * 64
+        }
+    )
+    try:
+        assert transport.runtime_kind == 'ordax-os'
+        assert not transport.product_central_session.status.confirmed
+    finally:
+        transport.product_central_session.close()
+        transport.http.close()
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True, timeout=45, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
     def test_run_requires_explicit_owner_usb_profile_before_loading_identity(self):
         for arguments in (["--run"], ["--run", "--distribution-profile", "owner-development"]):
             with self.subTest(arguments=arguments), patch("ordax_dev_agent.native_main.identity_store") as store:

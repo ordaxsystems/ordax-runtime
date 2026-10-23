@@ -14,9 +14,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from websockets.sync.client import connect
-
-
 class BrowserCaptureError(RuntimeError):
     """Raised when a deterministic browser capture cannot be produced."""
 
@@ -144,6 +141,10 @@ def capture_url(browser: Path, url: str, output: Path, profile_root: Path, *, wi
             creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
         )
         target = _page_target(debug_port, url, deadline)
+        # CDP is an optional browser capability, not a requirement to boot the
+        # canonical Native device agent on the Buildroot private Python target.
+        from websockets.sync.client import connect
+
         with connect(str(target["webSocketDebuggerUrl"]), open_timeout=3, close_timeout=1) as ws:
             request_id = 1
             _cdp_call(ws, request_id, "Page.enable")
