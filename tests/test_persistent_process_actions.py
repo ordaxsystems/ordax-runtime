@@ -111,6 +111,26 @@ class PersistentProcessActionsTests(unittest.TestCase):
         self.assertEqual(expected, loaded)
         self.assertGreaterEqual(attempts, 2)
 
+    def test_failed_start_keeps_ownership_token_internal(self):
+        with patch(
+            "ordax_dev_agent.persistent_process_actions.subprocess.Popen",
+            side_effect=OSError("launch denied"),
+        ):
+            result = self.registry.execute(
+                "process.start",
+                {"project": "demo", "cwd": ".", "argv": [sys.executable, "-c", "pass"]},
+            )
+
+        self.assertFalse(result.ok)
+        self.assertEqual("failed", result.data["state"])
+        self.assertNotIn("token", result.data)
+        project = self.registry._project({"project": "demo"})
+        persisted = json.loads(
+            self.registry._process_state_path(project, result.data["process_id"])
+            .read_text(encoding="utf-8")
+        )
+        self.assertTrue(persisted["token"])
+
     def test_start_status_logs_list_and_stop(self):
         started = self.registry.execute(
             "process.start",
@@ -131,6 +151,7 @@ class PersistentProcessActionsTests(unittest.TestCase):
         self.process_id = started.data["process_id"]
         self.assertTrue(started.data["ownership_valid"])
         self.assertTrue(started.data["running"])
+        self.assertNotIn("token", started.data)
 
         status = self.registry.execute(
             "process.status",
@@ -139,6 +160,7 @@ class PersistentProcessActionsTests(unittest.TestCase):
         self.assertTrue(status.ok)
         self.assertTrue(status.data["running"])
         self.assertTrue(status.data["ownership_valid"])
+        self.assertNotIn("token", status.data)
 
         listing = self.registry.execute("process.list", {"project": "demo"})
         self.assertTrue(listing.ok)
@@ -146,6 +168,7 @@ class PersistentProcessActionsTests(unittest.TestCase):
             self.process_id,
             [item["process_id"] for item in listing.data["processes"]],
         )
+        self.assertTrue(all("token" not in item for item in listing.data["processes"]))
 
         tail = ""
         deadline = time.monotonic() + 5.0

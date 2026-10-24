@@ -102,6 +102,7 @@ O Runtime **já oferece** execução nativa de processos; não se deve criar out
 
 - `terminal.exec`: execução pontual de `argv` diretamente no host (`shell=false` por padrão). Somente `command` com `shell=true` explícito passa pelo interpretador do sistema. O diretório de trabalho pertence a um projeto registrado, mas **isso não é sandbox**: o processo conserva as permissões do usuário Windows.
 - `process.start`, `process.status`, `process.logs`, `process.write_stdin` e `process.stop`: processos persistentes supervisionados, pertencentes ao projeto, com identidade e logs; não usar automação de teclado para executar CLI.
+- O token interno de propriedade do supervisor permanece no estado local do Runtime; respostas de start/status/list não o expõem ao cliente MCP.
 - `computer.type`, `computer.click`, `computer.focus_window` e demais ações gráficas: interação legítima com aplicativos GUI, não um canal substituto para comando de terminal.
 
 **Grants distintos:** `full_access=true` no Studio remove allowlists *locais* de pastas/aplicativos, mas **não concede** `terminal.exec` nem `process.start`. É necessário grant remoto explícito dessas capacidades, ligado à Conta OrdaX, cliente, dispositivo e projeto. A implementação não deve inferir autorização de terminal a partir de `computer.type` ou `computer.access_status`.
