@@ -47,8 +47,10 @@ against the same monotonic deadline without buffering small chunks indefinitely.
   Its executable MCP annotations describe a read-only, idempotent operation;
   annotations grant no permission. Auth/revocation errors preserve the ID but
   expose no task result.
-- Successful and terminal failed/cancelled task responses retain the existing
-  receipt shape and authorized result. `ProductActionWaitTimeout` remains a
+- Every status retains the receipt shape, but `result` is exposed only
+  when status is `succeeded`; queued/leased/running/failed/cancelled results
+  are normalized to `null` so partial output cannot cross MCP. Terminal failure
+  metadata remains available. `ProductActionWaitTimeout` remains a
   `TimeoutError`, with the recoverable `request_id` attached. `ProductRemoteError`
   permits Python's normal traceback updates; freezing an Exception broke stream
   cleanup and error propagation.
@@ -105,3 +107,10 @@ migrate together. Do not fabricate the legacy `grant` envelope from a claimed
 canonical job, translate a slug into a UUID, mirror tasks into D1 or add another
 local orchestrator to force compatibility. Production readiness and rollback
 must be established by Platform and Runtime owners before activation.
+
+
+## Studio Runtime v3 result boundary
+
+OrdaX OS defines `ordax.device-action-result/1` and `ordax.studio-runtime/3` in its [result contract](https://github.com/ordaxsystems/ordax-os/blob/main/system/contracts/device-action-result.mjs) and [Runtime port](https://github.com/ordaxsystems/ordax-os/blob/main/system/contracts/studio-runtime-v3.mjs). That contract binds the output to the original action request and current actor/Space/project/device/client context, bounds normalized JSON by UTF-8 bytes, and rejects output unless the receipt is `succeeded`. The Runtime Product MCP fix above enforces the succeeded-only part at its public receipt boundary while preserving its existing status API.
+
+The current Product MCP status tool accepts only `request_id`; its Platform response does not supply the full v3 binding envelope. Therefore this API is not itself a conforming v3 `getActionResult(request)` port. Do not synthesize the missing binding from caller JSON or treat a request ID as authorization. A future end-to-end adapter requires a canonical request-to-Product action mapping and authenticated scope contract across the respective owners.

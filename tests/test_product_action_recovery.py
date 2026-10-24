@@ -287,6 +287,30 @@ class ProductMcpRecoveryFlowTests(unittest.TestCase):
         self.assertTrue(receipt["completion_unknown"])
         self.assertNotIn("status", receipt)
 
+    def test_status_tool_withholds_output_until_action_succeeded(self):
+        statuses = ("queued", "leased", "running", "failed", "cancelled", "succeeded")
+        remaining = iter(statuses)
+        calls = []
+
+        def handler(request):
+            calls.append(request.method)
+            status = next(remaining)
+            return httpx.Response(200, json={"ok": True, "action": {
+                "request_id": "req-1", "status": status,
+                "result": {"partial": True} if status != "succeeded" else {"complete": True},
+            }})
+
+        self.invoke_with_transport(handler)
+        for status in statuses[:-1]:
+            with self.subTest(status=status):
+                receipt = self.call_tool("product_action_status", {"request_id": "req-1"})
+                self.assertEqual(receipt["status"], status)
+                self.assertIsNone(receipt["result"])
+        succeeded = self.call_tool("product_action_status", {"request_id": "req-1"})
+        self.assertEqual(succeeded["status"], "succeeded")
+        self.assertEqual(succeeded["result"], {"complete": True})
+        self.assertEqual(calls, ["GET"] * len(statuses))
+
     def test_status_tool_schema_has_only_request_id_and_no_execution_authority(self):
         tools = asyncio.run(server.mcp.list_tools())
         status = next(tool for tool in tools if tool.name == "product_action_status")
