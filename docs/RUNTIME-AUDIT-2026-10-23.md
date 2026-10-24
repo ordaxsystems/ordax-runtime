@@ -420,3 +420,10 @@ Os resultados de CI validam contratos e instalador descartável; não comprovam 
 - Depois do merge, o head da branch foi confirmado como `243565e6247e1250cac86a4d6722a016bc19387e`; sua árvore Git era idêntica à de `main`. A branch integrada foi removida. A API confirmou zero PRs abertas e somente a branch `main`; o clone isolado ficou sincronizado e limpo no commit `5e85548e368f8e4c64029b53dcdccad014cd75c7`.
 - `tests.test_persistent_process_runtime` passou localmente com três testes, `py_compile` e `git diff --check` passaram e o filho descartável Windows recebeu o registro dividido em duas escritas. A suíte maior não importou localmente por falta de `httpx`; a CI hospedada fornece os contratos do Runtime. Não houve sessão MCP de serviço, ação autorizada, instalação física Windows, teste no notebook nem execução sob o supervisor real do OrdaX OS.
 - Issues #7, #49, #61, #67, #127, #149 e #184 continuam abertas nos limites e owners descritos acima. O inventário anterior ainda mostrava apenas discovery autorizado no Desktop e notebook offline; não foi tentada nenhuma ação MCP.
+
+
+### Limite do job de build Windows — 2026-10-24
+
+- A execução Windows da PR #258 (run 40115354135, head a56895250cbedfab192586242da555ff4156a503) deixou build-installer ativo por mais de 20 minutos; a definição do job não tinha timeout-minutes. Os endpoints de jobs/logs do GitHub retornaram HTTP 502/read timeout, então não há evidência suficiente para atribuir uma causa ao runner, checkout, build ou serviço do GitHub.
+- Dois builds concluídos do mesmo workflow no mesmo dia duraram 3m33 (build-installer job 120931686118) e 3m11 (job 120933406075). Esta PR adiciona um limite de 20 minutos ao job — mais de cinco vezes essas durações observadas — para encerrar uma execução sem progresso indefinido e liberar o runner; o timeout não diagnostica nem corrige a causa subjacente.
+- A validação hospedada para o head com o limite explícito ainda precisa concluir. Nenhuma alteração foi feita em ordax-os, ordax-apps ou ordax-platform.
