@@ -71,7 +71,7 @@ def resolve_control_plane_provenance(
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise ControlPlaneProvenanceError("Control Plane source version must be a positive integer")
 
-    if environment not in ENVIRONMENTS:
+    if not isinstance(environment, str) or environment not in ENVIRONMENTS:
         raise ControlPlaneProvenanceError(f"Unsupported Control Plane environment: {environment}")
 
     platform_dir = Path(platform_root).resolve(strict=True)
@@ -105,6 +105,7 @@ def resolve_control_plane_provenance(
     if (
         not endpoint_path.startswith("/")
         or endpoint_path.startswith("//")
+        or any(part in {".", ".."} for part in endpoint_path.split("/"))
         or any(character in endpoint_path for character in "?#\\")
     ):
         raise ControlPlaneProvenanceError("Platform MCP path is malformed")
@@ -141,10 +142,18 @@ def resolve_control_plane_provenance(
     if environment == "validation-candidate":
         if release.get("validation_deployment_ready") is not True:
             raise ControlPlaneProvenanceError("Platform validation endpoint is not deployment-ready")
+        connection_modes = foundation.get("connection_modes")
+        direct_mcp = (
+            connection_modes.get("direct_user_chatgpt_mcp")
+            if isinstance(connection_modes, dict)
+            else None
+        )
+        if not isinstance(direct_mcp, dict):
+            raise ControlPlaneProvenanceError(
+                "Pinned Platform foundation lacks direct MCP validation metadata"
+            )
         validation_endpoint = _require_text(
-            foundation.get("connection_modes", {})
-            .get("direct_user_chatgpt_mcp", {})
-            .get("current_validation_endpoint"),
+            direct_mcp.get("current_validation_endpoint"),
             "Platform current validation endpoint",
         )
         if validation_endpoint != endpoint:
