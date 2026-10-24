@@ -37,6 +37,13 @@ permissões. A ingress `workers.dev` restrita descrita em
 `PRODUCT-MCP-TRUSTED-INGRESS-RECOVERY.md` é exclusiva dos caminhos de transporte
 do Device Runtime.
 
+O host Product MCP conserva uma única pool de conexões HTTPX, criada sob demanda,
+com limites explícitos de conexões e encerramento no shutdown do processo. Cada
+invocação de ferramenta mantém seu próprio cliente HTTP de curta duração e seu
+próprio estado de cookies; apenas o transporte/pool é compartilhado. O token
+Product continua sendo enviado no cabeçalho de cada requisição e não fica salvo
+no cliente HTTP.
+
 Nenhum desses transports pode manter cópia própria de Identity, grants, Memory,
 ou execução de `computer.*`/Blender. Nenhum é requisito para o Studio funcionar
 offline em capacidades locais. Produto remoto exige autorização no servidor **e**
