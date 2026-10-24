@@ -127,6 +127,21 @@ class ProductActionRecoveryTests(unittest.TestCase):
         self.assertEqual(caught.exception.error_code, "product_remote_error")
         self.assertNotIn("secret", str(caught.exception))
 
+    def test_duplicate_json_object_keys_are_rejected_at_every_depth(self):
+        for content in (
+            b'{"ok":false,"ok":true,"targets":[]}',
+            b'{"ok":true,"targets":[{"device_id":"device-a","device_id":"device-b"}]}',
+        ):
+            with self.subTest(content=content):
+                client = self.client(lambda request: httpx.Response(
+                    200,
+                    content=content,
+                    headers={"content-type": "application/json"},
+                ))
+                with self.assertRaises(ProductRemoteError) as caught:
+                    client.targets("jwt")
+                self.assertEqual(caught.exception.error_code, "product_remote_invalid_response")
+
     def test_published_inline_artifact_capacity_survives_transport_bound(self):
         task = {"request_id": "req-1", "status": "succeeded", "result": {
             "base64": "A" * (4 * ((2 * 1024 * 1024 + 2) // 3)),
