@@ -226,3 +226,32 @@ Before reconciling the pre-existing dirty local Runtime checkout, its full track
 The snapshot's draft Product readiness implementation duplicates functionality now on `main`. The canonical `product_dispatch_readiness` additionally requires a finite Product heartbeat no older than 60 seconds. Existing operational-status tests cover missing/stale heartbeats and keepalive failure while a job remains active; Studio tests cover remote endpoint presence separately from device readiness. Replaying the old implementation would duplicate the contract and omit the heartbeat-freshness gate, so no code PR was opened from that snapshot.
 
 GitHub API verified `main` at `af5b3a306aba0381babd4f608d3accde98f3dd64`. The local fetch could not reach `github.com:443`; therefore this checkout's `origin/main` tracking ref remains stale. No local rebase, reset, or checkout was performed.
+
+
+## Continuous Runtime audit plan — 2026-10-24
+
+### Reconciled baseline
+
+- Canonical repository: `ordaxsystems/ordax-runtime`; `main` is `d4d450eb8e52391e8edaf0f769979e76353ebdce`. GitHub search reports no open Runtime pull requests. The preserved `preserve/runtime-audit-worktree-20261024` branch is a recovery snapshot and is not a merge candidate.
+- The old 2026-10-09 description in issue #67 is superseded: Runtime PR #231 integrated the Apps-owned Studio Conversation/Electron presentation into the Windows installer. The current Runtime source lock pins Apps Studio 0.15.9 at `a297b691d5a91ea0370d80f32533931596dfe5f6`. Issue #67 remains open for real provider/preview/MCP-grant, signed-release and physical-device evidence; the installer smoke is runner evidence only.
+- Native OS execution is composed through `ordax_dev_agent.native_main` and the existing Runtime dispatch. Native does not introduce another Control Plane, identity owner or action queue. The current offline Buildroot probe does not use a real device credential or network and explicitly leaves full dependency closure, device install and device execution unproven.
+- Runtime issue #1 is closed; issue #7 remains dependent on the OS-owned Studio Runtime v3 result-binding contract. #49 awaits production signing custody; #61 awaits Platform production readiness; #127 awaits canonical grant/discovery behavior and authorized E2E; #149 awaits the Owner/Dev rollback evidence; #184 awaits the governed Platform contract and Apps host integration.
+
+### Work sequence
+
+1. **Audit and SSOT (in progress):** map every Runtime entrypoint, MCP adapter, action registry, authorization check, updater and packaged process to its consumers and canonical owner. Keep compatibility aliases until consumer evidence supports removal. Record only demonstrated duplication or dead code.
+2. **MCP execution and recovery:** trace authenticated session → device/project scope → dispatch → typed local policy → action → terminal receipt/status → audit evidence. Add or adjust focused positive and negative tests for timeout, reconnect, duplicate submission, revocation and stale readiness. Change Runtime-owned code only; do not copy Platform authorization or audit services.
+3. **Native OrdaX OS:** reconcile the Runtime lock and dependency closure against the exact OS-owned Buildroot ABI and package recipes. Require the OS owner’s verified artifact and lifecycle/identity contract before changing pins or claiming installability. Then prove packaged bootstrap, OS-supervised lifecycle, fresh presence and one explicitly authorized read-only action with result recovery on a real target.
+4. **Windows recovery and release:** keep Owner/Dev apply fail-closed until issue #149 proves recovery on disposable Windows fixtures and the authorized device gate is satisfied. Keep production publication closed until issue #49 has protected signing custody and install-smoke of the final signed bytes. Keep the endpoint lock unchanged until Platform issue #61’s canonical deployment reference is production-ready.
+5. **Cross-project resources and grants:** progress #127 and #184 only with Platform’s authorization contract and Apps’ consumer contract. Runtime must never infer a remote grant from local `full_access`, a project id, device presence or a successful health endpoint.
+6. **Integration and repository hygiene:** for each Runtime change, branch from the latest main, preserve any pre-existing work, run the applicable local tests and required CI, reconcile main before merge, then record commit/check/evidence limits here. Remove a branch only when merged or deliberately retired, its commits are preserved, no PR depends on it, and a supported deletion path is available.
+
+### Completion evidence
+
+Track **source tests**, **hosted CI**, **cross-service integration**, and **physical device execution** separately. A workstream is complete only when its own acceptance evidence exists at every applicable layer, security remains fail-closed, resource behavior is bounded, and the canonical owner confirms external contracts. A CI pass alone does not close a physical or production gate.
+
+### Immediate execution status
+
+- Reconciled current main, open PRs, current issue owners and the previously stale #67 summary.
+- Native OS install/MCP remains unverified while the authorized notebook is offline and the Buildroot dependency closure is not proven. No device action or permission change was made.
+- Next Runtime-owned pass: finish the entrypoint/adapter/consumer map, then select the first reproducible code defect with an owner-local fix and regression test. External gates remain explicit handoffs, not invented Runtime work.
