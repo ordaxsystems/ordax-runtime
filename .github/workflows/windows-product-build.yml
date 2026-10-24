@@ -60,6 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Resolve canonical source locks and build environment
+        id: resolve-locks
         shell: powershell
         run: |
           $studioLock = Get-Content .\studio-source.lock.json -Raw | ConvertFrom-Json
@@ -80,6 +81,8 @@ jobs:
           "ORDAX_STUDIO_SOURCE_COMMIT=$($studioLock.commit)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "ORDAX_CONTROL_PLANE_SOURCE_COMMIT=$($controlLock.source.commit)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "ORDAX_CONTROL_PLANE_ENVIRONMENT=$controlEnvironment" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "control_plane_source_commit=$($controlLock.source.commit)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "control_plane_environment=$controlEnvironment" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
       - name: Checkout canonical ORDAX Studio app source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -90,7 +93,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ordaxsystems/ordax-platform
-          ref: ${{ env.ORDAX_CONTROL_PLANE_SOURCE_COMMIT }}
+          ref: ${{ steps.resolve-locks.outputs.control_plane_source_commit }}
           path: .ordax/platform
           persist-credentials: false
 
@@ -121,7 +124,7 @@ jobs:
         env:
           ORDAX_STUDIO_APP_SOURCE: ${{ github.workspace }}\.ordax\apps\apps\studio
           ORDAX_PLATFORM_SOURCE: ${{ github.workspace }}\.ordax\platform
-          ORDAX_CONTROL_PLANE_ENVIRONMENT: ${{ env.ORDAX_CONTROL_PLANE_ENVIRONMENT }}
+          ORDAX_CONTROL_PLANE_ENVIRONMENT: ${{ steps.resolve-locks.outputs.control_plane_environment }}
         run: .\scripts\windows\build-ordax-studio-product.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\dist\windows" -ControlPlaneEnvironment "$env:ORDAX_CONTROL_PLANE_ENVIRONMENT"
       - name: Verify build did not rewrite Runtime Studio sources
         shell: powershell
