@@ -210,6 +210,26 @@ class ProductActionRecoveryTests(unittest.TestCase):
         self.assertAlmostEqual(sleep.call_args.args[0], 0.05)
         self.assertAlmostEqual(requests[0].extensions["timeout"]["read"], 1.0)
 
+    def test_receipt_validation_cannot_return_success_after_wait_deadline(self):
+        clock = [0.0]
+        client = self.client(lambda request: httpx.Response(200, json={
+            "ok": True,
+            "action": {"request_id": "req-1", "status": "succeeded", "result": {"ok": True}},
+        }))
+        original_body = ProductRemoteClient._body
+
+        def slow_body(response):
+            body = original_body(response)
+            clock[0] = 1.01
+            return body
+
+        with patch("ordax_dev_agent.product_remote_client.time.monotonic", side_effect=lambda: clock[0]), patch.object(
+            ProductRemoteClient, "_body", side_effect=slow_body,
+        ), self.assertRaises(ProductActionWaitTimeout) as caught:
+            client.wait_action("jwt", "req-1", timeout_seconds=1)
+
+        self.assertEqual(caught.exception.request_id, "req-1")
+
     def test_slow_small_chunks_cannot_keep_the_wait_alive_past_deadline(self):
         clock = [0.0]
         class SlowStream(TrackedStream):

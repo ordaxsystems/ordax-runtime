@@ -605,6 +605,12 @@ class ProductRemoteClient:
                     response.status_code,
                     "Product action identity or status is invalid",
                 )
+            if _deadline is not None and time.monotonic() >= _deadline:
+                raise ProductRemoteError(
+                    "product_action_wait_timeout",
+                    0,
+                    "Product action status validation exceeded the wait deadline",
+                )
             return action
         except ProductRemoteError as error:
             raise ProductRemoteError(
