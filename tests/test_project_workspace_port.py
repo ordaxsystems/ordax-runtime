@@ -68,6 +68,15 @@ class ProjectWorkspacePortTests(unittest.TestCase):
         self.assertNotIn(str(self.root), str(result))
         self.assertNotIn("private fixture", str(result))
 
+    def test_directory_entries_are_bounded_even_without_regular_files(self) -> None:
+        from ordax_dev_agent import project_workspace_port
+
+        for index in range(4):
+            (self.root / f"empty-{index}").mkdir()
+        with patch.object(project_workspace_port, "_MAX_ENTRIES", 3):
+            with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_scan_limit"):
+                self.snapshot()
+
     def test_git_pointer_file_cannot_escape_resource_root(self) -> None:
         (self.root / ".git").write_text("gitdir: ../../outside", encoding="utf-8")
         with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_git_boundary_unverified"):

@@ -24,6 +24,10 @@ _RESOURCE = re.compile(r"^resource_[A-Za-z0-9_-]{8,160}$")
 _EXCLUDED = frozenset({".git", "node_modules", ".venv", "__pycache__", ".next",
                        "dist", "build", ".cache", ".pytest_cache"})
 _MAX_FILES = 20000
+# Bound directories as well as regular files before retaining DirEntry objects
+# for deterministic ordering. A tree can contain many empty directories or
+# reparse points while remaining below the regular-file limit.
+_MAX_ENTRIES = 40000
 _MAX_DEPTH = 24
 
 
@@ -118,6 +122,7 @@ def _snapshot(root: Path) -> dict:
     # Walk is bounded; never follow symlinks, junctions, or reparse points.
     # No names, file contents, absolute paths, or raw Git output leave Runtime.
     count = 0
+    entry_count = 0
     digest = hashlib.sha256()
     pending: list[tuple[Path, int]] = [(root, 0)]
     while pending:
@@ -126,7 +131,13 @@ def _snapshot(root: Path) -> dict:
             raise ProjectWorkspaceDenied("workspace_scan_limit")
         try:
             with os.scandir(directory) as iterator:
-                entries = sorted(iterator, key=lambda entry: entry.name)
+                entries = []
+                for entry in iterator:
+                    entry_count += 1
+                    if entry_count > _MAX_ENTRIES:
+                        raise ProjectWorkspaceDenied("workspace_scan_limit")
+                    entries.append(entry)
+                entries.sort(key=lambda entry: entry.name)
             for entry in entries:
                 if entry.name in _EXCLUDED:
                     continue
