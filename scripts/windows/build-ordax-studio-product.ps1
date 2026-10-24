@@ -280,7 +280,7 @@ if ($LASTEXITCODE -ne 0) {
 try {
     $controlPlaneProvenance = ($resolvedControlPlaneJson -join "`n") | ConvertFrom-Json -ErrorAction Stop
 } catch {
-    "throw Control Plane endpoint provenance resolver returned invalid JSON: $_"
+    throw "Control Plane endpoint provenance resolver returned invalid JSON: $_"
 }
 if ($controlPlaneProvenance.schema -ne "ordax.control-plane-endpoint-provenance/1") {
     throw "Control Plane endpoint provenance schema is invalid"
