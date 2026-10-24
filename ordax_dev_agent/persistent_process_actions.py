@@ -277,6 +277,8 @@ class PersistentProcessActions:
         elif not running and lifecycle in {"starting", "running", "stopping"}:
             lifecycle = "stopped"
         result = dict(state)
+        # This is a local supervisor ownership proof, not public process metadata.
+        result.pop("token", None)
         result.update({
             "state": lifecycle,
             "running": bool(running and owned and lifecycle == "running"),
@@ -413,7 +415,11 @@ class PersistentProcessActions:
         except OSError as error:
             state.update({"state": "failed", "error": str(error), "ended_at_unix": time.time()})
             state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-            return ActionResult(False, f"cannot start persistent process: {error}", state)
+            return ActionResult(
+                False,
+                f"cannot start persistent process: {error}",
+                self._public_process_state(state),
+            )
 
         requested_wait = min(max(float(payload.get("wait_seconds", 0.5)), 0.1), 5.0)
         # The caller's wait preference must not shorten the supervisor's own

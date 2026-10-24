@@ -32,6 +32,22 @@ class ProcessPublicStateTests(unittest.TestCase):
         self.assertEqual(result["state"], "running")
         self.assertTrue(result["running"])
 
+    def test_public_process_state_does_not_expose_supervisor_token(self):
+        supervisor = PersistentProcessActions()
+        state = {
+            "process_id": "test-process",
+            "manager_pid": 1234,
+            "token": "internal-ownership-proof",
+            "state": "running",
+        }
+        with patch.object(supervisor, "_owned", return_value=True), patch.object(
+            supervisor, "_pid_running", return_value=True
+        ):
+            result = supervisor._public_process_state(state)
+
+        self.assertNotIn("token", result)
+        self.assertEqual("internal-ownership-proof", state["token"])
+
     def test_failed_child_is_not_running(self):
         supervisor = PersistentProcessActions()
         state = {"process_id": "test-process", "manager_pid": 1234, "state": "failed"}
