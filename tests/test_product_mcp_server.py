@@ -4,14 +4,17 @@ import os
 import unittest
 from unittest.mock import patch
 
+from ordax_dev_agent import product_mcp_handlers as handlers
 from ordax_dev_agent import product_mcp_server as server
 
 
 class FakeClient:
     instances = []
 
-    def __init__(self, base_url):
+    def __init__(self, base_url, *, http=None):
         self.base_url = base_url
+        self.http = http
+        self.transport = getattr(http, "_transport", None)
         self.calls = []
         self.__class__.instances.append(self)
 
@@ -62,6 +65,13 @@ class ProductMcpServerTests(unittest.TestCase):
         self.client.stop()
         self.env.stop()
 
+    def test_product_http_transport_is_closed_on_process_shutdown(self):
+        transport = handlers._product_http_transport()
+        with patch.object(transport, "shutdown", wraps=transport.shutdown) as shutdown:
+            handlers._close_product_http_transport()
+        shutdown.assert_called_once_with()
+        self.assertIsNone(handlers._PRODUCT_HTTP_TRANSPORT)
+
     def test_device_process_start_routes_without_project(self):
         response = server.computer_process_start("dev-1", ["node", "--version"], cwd="C:/project", wait_seconds=1)
         self.assertEqual(response["status"], "succeeded")
@@ -77,6 +87,9 @@ class ProductMcpServerTests(unittest.TestCase):
         self.assertEqual(server.product_session()["subject_id"], "user:1")
         targets = server.product_targets("space-1")
         self.assertEqual(targets[0]["device_id"], "dev-1")
+        self.assertEqual(len(FakeClient.instances), 2)
+        self.assertIsNot(FakeClient.instances[0].http, FakeClient.instances[1].http)
+        self.assertIs(FakeClient.instances[0].transport, FakeClient.instances[1].transport)
         calls = [call for instance in FakeClient.instances for call in instance.calls]
         self.assertIn(("session", "jwt-secret"), calls)
         self.assertIn(("targets", "jwt-secret", "space-1"), calls)
