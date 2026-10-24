@@ -276,3 +276,12 @@ Track **source tests**, **hosted CI**, **cross-service integration**, and **phys
 - O código Native reutiliza o dispatch Runtime, mas o Buildroot não comprova a instalação e o ciclo de vida sob o supervisor real. O notebook autorizado continua sem evidência online/execução nesta auditoria. Windows CI também não substitui teste físico ou uma sessão MCP com autorização real.
 - Próximos gates: confirmar o Windows push run; continuar o mapa de erros/resultados e recuperação do MCP com regressões focadas; manter o OS responsável por ABI, dependências Buildroot e ciclo de vida, Platform por identidade/grants/fila/auditoria remota e Apps por clientes/consentimento. Não alterar os repos desses owners nem inferir autorização.
 
+### Checkpoint pós-merge da PR #241 — 2026-10-24
+
+- `main` avançou para `d12f28da36f6520b5118691d92729fcef801c804`. PR #241 foi integrada por squash após Runtime Contracts, Windows Product Build/Install Smoke, Native Product Runtime Candidate e Native Buildroot Source Compatibility passarem no head final.
+- A alteração mantém a resposta Product remota de falha limitada a `error_code` validado e `retryable` booleano, quando presentes; elimina resumo e campos arbitrários do adaptador. O teste injeta um caminho local em `PermissionError` e verifica ausência desse valor na resposta, junto com o registro da falha terminal.
+- Os workflows de push no commit `d12f28d` passaram: Runtime Contracts, Windows Product Build/Install Smoke, Native Candidate, Native Buildroot Source Compatibility e OrdaX Agent Recovery. Assinatura, publicação e smoke de bytes assinados ficaram pulados; não são evidência de release assinado.
+- Não há PR Runtime aberta neste checkpoint. As issues ainda abertas são #7, #49, #61, #67, #127, #149 e #184; continuam dependendo dos owners externos/integração e das evidências físicas já descritas acima.
+- O código Native continua candidato de composição/source: sem Buildroot dependency closure compatível e sem instalação/supervisão em dispositivo físico. O notebook autorizado estava desligado, portanto MCP ao vivo no OrdaX OS segue sem prova. O Windows smoke é runner descartável, não instalação no notebook do usuário.
+- Próximo passe Runtime: verificar classificação de timeout/reconexão e semântica de request id do Product MCP somente onde o contrato e um teste reproduzível indicarem defeito. Não transformar erro transitório em nova submissão; não confundir presença/heartbeat com dispatch readiness.
+
