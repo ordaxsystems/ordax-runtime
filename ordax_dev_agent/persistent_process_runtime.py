@@ -15,6 +15,9 @@ from pathlib import Path
 
 # The parent action must wait longer than this child-tree termination window.
 WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS = 15
+# Bound idle journal I/O while retaining a short input handoff latency.
+PERSISTENT_PROCESS_STDIN_POLL_INTERVAL_SECONDS = 0.05
+PERSISTENT_PROCESS_STDIN_MAX_IDLE_POLL_INTERVAL_SECONDS = 0.2
 
 
 def atomic_json(path: Path, payload: dict) -> None:
@@ -120,12 +123,14 @@ class ProcessRuntime:
 
     def _pump_stdin(self) -> None:
         position = 0
+        poll_interval = PERSISTENT_PROCESS_STDIN_POLL_INTERVAL_SECONDS
         self.stdin_path.parent.mkdir(parents=True, exist_ok=True)
         self.stdin_path.touch(exist_ok=True)
         while not self._stopping:
             child = self.child
             if child is None or child.poll() is not None:
                 return
+            new_entries_seen = False
             try:
                 with self.stdin_path.open("r", encoding="utf-8", errors="replace") as handle:
                     handle.seek(position)
@@ -133,6 +138,7 @@ class ProcessRuntime:
                         line = handle.readline()
                         if not line:
                             break
+                        new_entries_seen = True
                         position = handle.tell()
                         try:
                             payload = json.loads(line)
@@ -161,7 +167,14 @@ class ProcessRuntime:
                             return
             except OSError:
                 pass
-            time.sleep(0.05)
+            if new_entries_seen:
+                poll_interval = PERSISTENT_PROCESS_STDIN_POLL_INTERVAL_SECONDS
+            time.sleep(poll_interval)
+            if not new_entries_seen:
+                poll_interval = min(
+                    poll_interval * 2,
+                    PERSISTENT_PROCESS_STDIN_MAX_IDLE_POLL_INTERVAL_SECONDS,
+                )
 
     def run(self) -> int:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
