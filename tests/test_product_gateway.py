@@ -667,6 +667,38 @@ class ProductGatewayTests(unittest.TestCase):
         self.assertEqual(result.data["error_code"], "audit_unavailable")
         self.assertEqual(self.executor.calls, [])
 
+    def test_local_execution_exception_records_terminal_failure_without_details(self) -> None:
+        class RaisingExecutor(FakeExecutor):
+            def execute(self, action: str, payload: dict[str, Any]) -> ActionResult:
+                self.calls.append((action, payload))
+                raise RuntimeError("C:/secret/credential.json")
+
+        executor = RaisingExecutor()
+        audit = AuditSink()
+        gateway = ProductActionGateway(
+            executor,
+            audit,
+            clock=lambda: 2_000_000_000,
+        )
+        result = gateway.execute(
+            "git.status",
+            {"project": "scene"},
+            context=self.context,
+            grant=self.grant("git.status"),
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.summary, "local action failed")
+        self.assertEqual(result.data, {"error_code": "local_action_failed"})
+        self.assertNotIn("credential", repr(result))
+        self.assertEqual(executor.calls, [("git.status", {"project": "scene"})])
+        self.assertEqual(len(audit.events), 2)
+        self.assertEqual((audit.events[0].phase, audit.events[0].decision), ("decision", "allow"))
+        self.assertEqual(
+            (audit.events[1].phase, audit.events[1].decision, audit.events[1].reason, audit.events[1].result_ok),
+            ("result", "allow", "local_action_failed", False),
+        )
+
     def test_success_records_authorization_and_result_without_payload_contents(self) -> None:
         payload = {"project": "scene", "path": "docs/README.md"}
         result = self.gateway.execute(
