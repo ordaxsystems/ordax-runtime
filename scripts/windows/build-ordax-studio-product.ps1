@@ -262,6 +262,10 @@ $platformGitCommit = (& git -C $platformSource rev-parse HEAD)
 if ($LASTEXITCODE -ne 0 -or [string]$platformGitCommit -cne [string]$controlPlaneLock.source.commit) {
     throw "Platform checkout does not match control-plane-source.lock.json"
 }
+$platformFoundationChanges = @(& git -C $platformSource status --porcelain -- $controlPlaneLock.source.path)
+if ($LASTEXITCODE -ne 0 -or $platformFoundationChanges.Count -gt 0) {
+    throw "Pinned Platform foundation source contains local changes"
+}
 $platformOrigin = (& git -C $platformSource remote get-url origin)
 $canonicalPlatformOrigins = @(
     "https://github.com/ordaxsystems/ordax-platform",
