@@ -196,21 +196,34 @@ def configure(state: Path, **kwargs) -> dict:
         return _configure(state, **kwargs)
 
 
-def _resolve_base_url(value: str | None, *, fallback: str, error_code: str) -> str:
+def _resolve_base_url(
+    value: str | None,
+    *,
+    fallback: str,
+    error_code: str,
+    allow_loopback_http: bool = False,
+) -> str:
     raw = str(value or fallback).strip().rstrip("/")
     parsed = urlparse(raw)
     loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
-    allowed_schemes = {"http", "https"} if loopback else {"https"}
+    allowed_schemes = {"https"}
+    if loopback and allow_loopback_http:
+        allowed_schemes.add("http")
     if not parsed.netloc or parsed.scheme not in allowed_schemes:
         raise SetupError(error_code)
     return raw
 
 
-def _resolve_product_mcp(product_mcp_url: str | None) -> tuple[str, str]:
+def _resolve_product_mcp(
+    product_mcp_url: str | None,
+    *,
+    allow_loopback_http: bool = False,
+) -> tuple[str, str]:
     raw = _resolve_base_url(
         product_mcp_url,
         fallback=DEFAULT_PRODUCT_MCP_URL,
         error_code="PRODUCT_MCP_URL_INVALID",
+        allow_loopback_http=allow_loopback_http,
     )
     return raw, raw + "/v3/device/setup"
 
@@ -241,7 +254,10 @@ def _configure(
 ) -> dict:
     settings_path = state / "agent-settings.json"
     settings = load_settings(settings_path)
-    product_mcp, endpoint = _resolve_product_mcp(product_mcp_url)
+    product_mcp, endpoint = _resolve_product_mcp(
+        product_mcp_url,
+        allow_loopback_http=True,
+    )
     binding = binding or machine_id()
     token = resolve_token_path(state)
     pending = resolve_pending_token_path(state)
