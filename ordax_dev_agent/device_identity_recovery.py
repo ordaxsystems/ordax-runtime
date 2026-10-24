@@ -14,9 +14,8 @@ from typing import Any
 
 import httpx
 
-from .config import DEFAULT_PRODUCT_MCP_URL
 from .device_credentials import resolve_pending_token_path, resolve_token_path
-from .device_setup import atomic_json, load_settings, request
+from .device_setup import SetupError, _resolve_product_mcp, atomic_json, load_settings, request
 from .identity import machine_id
 
 
@@ -56,16 +55,16 @@ def recover_existing_device_identity(
             "changed": False,
         }
 
-    product_mcp = str(
-        product_mcp_url
-        or settings.get("product_mcp_url")
-        or settings.get("control_plane_url")
-        or DEFAULT_PRODUCT_MCP_URL
-    ).strip().rstrip("/")
-    if not product_mcp.startswith("https://"):
+    try:
+        product_mcp, setup_endpoint = _resolve_product_mcp(
+            product_mcp_url
+            or settings.get("product_mcp_url")
+            or settings.get("control_plane_url")
+        )
+    except SetupError:
         return {
             "ok": False,
-            "state": "control-plane-invalid",
+            "state": "product-mcp-invalid",
             "changed": False,
         }
 
@@ -88,7 +87,7 @@ def recover_existing_device_identity(
                 continue
             identity = request(
                 http,
-                product_mcp + "/v3/device/setup",
+                setup_endpoint,
                 {
                     "operation": "identify",
                     "machine_binding_sha256": binding or machine_id(),
