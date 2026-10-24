@@ -66,6 +66,30 @@ class PersistentProcessRuntimeTests(unittest.TestCase):
         self.assertEqual([0.05, 0.1, 0.2, 0.05], intervals)
         self.assertEqual("wake\n", runtime.child.stdin.getvalue())
 
+    def test_stdin_pump_retries_unterminated_journal_entry(self):
+        with tempfile.TemporaryDirectory() as root:
+            stdin_path = Path(root) / "stdin.jsonl"
+            stdin_path.write_text('{"text":"wake",', encoding="utf-8")
+            runtime = self._runtime(stdin_path)
+            intervals = []
+
+            def finish_entry(interval):
+                intervals.append(interval)
+                if len(intervals) == 1:
+                    with stdin_path.open("a", encoding="utf-8", newline="\n") as handle:
+                        handle.write('"newline":true}\n')
+                else:
+                    runtime._stopping = True
+
+            with patch(
+                "ordax_dev_agent.persistent_process_runtime.time.sleep",
+                side_effect=finish_entry,
+            ):
+                runtime._pump_stdin()
+
+        self.assertEqual([0.05, 0.05], intervals)
+        self.assertEqual("wake\n", runtime.child.stdin.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

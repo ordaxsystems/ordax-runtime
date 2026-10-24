@@ -136,7 +136,9 @@ class ProcessRuntime:
                     handle.seek(position)
                     while True:
                         line = handle.readline()
-                        if not line:
+                        if not line or not line.endswith("\n"):
+                            # A writer may still be appending this JSONL record.
+                            # Leave the cursor at its start and retry next poll.
                             break
                         new_entries_seen = True
                         position = handle.tell()
