@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import unittest
 
@@ -598,6 +599,33 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("DelTree(HistoricalRoot, True, True, True)", installer)
         self.assertIn("LocalAppData\\OrdaX", installer)
         self.assertNotIn("DelTree(ExpandConstant('{localappdata}\\OrdaX')", installer)
+
+
+    def test_windows_package_uses_pinned_control_plane_endpoint_provenance(self) -> None:
+        lock = json.loads((ROOT / "control-plane-source.lock.json").read_text(encoding="utf-8"))
+        self.assertEqual(lock["schema"], "ordax.control-plane-source-lock/1")
+        self.assertEqual(lock["authority"], "none")
+        self.assertEqual(lock["source"]["repository"], "ordaxsystems/ordax-platform")
+        self.assertEqual(lock["source"]["path"], "control-plane/cloudflare/production-foundation.json")
+        self.assertEqual(lock["source"]["commit"], "3ae5d914df03f8f6a677ddd18cf3337cd0bcb89a")
+        self.assertEqual(lock["source"]["version"], 24)
+
+        builder = (ROOT / "scripts/windows/build-ordax-studio-product.ps1").read_text(encoding="utf-8")
+        smoke = (ROOT / "scripts/windows/test-ordax-studio-install-smoke.ps1").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/windows-product-build.yml").read_text(encoding="utf-8")
+        self.assertIn("ORDAX_PLATFORM_SOURCE", builder)
+        self.assertIn("rev-parse HEAD", builder)
+        self.assertIn("remote get-url origin", builder)
+        self.assertIn("resolve-control-plane-provenance.py", builder)
+        self.assertIn("validation-candidate", builder)
+        self.assertIn("ControlPlaneEnvironment", builder)
+        self.assertIn("control_plane = [string]$controlPlaneProvenance.origin", builder)
+        self.assertIn("control_plane_provenance = $controlPlaneProvenance", builder)
+        self.assertNotIn('control_plane = "https://mcp.ordax.com.br"', builder)
+        self.assertIn("Installed Control Plane endpoint provenance differs", smoke)
+        self.assertIn("Checkout pinned Control Plane foundation source", workflow)
+        self.assertIn("ORDAX_CONTROL_PLANE_SOURCE_COMMIT", workflow)
+        self.assertIn("tests.test_control_plane_endpoint_provenance", workflow)
 
 
 if __name__ == "__main__":
