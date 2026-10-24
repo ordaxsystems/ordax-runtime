@@ -158,6 +158,102 @@ class ProductWakeTests(unittest.TestCase):
                 "/v3/device/transport/claim", lambda _: None,
             )
 
+    def test_short_lived_connections_keep_exponential_retry_backoff(self):
+        class StopAfterTwoRetries(threading.Event):
+            def __init__(self):
+                super().__init__()
+                self.delays = []
+
+            def wait(self, timeout=None):
+                self.delays.append(timeout)
+                if len(self.delays) == 2:
+                    self.set()
+                    return True
+                return False
+
+        class ImmediateDisconnectSocket:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def recv(self, *, timeout):
+                raise ConnectionResetError("fixture disconnect")
+
+        stop = StopAfterTwoRetries()
+        control = SimpleNamespace(
+            base_http_url="https://mcp.ordax.com.br",
+            device_id="900943fd-8397-471e-bf05-c66ba4de7884",
+            device_token="s" * 64,
+            _trusted_ingress=TrustedProductIngress("https://mcp.ordax.com.br"),
+        )
+        listener = ProductWakeListener(
+            control, stop, connect_websocket=lambda *_args, **_kwargs: ImmediateDisconnectSocket(),
+        )
+        listener.start()
+        listener._thread.join(timeout=2)
+
+        self.assertFalse(listener._thread.is_alive())
+        self.assertEqual(stop.delays, [30.0, 60.0])
+
+    def test_stable_connection_resets_accumulated_retry_backoff(self):
+        from contextlib import contextmanager
+        from ordax_dev_agent import product_wake_signal
+
+        class StopAfterTwoRetries(threading.Event):
+            def __init__(self):
+                super().__init__()
+                self.delays = []
+
+            def wait(self, timeout=None):
+                self.delays.append(timeout)
+                if len(self.delays) == 2:
+                    self.set()
+                    return True
+                return False
+
+        class ImmediateDisconnectSocket:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def recv(self, *, timeout):
+                raise ConnectionResetError("fixture disconnect")
+
+        class DirectIngress:
+            @contextmanager
+            def websocket(self, _path, connect):
+                with connect("wss://mcp.ordax.com.br/v3/device/transport/wake") as socket:
+                    yield socket
+
+        connects = 0
+
+        def connect(*_args, **_kwargs):
+            nonlocal connects
+            connects += 1
+            if connects == 1:
+                raise ValueError("fixture handshake failure")
+            return ImmediateDisconnectSocket()
+
+        stop = StopAfterTwoRetries()
+        control = SimpleNamespace(
+            base_http_url="https://mcp.ordax.com.br",
+            device_id="900943fd-8397-471e-bf05-c66ba4de7884",
+            device_token="s" * 64,
+            _trusted_ingress=DirectIngress(),
+        )
+        listener = ProductWakeListener(control, stop, connect_websocket=connect)
+        with patch.object(product_wake_signal.time, "monotonic", side_effect=[0.0, 60.0]):
+            listener.start()
+            listener._thread.join(timeout=2)
+
+        self.assertFalse(listener._thread.is_alive())
+        self.assertEqual(connects, 2)
+        self.assertEqual(stop.delays, [30.0, 30.0])
+
     def test_untrusted_signal_cannot_become_action(self):
         stop = threading.Event()
         received = threading.Event()
