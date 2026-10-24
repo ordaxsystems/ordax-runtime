@@ -34,6 +34,9 @@ outro aplicativo Studio.
   local e registra o resultado terminal antes de responder. Exceções do executor
   ou da sanitização viram `local_action_failed`; se a persistência da auditoria
   falhar, o resultado não é liberado.
+- Resultados negativos do executor que cruzam o Gateway Product expõem apenas
+  códigos de erro validados e o booleano `retryable`, quando fornecidos. Resumos,
+  caminhos e campos arbitrários do adaptador ficam no dispositivo.
 
 O cliente Product usa `DEFAULT_PRODUCT_MCP_URL` de `ordax_dev_agent.config` como
 origem padrão (`https://mcp.ordax.com.br`). O exemplo

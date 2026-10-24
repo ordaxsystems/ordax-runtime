@@ -667,6 +667,45 @@ class ProductGatewayTests(unittest.TestCase):
         self.assertEqual(result.data["error_code"], "audit_unavailable")
         self.assertEqual(self.executor.calls, [])
 
+    def test_failed_product_result_redacts_adapter_details(self) -> None:
+        class FailingExecutor(FakeExecutor):
+            def execute(self, action: str, payload: dict[str, Any]) -> ActionResult:
+                self.calls.append((action, payload))
+                return ActionResult(
+                    False,
+                    "PermissionError: access denied at C:/Users/example/private.txt",
+                    {
+                        "error_code": "workspace_io_error",
+                        "retryable": True,
+                        "path": "C:/Users/example/private.txt",
+                        "detail": "C:/Users/example/private.txt",
+                    },
+                )
+
+        executor = FailingExecutor()
+        audit = AuditSink()
+        gateway = ProductActionGateway(
+            executor,
+            audit,
+            clock=lambda: 2_000_000_000,
+        )
+        result = gateway.execute(
+            "project.text_read",
+            {"project": "scene", "path": "docs/README.md"},
+            context=self.context,
+            grant=self.grant("project.text_read"),
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.summary, "local action failed")
+        self.assertEqual(result.data, {
+            "error_code": "workspace_io_error",
+            "retryable": True,
+        })
+        self.assertNotIn("C:/Users/example", repr(result))
+        self.assertEqual(audit.events[-1].reason, "local_action_failed")
+        self.assertFalse(audit.events[-1].result_ok)
+
     def test_local_execution_exception_records_terminal_failure_without_details(self) -> None:
         class RaisingExecutor(FakeExecutor):
             def execute(self, action: str, payload: dict[str, Any]) -> ActionResult:
