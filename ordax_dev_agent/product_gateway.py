@@ -751,7 +751,27 @@ def _sanitize_product_result(
     elif action.startswith("blender."):
         data = _redact_local_result_paths(data)
 
-    return ActionResult(result.ok, result.summary, data)
+    if not result.ok:
+        # Adapter failures can contain machine-local paths or arbitrary details.
+        # Product callers receive stable codes only; local diagnostics stay on
+        # the device and never cross this remote authorization boundary.
+        error_code = data.get("error_code")
+        if not isinstance(error_code, str) or re.fullmatch(
+            r"[a-z][a-z0-9_]{0,127}", error_code,
+        ) is None:
+            error_code = "local_action_failed"
+        failure_data = {"error_code": error_code}
+        original_error_code = data.get("original_error_code")
+        if (
+            isinstance(original_error_code, str)
+            and re.fullmatch(r"[a-z][a-z0-9_]{0,127}", original_error_code)
+        ):
+            failure_data["original_error_code"] = original_error_code
+        if type(data.get("retryable")) is bool:
+            failure_data["retryable"] = data["retryable"]
+        return ActionResult(False, "local action failed", failure_data)
+
+    return ActionResult(True, result.summary, data)
 
 
 def _valid_id(value: str | None) -> bool:
