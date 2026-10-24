@@ -160,6 +160,12 @@ class ProductRemoteClient:
                     request=response.request,
                 )
         except httpx.HTTPError as error:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise ProductRemoteError(
+                    "product_action_wait_timeout",
+                    0,
+                    "Product action wait deadline elapsed during transport",
+                ) from error
             raise ProductRemoteError(
                 "product_remote_transport_error", 0,
                 "Product MCP transport failed",

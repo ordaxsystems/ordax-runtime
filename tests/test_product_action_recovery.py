@@ -226,6 +226,36 @@ class ProductActionRecoveryTests(unittest.TestCase):
         self.assertAlmostEqual(sleep.call_args.args[0], 0.05)
         self.assertAlmostEqual(requests[0].extensions["timeout"]["read"], 1.0)
 
+    def test_transport_timeout_at_wait_deadline_is_reported_as_wait_timeout(self):
+        clock = [0.0]
+
+        def response(request):
+            clock[0] = 1.0
+            raise httpx.ReadTimeout("response timed out", request=request)
+
+        client = self.client(response)
+        with patch("ordax_dev_agent.product_remote_client.time.monotonic", side_effect=lambda: clock[0]), self.assertRaises(
+            ProductActionWaitTimeout
+        ) as caught:
+            client.wait_action("jwt", "req-1", timeout_seconds=1)
+
+        self.assertEqual(caught.exception.request_id, "req-1")
+
+    def test_transport_error_before_wait_deadline_keeps_transport_classification(self):
+        clock = [0.0]
+
+        def response(request):
+            raise httpx.ConnectError("connection refused", request=request)
+
+        client = self.client(response)
+        with patch("ordax_dev_agent.product_remote_client.time.monotonic", side_effect=lambda: clock[0]), self.assertRaises(
+            ProductRemoteError
+        ) as caught:
+            client.action("jwt", "req-1", timeout_seconds=1, _deadline=2)
+
+        self.assertEqual(caught.exception.error_code, "product_remote_transport_error")
+        self.assertEqual(caught.exception.request_id, "req-1")
+
     def test_receipt_validation_cannot_return_success_after_wait_deadline(self):
         clock = [0.0]
         client = self.client(lambda request: httpx.Response(200, json={
