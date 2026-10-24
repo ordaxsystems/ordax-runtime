@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import atexit
 import os
-from typing import Any
+import threading
+from contextlib import contextmanager
+from typing import Any, Iterator
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 
 from .config import DEFAULT_PRODUCT_MCP_URL
@@ -29,6 +33,61 @@ def _base_url() -> str:
     return value
 
 
+class _ReusableProductHttpTransport(httpx.BaseTransport):
+    """Keep sockets pooled while each tool call owns an isolated HTTP client."""
+
+    def __init__(self) -> None:
+        self._transport = httpx.HTTPTransport(
+            limits=httpx.Limits(
+                max_connections=16,
+                max_keepalive_connections=8,
+                keepalive_expiry=30.0,
+            )
+        )
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        return self._transport.handle_request(request)
+
+    def close(self) -> None:
+        # Per-call HTTP clients must not close the process-wide connection pool.
+        return None
+
+    def shutdown(self) -> None:
+        self._transport.close()
+
+
+_PRODUCT_HTTP_TRANSPORT: _ReusableProductHttpTransport | None = None
+_PRODUCT_HTTP_TRANSPORT_LOCK = threading.Lock()
+
+
+def _product_http_transport() -> _ReusableProductHttpTransport:
+    global _PRODUCT_HTTP_TRANSPORT
+    with _PRODUCT_HTTP_TRANSPORT_LOCK:
+        if _PRODUCT_HTTP_TRANSPORT is None:
+            _PRODUCT_HTTP_TRANSPORT = _ReusableProductHttpTransport()
+        return _PRODUCT_HTTP_TRANSPORT
+
+
+def _close_product_http_transport() -> None:
+    global _PRODUCT_HTTP_TRANSPORT
+    with _PRODUCT_HTTP_TRANSPORT_LOCK:
+        transport = _PRODUCT_HTTP_TRANSPORT
+        _PRODUCT_HTTP_TRANSPORT = None
+    if transport is not None:
+        transport.shutdown()
+
+
+atexit.register(_close_product_http_transport)
+
+
+@contextmanager
+def _remote_client() -> Iterator[ProductRemoteClient]:
+    base_url = _base_url()
+    with httpx.Client(transport=_product_http_transport(), timeout=20.0) as http:
+        with ProductRemoteClient(base_url, http=http) as client:
+            yield client
+
+
 def _invoke(
     *,
     device_id: str,
@@ -39,7 +98,7 @@ def _invoke(
 ) -> dict[str, Any]:
     token = _access_token()
     try:
-        with ProductRemoteClient(_base_url()) as client:
+        with _remote_client() as client:
             request_id = client.submit_action(
                 token,
                 device_id=device_id,
@@ -94,7 +153,7 @@ def product_action_status(request_id: str) -> dict[str, Any]:
     """Read the same accepted task under the current Product identity; never enqueue or replay it."""
     token = _access_token()
     try:
-        with ProductRemoteClient(_base_url()) as client:
+        with _remote_client() as client:
             return _action_receipt(client.action(token, request_id))
     except ProductRemoteError as error:
         return _action_failure(error)
@@ -135,7 +194,7 @@ def app_intelligence_detail(
 def product_session() -> dict[str, Any]:
     """Return the authenticated OrdaX Product subject for this MCP host."""
     token = _access_token()
-    with ProductRemoteClient(_base_url()) as client:
+    with _remote_client() as client:
         return client.session(token)
 
 
@@ -143,7 +202,7 @@ def product_session() -> dict[str, Any]:
 def product_targets(space_id: str | None = None) -> list[dict[str, Any]]:
     """List only devices and grants authorized for the authenticated Product subject."""
     token = _access_token()
-    with ProductRemoteClient(_base_url()) as client:
+    with _remote_client() as client:
         return client.targets(token, space_id=space_id)
 
 

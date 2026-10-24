@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import httpx
 
+from ordax_dev_agent import product_mcp_handlers as handlers
 from ordax_dev_agent import product_mcp_server as server
 from ordax_dev_agent.product_remote_client import (
     ProductActionWaitTimeout, ProductRemoteClient, ProductRemoteError,
@@ -222,18 +223,20 @@ class ProductMcpRecoveryFlowTests(unittest.TestCase):
         return result if isinstance(result, dict) else json.loads(result[0].text)
 
     def invoke_with_transport(self, handler):
-        http = httpx.Client(transport=httpx.MockTransport(handler))
-        self.addCleanup(http.close)
+        pooled = handlers._ReusableProductHttpTransport()
+        pooled._transport = httpx.MockTransport(handler)
+        transport_patch = patch.object(
+            handlers, "_product_http_transport", return_value=pooled,
+        )
+        transport_patch.start()
+        self.addCleanup(transport_patch.stop)
+        self.addCleanup(pooled.shutdown)
         self.env = patch.dict(os.environ, {
             "ORDAX_PRODUCT_ACCESS_TOKEN": "jwt-fixture",
             "ORDAX_PRODUCT_CONTROL_PLANE_URL": "https://control.example.test",
         })
         self.env.start()
         self.addCleanup(self.env.stop)
-        factory = lambda url: ProductRemoteClient(url, http=http)
-        client_patch = patch.object(server, "ProductRemoteClient", factory)
-        client_patch.start()
-        self.addCleanup(client_patch.stop)
 
     def test_accepted_action_is_recovered_by_get_without_second_post(self):
         calls = []
