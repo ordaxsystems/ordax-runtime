@@ -77,6 +77,73 @@ class ProjectWorkspacePortTests(unittest.TestCase):
             with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_scan_limit"):
                 self.snapshot()
 
+    @unittest.skipUnless(os.name == "posix" and os.scandir in os.supports_fd,
+                         "descriptor-relative directory enumeration is POSIX-specific")
+    def test_symlink_swap_during_directory_enumeration_stays_on_open_directory(self) -> None:
+        from ordax_dev_agent import project_workspace_port
+
+        outside = Path(self.temporary.name) / "outside-race"
+        outside.mkdir()
+        (outside / "outside-only.txt").write_text("private fixture", encoding="utf-8")
+        child = self.root / "child-race"
+        child.mkdir()
+        child_inode = child.stat().st_ino
+        original_scandir = os.scandir
+        swapped = False
+
+        def swap_before_enumeration(directory):
+            nonlocal swapped
+            matches_open_directory = (
+                isinstance(directory, int)
+                and os.fstat(directory).st_ino == child_inode
+            )
+            matches_legacy_path = not isinstance(directory, int) and Path(directory) == child
+            if not swapped and (matches_open_directory or matches_legacy_path):
+                child.rename(self.root / "child-race-original")
+                child.symlink_to(outside, target_is_directory=True)
+                swapped = True
+            return original_scandir(directory)
+
+        with patch.object(project_workspace_port.os, "scandir", swap_before_enumeration):
+            result = self.snapshot()
+        self.assertTrue(swapped)
+        self.assertEqual(result["fileCount"], 0)
+
+    @unittest.skipUnless(os.name == "nt", "Windows directory sharing is Windows-specific")
+    def test_windows_directory_swap_race_fails_closed(self) -> None:
+        from ordax_dev_agent import project_workspace_port
+
+        outside = Path(self.temporary.name) / "outside-junction"
+        outside.mkdir()
+        (outside / "outside-only.txt").write_text("private fixture", encoding="utf-8")
+        child = self.root / "child-junction"
+        child.mkdir()
+        original_scandir = os.scandir
+
+        def swap_before_enumeration(directory):
+            if Path(directory) == child:
+                try:
+                    child.rename(self.root / "child-junction-original")
+                except OSError as error:
+                    raise ProjectWorkspaceDenied("workspace_scan_boundary_changed") from error
+                link = str(child).replace("'", "''")
+                target = str(outside).replace("'", "''")
+                script = (
+                    f"New-Item -ItemType Junction -Path '{link}' "
+                    f"-Target '{target}' | Out-Null"
+                )
+                created = subprocess.run(
+                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                    capture_output=True, timeout=15, check=False,
+                )
+                if created.returncode:
+                    self.fail("could not create disposable junction race fixture")
+            return original_scandir(directory)
+
+        with patch.object(project_workspace_port.os, "scandir", swap_before_enumeration):
+            with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_scan_boundary_changed"):
+                self.snapshot()
+
     def test_git_pointer_file_cannot_escape_resource_root(self) -> None:
         (self.root / ".git").write_text("gitdir: ../../outside", encoding="utf-8")
         with self.assertRaisesRegex(ProjectWorkspaceDenied, "workspace_git_boundary_unverified"):
