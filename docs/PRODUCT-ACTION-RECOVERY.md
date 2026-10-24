@@ -33,8 +33,9 @@ capped at two seconds.
 Responses are streamed and closed on every exit, bounded to **4 MiB decoded
 bytes**, including gzip expansion. This accommodates the existing 2 MiB inline
 artifact after base64 expansion and metadata. JSON must use application/json,
-valid UTF-8 and a JSON object; invalid, deeply nested or nonfinite constant data
-is rejected. Error codes are bounded public identifiers; arbitrary backend
+valid UTF-8 and a JSON object; invalid or deeply nested JSON, nonfinite
+constants, and syntactically valid exponents that overflow a finite Python float
+are rejected. Error codes are bounded public identifiers; arbitrary backend
 messages and transport exception details are not returned to MCP clients.
 Redirects are not followed with bearer credentials, including with an injected
 HTTP client configured to follow redirects. Wait durations must be finite;
@@ -123,3 +124,4 @@ must be established by Platform and Runtime owners before activation.
 OrdaX OS defines `ordax.device-action-result/1` and `ordax.studio-runtime/3` in its [result contract](https://github.com/ordaxsystems/ordax-os/blob/main/system/contracts/device-action-result.mjs) and [Runtime port](https://github.com/ordaxsystems/ordax-os/blob/main/system/contracts/studio-runtime-v3.mjs). That contract binds the output to the original action request and current actor/Space/project/device/client context, bounds normalized JSON by UTF-8 bytes, and rejects output unless the receipt is `succeeded`. The Runtime Product MCP fix above enforces the succeeded-only part at its public receipt boundary while preserving its existing status API.
 
 The current Product MCP status tool accepts only `request_id`; its Platform response does not supply the full v3 binding envelope. Therefore this API is not itself a conforming v3 `getActionResult(request)` port. Do not synthesize the missing binding from caller JSON or treat a request ID as authorization. A future end-to-end adapter requires a canonical request-to-Product action mapping and authenticated scope contract across the respective owners.
+
