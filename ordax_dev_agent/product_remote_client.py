@@ -679,4 +679,3 @@ class ProductRemoteClient:
                 raise ProductActionWaitTimeout(request_id)
             time.sleep(min(poll_interval, remaining))
             poll_interval = min(poll_interval * 2, poll_interval_cap)
-
