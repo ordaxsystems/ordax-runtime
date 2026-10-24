@@ -36,6 +36,13 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _parse_finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("Product response contains a non-finite JSON number")
+    return parsed
+
+
 @dataclass
 class ProductRemoteError(RuntimeError):
     error_code: str
@@ -170,6 +177,7 @@ class ProductRemoteClient:
             body = json.loads(
                 response.content.decode("utf-8"),
                 parse_constant=reject_nonfinite,
+                parse_float=_parse_finite_json_float,
                 object_pairs_hook=_reject_duplicate_json_keys,
             )
         except (ValueError, RecursionError) as error:
@@ -671,3 +679,4 @@ class ProductRemoteClient:
                 raise ProductActionWaitTimeout(request_id)
             time.sleep(min(poll_interval, remaining))
             poll_interval = min(poll_interval * 2, poll_interval_cap)
+
