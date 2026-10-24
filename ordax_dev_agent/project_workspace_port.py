@@ -131,7 +131,10 @@ def _git(
                 raise ProjectWorkspaceDenied("workspace_git_boundary_unavailable")
             env["GIT_WORK_TREE"] = _inherited_directory_fd_path(cwd_fd)
             env["GIT_DIR"] = _inherited_directory_fd_path(git_dir_fd)
-            options["cwd"] = cwd_fd
+            # subprocess.Popen accepts a path for cwd, not an integer fd. The
+            # inherited descriptor path is resolved in the child while the
+            # pinned descriptor is preserved with pass_fds.
+            options["cwd"] = _inherited_directory_fd_path(cwd_fd)
             options["pass_fds"] = (cwd_fd, git_dir_fd)
         response = subprocess.run(
             [*command, "--no-optional-locks", "-c", "core.fsmonitor=false", *args],

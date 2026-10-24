@@ -217,6 +217,24 @@ class ProjectWorkspacePortTests(unittest.TestCase):
                 self.assertEqual(options["env"]["GIT_TERMINAL_PROMPT"], "0")
                 self.assertEqual(options["env"]["GIT_OPTIONAL_LOCKS"], "0")
 
+    @unittest.skipUnless(os.name == "posix", "inherited directory descriptors are POSIX-specific")
+    def test_git_uses_inherited_directory_descriptor_path_as_subprocess_cwd(self) -> None:
+        from ordax_dev_agent.project_workspace_port import _inherited_directory_fd_path
+
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        root_fd = os.open(self.root, flags)
+        git_fd = os.open(self.root, flags)
+        self.addCleanup(os.close, root_fd)
+        self.addCleanup(os.close, git_fd)
+        with patch("ordax_dev_agent.project_workspace_port.subprocess.run") as run:
+            run.return_value = SimpleNamespace(returncode=0, stdout=b"ok")
+            self.assertEqual(
+                _git(self.root, "status", cwd_fd=root_fd, git_dir_fd=git_fd), b"ok"
+            )
+        options = run.call_args.kwargs
+        self.assertEqual(options["cwd"], _inherited_directory_fd_path(root_fd))
+        self.assertEqual(options["pass_fds"], (root_fd, git_fd))
+
     def test_normal_local_git_repository_remains_supported(self) -> None:
         (self.root / "index.html").write_text("fixture", encoding="utf-8")
         for arguments in [
