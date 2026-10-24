@@ -205,6 +205,41 @@ if ($LASTEXITCODE -ne 0 -or $runtimeGitHead -cnotmatch '^[0-9a-f]{40}$' -or
 }
 Write-Host "ORDAX_RUNTIME_BUILD_IDENTITY=PASS"
 
+$controlPlaneLockPath = Join-Path $runtimeRepoRoot "control-plane-source.lock.json"
+if (-not (Test-Path -LiteralPath $controlPlaneLockPath -PathType Leaf)) {
+  throw "Control Plane source lock is missing from the Runtime source"
+}
+$controlPlaneLock = Get-Content -LiteralPath $controlPlaneLockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$expectedControlPlaneEnvironment = if ($env:GITHUB_REF -like 'refs/tags/v*') { "production" } else { "validation-candidate" }
+$controlPlaneProvenance = $installedManifest.control_plane_provenance
+if (
+  $controlPlaneLock.schema -ne "ordax.control-plane-source-lock/1" -or
+  $controlPlaneLock.authority -ne "none" -or
+  $controlPlaneProvenance.schema -ne "ordax.control-plane-endpoint-provenance/1" -or
+  $controlPlaneProvenance.environment -ne $expectedControlPlaneEnvironment -or
+  $installedManifest.control_plane -cne [string]$controlPlaneProvenance.origin -or
+  $controlPlaneProvenance.source.repository -cne [string]$controlPlaneLock.source.repository -or
+  $controlPlaneProvenance.source.path -cne [string]$controlPlaneLock.source.path -or
+  $controlPlaneProvenance.source.commit -cne [string]$controlPlaneLock.source.commit -or
+  [int]$controlPlaneProvenance.source.version -ne [int]$controlPlaneLock.source.version
+) {
+  throw "Installed Control Plane endpoint provenance differs from the pinned Runtime lock"
+}
+$parsedControlPlaneEndpoint = [Uri]$controlPlaneProvenance.endpoint
+$parsedControlPlaneOrigin = [Uri]$controlPlaneProvenance.origin
+if (
+  -not $parsedControlPlaneEndpoint.IsAbsoluteUri -or
+  -not $parsedControlPlaneOrigin.IsAbsoluteUri -or
+  $parsedControlPlaneEndpoint.Scheme -cne "https" -or
+  $parsedControlPlaneOrigin.Scheme -cne "https" -or
+  $parsedControlPlaneEndpoint.Host -cne $parsedControlPlaneOrigin.Host -or
+  $parsedControlPlaneEndpoint.Query -or
+  $parsedControlPlaneEndpoint.Fragment
+) {
+  throw "Installed Control Plane endpoint is not a bounded HTTPS URL"
+}
+Write-Host "ORDAX_CONTROL_PLANE_MANIFEST_PROVENANCE=PASS"
+
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $autoStart = (Get-ItemProperty -Path $runKey -Name "ORDAX Runtime" -ErrorAction Stop)."ORDAX Runtime"
 if (-not $autoStart -or $autoStart -notlike "*$runtimeExe*") {
