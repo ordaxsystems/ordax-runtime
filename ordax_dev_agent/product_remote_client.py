@@ -21,10 +21,6 @@ _UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
     re.IGNORECASE,
 )
-_CLIENT_ID = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
-    re.IGNORECASE,
-)
 _PROFILE_KEY = re.compile(r"[a-z][a-z0-9._-]{1,79}")
 _GITHUB_REPOSITORY = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}"
@@ -113,10 +109,7 @@ class ProductRemoteClient:
 
     @staticmethod
     def _client_id(value: Any) -> str:
-        normalized = str(value or "").strip().lower()
-        if _CLIENT_ID.fullmatch(normalized) is None:
-            raise ValueError("Product MCP client_id must be a canonical UUID")
-        return normalized
+        return ProductRemoteClient._uuid(value, "Product MCP client_id")
 
     def _request(
         self, method: str, url: str, *, deadline: float | None = None, **kwargs: Any,
