@@ -218,3 +218,11 @@ The open Runtime issues at this checkpoint are #7, #49, #61, #67, #127, #149, an
 - #184 needs trusted interactive host composition plus Platform's governed migration/opt-in and Apps integration before the read-only workspace flow can be called operational.
 
 No source-only pass above closes these integration, release-authority, deployment, or physical-device gates.
+
+### Local worktree snapshot and reconciliation — 2026-10-24
+
+Before reconciling the pre-existing dirty local Runtime checkout, its full tracked and untracked state was preserved verbatim on `preserve/runtime-audit-worktree-20261024` at `b6f01f39af829010d72e17ce053cbcb0c8819f35`, parent `9154cb977bbad9f007e7734ebfbeeb4997e7db57`. All six captured blobs match the checkout's raw Git object hashes. The local worktree was left untouched. This branch is a recovery snapshot, not a merge candidate.
+
+The snapshot's draft Product readiness implementation duplicates functionality now on `main`. The canonical `product_dispatch_readiness` additionally requires a finite Product heartbeat no older than 60 seconds. Existing operational-status tests cover missing/stale heartbeats and keepalive failure while a job remains active; Studio tests cover remote endpoint presence separately from device readiness. Replaying the old implementation would duplicate the contract and omit the heartbeat-freshness gate, so no code PR was opened from that snapshot.
+
+GitHub API verified `main` at `af5b3a306aba0381babd4f608d3accde98f3dd64`. The local fetch could not reach `github.com:443`; therefore this checkout's `origin/main` tracking ref remains stale. No local rebase, reset, or checkout was performed.
