@@ -170,6 +170,14 @@ def resolve_control_plane_provenance(
             raise ControlPlaneProvenanceError(
                 "Production package is blocked: pinned Platform source is not deployment-ready"
             )
+        for readiness_owner, readiness in (
+            ("Platform foundation", foundation.get("readiness_blockers")),
+            ("MCP release", release.get("readiness_blockers")),
+        ):
+            if not isinstance(readiness, list) or readiness:
+                raise ControlPlaneProvenanceError(
+                    f"Production package is blocked: {readiness_owner} has unresolved readiness blockers"
+                )
 
     return {
         "schema": PROVENANCE_SCHEMA,
