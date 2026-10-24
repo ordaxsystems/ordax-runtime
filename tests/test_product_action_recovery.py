@@ -164,6 +164,31 @@ class ProductActionRecoveryTests(unittest.TestCase):
             self.client(redirect, follow_redirects=True).targets("jwt")
         self.assertEqual(calls, ["https://control.example.test/v3/product/targets"])
 
+    def test_wait_polling_backs_off_and_caps_the_number_of_long_action_reads(self):
+        clock = [0.0]
+        requests = []
+
+        def response(request):
+            requests.append(request)
+            return httpx.Response(200, json={
+                "ok": True, "action": {"request_id": "req-1", "status": "running"},
+            })
+
+        def advance(seconds):
+            clock[0] += seconds
+
+        client = self.client(response)
+        with patch("ordax_dev_agent.product_remote_client.time.monotonic", side_effect=lambda: clock[0]), patch(
+            "ordax_dev_agent.product_remote_client.time.sleep", side_effect=advance,
+        ) as sleep, self.assertRaises(ProductActionWaitTimeout):
+            client.wait_action("jwt", "req-1", timeout_seconds=8)
+
+        self.assertEqual(len(requests), 6)
+        self.assertEqual(
+            [round(call.args[0], 3) for call in sleep.call_args_list],
+            [0.5, 1.0, 2.0, 2.0, 2.0, 0.5],
+        )
+
     def test_wait_deadline_retains_id_and_bounds_sleep_and_http_timeout(self):
         requests = []
         clock = [0.0]
