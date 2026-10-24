@@ -45,6 +45,19 @@ PR #226 merged the audit follow-up at `95b48c91283c605cd8950e238d0d7542e4e479fc`
 
 No changes were made to `ordax-apps`, `ordax-os`, or `ordax-platform`. The issue list is a Runtime handoff snapshot, not evidence that cross-repository or physical gates passed.
 
+
+### Follow-up — 2026-10-24
+
+Runtime issue #1 was closed as completed after checking the current migration state:
+
+- Runtime README names `ordaxsystems/ordax-runtime` as canonical and records the migration commit.
+- The old `washingtonmsdj/mcp-blender` main tree contains only its retirement README; the operational source was removed in its retirement commit.
+- The Runtime setup retains a bounded migration for existing managed checkouts, including dirty/busy guards and rollback. This compatibility path remains intentional.
+- Windows Build and Install Smoke passed in CI on the source represented by PR #227. This does not establish installation or execution on a physical Owner machine.
+
+The legacy repository was not deleted or archived. No Runtime branch cleanup was performed in this follow-up; #205 remains the only open Runtime PR, and the closed-unmerged #208 branch remains available as evidence for the rejected endpoint proposal.
+
+
 ## Findings
 
 ### Corrected here: operational status could be stale during a long action
