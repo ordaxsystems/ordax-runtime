@@ -28,6 +28,15 @@ outro aplicativo Studio.
   chamadas Product remotas, que reutiliza os handlers tipados. Não concede
   permissões nem substitui o endpoint autenticado `/mcp` do Control Plane.
 
+O cliente Product usa `DEFAULT_PRODUCT_MCP_URL` de `ordax_dev_agent.config` como
+origem padrão (`https://mcp.ordax.com.br`). O exemplo
+`config/product-mcp.example.json` deixa `ORDAX_PRODUCT_CONTROL_PLANE_URL` ausente
+para herdar esse único default. Um override explícito continua disponível para
+ambientes controlados; ele escolhe o destino de transporte e não concede
+permissões. A ingress `workers.dev` restrita descrita em
+`PRODUCT-MCP-TRUSTED-INGRESS-RECOVERY.md` é exclusiva dos caminhos de transporte
+do Device Runtime.
+
 Nenhum desses transports pode manter cópia própria de Identity, grants, Memory,
 ou execução de `computer.*`/Blender. Nenhum é requisito para o Studio funcionar
 offline em capacidades locais. Produto remoto exige autorização no servidor **e**
