@@ -54,10 +54,13 @@ def _invoke(
 
 
 def _action_receipt(result: dict[str, Any]) -> dict[str, Any]:
+    status = result.get("status")
     return {
         "request_id": result.get("request_id"),
-        "status": result.get("status"),
-        "result": result.get("result"),
+        "status": status,
+        # Partial output is never surfaced. The receipt keeps its stable shape;
+        # only a succeeded action may carry a result payload.
+        "result": result.get("result") if status == "succeeded" else None,
         "error_code": result.get("error_code"),
         "created_at": result.get("created_at"),
         "started_at": result.get("started_at"),
