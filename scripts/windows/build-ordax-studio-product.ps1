@@ -275,12 +275,12 @@ if ($LASTEXITCODE -ne 0 -or [string]$platformOrigin -cnotin $canonicalPlatformOr
 $controlPlaneResolver = Join-Path $repoRoot "scripts\windows\resolve-control-plane-provenance.py"
 $resolvedControlPlaneJson = & python $controlPlaneResolver --lock $controlPlaneLockPath --platform-root $platformSource --environment $ControlPlaneEnvironment
 if ($LASTEXITCODE -ne 0) {
-    throw "Control Plane endpoint provenance validation failed: $($resolvedControlPlaneJson -join ' '))"
+    throw "Control Plane endpoint provenance validation failed: $($resolvedControlPlaneJson -join ' ')"
 }
 try {
     $controlPlaneProvenance = ($resolvedControlPlaneJson -join "`n") | ConvertFrom-Json -ErrorAction Stop
 } catch {
-    throw "Control Plane endpoint provenance resolver returned invalid JSON: $_ "
+    "throw Control Plane endpoint provenance resolver returned invalid JSON: $_"
 }
 if ($controlPlaneProvenance.schema -ne "ordax.control-plane-endpoint-provenance/1") {
     throw "Control Plane endpoint provenance schema is invalid"
