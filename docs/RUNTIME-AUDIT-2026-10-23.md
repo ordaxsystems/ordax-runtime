@@ -255,3 +255,14 @@ Track **source tests**, **hosted CI**, **cross-service integration**, and **phys
 - Reconciled current main, open PRs, current issue owners and the previously stale #67 summary.
 - Native OS install/MCP remains unverified while the authorized notebook is offline and the Buildroot dependency closure is not proven. No device action or permission change was made.
 - Next Runtime-owned pass: finish the entrypoint/adapter/consumer map, then select the first reproducible code defect with an owner-local fix and regression test. External gates remain explicit handoffs, not invented Runtime work.
+
+### Checkpoint de continuidade — 2026-10-24
+
+- A base atual desta revisão é a `main` em `fe2c9c1acc47e21a8ef28bc372d8575673859a3f`, após a integração do plano de auditoria pela PR #238. A PR #239 está aberta, baseada nessa `main`, para SSOT do servidor MCP Product e integridade da auditoria de execução.
+- A PR #239 remove o segundo `FastMCP` não utilizado de `product_mcp_handlers.py`, preserva o entrypoint histórico como delegação ao servidor canônico, registra `local_action_failed` quando a execução/sanitização lança exceção e grava a fase terminal da auditoria antes de responder. A documentação MCP e regressões de fonte foram incluídas.
+- A revisão encontrou que resultados `ActionResult(ok=False)` recebiam a razão de auditoria `local_action_completed`; agora a razão acompanha o resultado. O gateway também não propaga detalhes da exceção de adaptador para a resposta remota.
+- Head da PR: `04322de037e151b7cb1bdee1ac14db7e6b5b34be` no momento deste checkpoint. Workflows desse e de heads anteriores não devem ser misturados: só checks do head final podem autorizar merge. Nenhuma execução de teste local foi alegada; o checkout Runtime disponível está atrasado e contém alterações preservadas.
+- A alteração não muda grants, identidade, fila, autorização remota, política local ou donos de auditoria da Platform. Ela não prova uma chamada MCP de produção.
+- O Buildroot/Native continua sendo validação de composição/source; a instalação e execução sob o supervisor real do OrdaX OS não estão provadas. O notebook autorizado estava offline no último inventário, portanto não houve validação física nem ação nele.
+- Após o CI final, reconciliar o head/base e integrar a PR #239 se todos os gates exigidos passarem. Em seguida, reavaliar os limites de espera/reconexão do Product MCP e manter separados CI Windows, instalação física, MCP ao vivo e OS Native.
+

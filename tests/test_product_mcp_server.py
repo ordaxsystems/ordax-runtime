@@ -65,6 +65,12 @@ class ProductMcpServerTests(unittest.TestCase):
         self.client.stop()
         self.env.stop()
 
+    def test_handlers_delegate_to_the_only_product_mcp_server(self):
+        self.assertFalse(hasattr(handlers, "mcp"))
+        with patch.object(server, "main") as canonical_main:
+            handlers.main()
+        canonical_main.assert_called_once_with()
+
     def test_product_http_transport_is_closed_on_process_shutdown(self):
         transport = handlers._product_http_transport()
         with patch.object(transport, "shutdown", wraps=transport.shutdown) as shutdown:

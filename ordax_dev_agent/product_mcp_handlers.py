@@ -7,13 +7,10 @@ from contextlib import contextmanager
 from typing import Any, Iterator
 
 import httpx
-from mcp.server.fastmcp import FastMCP
 
 from .config import DEFAULT_PRODUCT_MCP_URL
 from .product_remote_client import ProductActionWaitTimeout, ProductRemoteClient, ProductRemoteError
 
-
-mcp = FastMCP("ordax-studio-remote")
 
 
 def _access_token() -> str:
@@ -148,7 +145,6 @@ def _action_failure(error: ProductRemoteError | ProductActionWaitTimeout) -> dic
     return response
 
 
-@mcp.tool()
 def product_action_status(request_id: str) -> dict[str, Any]:
     """Read the same accepted task under the current Product identity; never enqueue or replay it."""
     token = _access_token()
@@ -159,7 +155,6 @@ def product_action_status(request_id: str) -> dict[str, Any]:
         return _action_failure(error)
 
 
-@mcp.tool()
 def app_intelligence_catalog(
     device_id: str,
     space_id: str | None = None,
@@ -174,7 +169,6 @@ def app_intelligence_catalog(
     )
 
 
-@mcp.tool()
 def app_intelligence_detail(
     device_id: str,
     app_id: str,
@@ -190,7 +184,6 @@ def app_intelligence_detail(
     )
 
 
-@mcp.tool()
 def product_session() -> dict[str, Any]:
     """Return the authenticated OrdaX Product subject for this MCP host."""
     token = _access_token()
@@ -198,7 +191,6 @@ def product_session() -> dict[str, Any]:
         return client.session(token)
 
 
-@mcp.tool()
 def product_targets(space_id: str | None = None) -> list[dict[str, Any]]:
     """List only devices and grants authorized for the authenticated Product subject."""
     token = _access_token()
@@ -206,7 +198,6 @@ def product_targets(space_id: str | None = None) -> list[dict[str, Any]]:
         return client.targets(token, space_id=space_id)
 
 
-@mcp.tool()
 def projects_list(
     device_id: str,
     space_id: str | None = None,
@@ -220,7 +211,6 @@ def projects_list(
     )
 
 
-@mcp.tool()
 def project_create(
     device_id: str,
     slug: str,
@@ -247,7 +237,6 @@ def project_create(
     )
 
 
-@mcp.tool()
 def project_import(
     device_id: str,
     slug: str,
@@ -276,7 +265,6 @@ def project_import(
     )
 
 
-@mcp.tool()
 def repository_catalog(
     device_id: str,
     space_id: str | None = None,
@@ -290,7 +278,6 @@ def repository_catalog(
     )
 
 
-@mcp.tool()
 def handoff_get(
     device_id: str,
     project: str,
@@ -307,7 +294,6 @@ def handoff_get(
     )
 
 
-@mcp.tool()
 def handoff_create(
     device_id: str,
     project: str,
@@ -337,7 +323,6 @@ def handoff_create(
     )
 
 
-@mcp.tool()
 def project_inventory(
     device_id: str,
     project: str,
@@ -359,7 +344,6 @@ def project_inventory(
     )
 
 
-@mcp.tool()
 def project_text_read(
     device_id: str,
     project: str,
@@ -376,7 +360,6 @@ def project_text_read(
     )
 
 
-@mcp.tool()
 def project_briefing(
     device_id: str,
     project: str,
@@ -394,7 +377,6 @@ def project_briefing(
     )
 
 
-@mcp.tool()
 def continuity_state(
     device_id: str,
     project: str,
@@ -410,7 +392,6 @@ def continuity_state(
     )
 
 
-@mcp.tool()
 def continuity_update(
     device_id: str,
     project: str,
@@ -438,7 +419,6 @@ def continuity_update(
     )
 
 
-@mcp.tool()
 def project_health(
     device_id: str,
     project: str,
@@ -454,7 +434,6 @@ def project_health(
     )
 
 
-@mcp.tool()
 def project_search(
     device_id: str,
     project: str,
@@ -472,7 +451,6 @@ def project_search(
     )
 
 
-@mcp.tool()
 def project_read_batch(
     device_id: str,
     project: str,
@@ -490,7 +468,6 @@ def project_read_batch(
     )
 
 
-@mcp.tool()
 def project_preview_status(
     device_id: str,
     project: str,
@@ -506,7 +483,6 @@ def project_preview_status(
     )
 
 
-@mcp.tool()
 def git_status(
     device_id: str,
     project: str,
@@ -522,7 +498,6 @@ def git_status(
     )
 
 
-@mcp.tool()
 def git_diff(
     device_id: str,
     project: str,
@@ -542,7 +517,6 @@ def git_diff(
     )
 
 
-@mcp.tool()
 def artifacts_list(
     device_id: str,
     project: str,
@@ -559,7 +533,6 @@ def artifacts_list(
     )
 
 
-@mcp.tool()
 def artifact_preview(
     device_id: str,
     project: str,
@@ -594,7 +567,6 @@ def artifact_preview(
     )
 
 
-@mcp.tool()
 def project_text_write(device_id: str, project: str, path: str, content: str, expected_sha256: str | None = None, create: bool = False, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "path": path, "content": content, "create": create}
     if expected_sha256 is not None:
@@ -602,22 +574,18 @@ def project_text_write(device_id: str, project: str, path: str, content: str, ex
     return _invoke(device_id=device_id, action="project.text_write", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def project_text_patch(device_id: str, project: str, path: str, expected_sha256: str, replacements: list[dict[str, Any]], space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="project.text_patch", project=project, space_id=space_id, arguments={"project": project, "path": path, "expected_sha256": expected_sha256, "replacements": replacements})
 
 
-@mcp.tool()
 def workspace_file_stat(device_id: str, project: str, path: str = ".", space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="workspace.file_stat", project=project, space_id=space_id, arguments={"project": project, "path": path})
 
 
-@mcp.tool()
 def workspace_directory_list(device_id: str, project: str, path: str = ".", max_depth: int = 2, max_entries: int = 500, include_hidden: bool = False, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="workspace.directory_list", project=project, space_id=space_id, arguments={"project": project, "path": path, "max_depth": max_depth, "max_entries": max_entries, "include_hidden": include_hidden})
 
 
-@mcp.tool()
 def workspace_text_read(device_id: str, project: str, path: str, start_line: int = 1, end_line: int | None = None, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "path": path, "start_line": start_line}
     if end_line is not None:
@@ -625,7 +593,6 @@ def workspace_text_read(device_id: str, project: str, path: str, start_line: int
     return _invoke(device_id=device_id, action="workspace.text_read", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def workspace_text_write(device_id: str, project: str, path: str, content: str, expected_sha256: str | None = None, create: bool = False, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "path": path, "content": content, "create": create}
     if expected_sha256 is not None:
@@ -633,17 +600,14 @@ def workspace_text_write(device_id: str, project: str, path: str, content: str, 
     return _invoke(device_id=device_id, action="workspace.text_write", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def workspace_text_patch(device_id: str, project: str, path: str, expected_sha256: str, replacements: list[dict[str, Any]], space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="workspace.text_patch", project=project, space_id=space_id, arguments={"project": project, "path": path, "expected_sha256": expected_sha256, "replacements": replacements})
 
 
-@mcp.tool()
 def workspace_directory_create(device_id: str, project: str, path: str, parents: bool = True, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="workspace.directory_create", project=project, space_id=space_id, arguments={"project": project, "path": path, "parents": parents})
 
 
-@mcp.tool()
 def workspace_path_remove(device_id: str, project: str, path: str, expected_sha256: str | None = None, recursive: bool = False, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "path": path, "recursive": recursive}
     if expected_sha256 is not None:
@@ -651,7 +615,6 @@ def workspace_path_remove(device_id: str, project: str, path: str, expected_sha2
     return _invoke(device_id=device_id, action="workspace.path_remove", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def workspace_path_move(device_id: str, project: str, source: str, destination: str, expected_sha256: str | None = None, overwrite: bool = False, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "source": source, "destination": destination, "overwrite": overwrite}
     if expected_sha256 is not None:
@@ -659,12 +622,10 @@ def workspace_path_move(device_id: str, project: str, source: str, destination: 
     return _invoke(device_id=device_id, action="workspace.path_move", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def git_command(device_id: str, project: str, args: list[str], timeout_seconds: int = 300, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="git.command", project=project, space_id=space_id, arguments={"project": project, "args": args, "timeout_seconds": timeout_seconds})
 
 
-@mcp.tool()
 def terminal_exec(
     device_id: str,
     project: str,
@@ -691,22 +652,18 @@ def terminal_exec(
     return _invoke(device_id=device_id, action="terminal.exec", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def computer_process_status(device_id: str, process_id: str) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.process_status", arguments={"process_id": process_id})
 
 
-@mcp.tool()
 def computer_process_list(device_id: str) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.process_list", arguments={})
 
 
-@mcp.tool()
 def computer_process_logs(device_id: str, process_id: str, max_bytes: int = 65536) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.process_logs", arguments={"process_id": process_id, "max_bytes": max_bytes})
 
 
-@mcp.tool()
 def computer_process_start(
     device_id: str, argv: list[str], cwd: str | None = None,
     env: dict[str, str] | None = None, wait_seconds: float = 0.5,
@@ -719,34 +676,28 @@ def computer_process_start(
     return _invoke(device_id=device_id, action="computer.process_start", arguments=args)
 
 
-@mcp.tool()
 def computer_process_write_stdin(
     device_id: str, process_id: str, text: str, newline: bool = True,
 ) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.process_write_stdin", arguments={"process_id": process_id, "text": text, "newline": newline})
 
 
-@mcp.tool()
 def computer_process_stop(device_id: str, process_id: str) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.process_stop", arguments={"process_id": process_id})
 
 
-@mcp.tool()
 def process_status(device_id: str, project: str, process_id: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="process.status", project=project, space_id=space_id, arguments={"project": project, "process_id": process_id})
 
 
-@mcp.tool()
 def process_list(device_id: str, project: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="process.list", project=project, space_id=space_id, arguments={"project": project})
 
 
-@mcp.tool()
 def process_logs(device_id: str, project: str, process_id: str, max_bytes: int = 65536, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="process.logs", project=project, space_id=space_id, arguments={"project": project, "process_id": process_id, "max_bytes": max_bytes})
 
 
-@mcp.tool()
 def process_start(device_id: str, project: str, argv: list[str], cwd: str = ".", env: dict[str, str] | None = None, wait_seconds: float = 0.5, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "argv": argv, "cwd": cwd, "wait_seconds": wait_seconds}
     if env is not None:
@@ -754,112 +705,90 @@ def process_start(device_id: str, project: str, argv: list[str], cwd: str = ".",
     return _invoke(device_id=device_id, action="process.start", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def process_write_stdin(device_id: str, project: str, process_id: str, text: str, newline: bool = True, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="process.write_stdin", project=project, space_id=space_id, arguments={"project": project, "process_id": process_id, "text": text, "newline": newline})
 
 
-@mcp.tool()
 def process_stop(device_id: str, project: str, process_id: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="process.stop", project=project, space_id=space_id, arguments={"project": project, "process_id": process_id})
 
 
-@mcp.tool()
 def browser_status(device_id: str, project: str, session_id: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="browser.status", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id})
 
 
-@mcp.tool()
 def browser_list(device_id: str, project: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="browser.list", project=project, space_id=space_id, arguments={"project": project})
 
 
-@mcp.tool()
 def browser_snapshot(device_id: str, project: str, session_id: str, max_elements: int = 200, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="browser.snapshot", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id, "max_elements": max_elements})
 
 
-@mcp.tool()
 def browser_screenshot(device_id: str, project: str, session_id: str, width: int = 1440, height: int = 900, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="browser.screenshot", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id, "width": width, "height": height})
 
 
-@mcp.tool()
 def browser_start(device_id: str, project: str, url: str = "about:blank", headless: bool = True, wait_seconds: float = 8.0, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="browser.start", project=project, space_id=space_id, arguments={"project": project, "url": url, "headless": headless, "wait_seconds": wait_seconds})
 
 
-@mcp.tool()
 def browser_navigate(device_id: str, project: str, session_id: str, url: str, wait_seconds: float = 15.0, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="browser.navigate", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id, "url": url, "wait_seconds": wait_seconds})
 
 
-@mcp.tool()
 def browser_click(device_id: str, project: str, session_id: str, node_id: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="browser.click", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id, "node_id": node_id})
 
 
-@mcp.tool()
 def browser_type(device_id: str, project: str, session_id: str, node_id: str, text: str, clear: bool = True, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="browser.type", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id, "node_id": node_id, "text": text, "clear": clear})
 
 
-@mcp.tool()
 def browser_stop(device_id: str, project: str, session_id: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="browser.stop", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id})
 
 
-@mcp.tool()
 def computer_windows(device_id: str, project: str, max_items: int = 100, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.windows", project=project, space_id=space_id, arguments={"project": project, "max_items": max_items})
 
 
-@mcp.tool()
 def computer_active_window(device_id: str, project: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.active_window", project=project, space_id=space_id, arguments={"project": project})
 
 
-@mcp.tool()
 def computer_screenshot(device_id: str, project: str, mode: str = "desktop", space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.screenshot", project=project, space_id=space_id, arguments={"project": project, "mode": mode})
 
 
-@mcp.tool()
 def computer_screen_info(device_id: str, project: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.screen_info", project=project, space_id=space_id, arguments={"project": project})
 
 
-@mcp.tool()
 def computer_clipboard_read(device_id: str, project: str, max_bytes: int = 65536, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.clipboard_read", project=project, space_id=space_id, arguments={"project": project, "max_bytes": max_bytes})
 
 
-@mcp.tool()
 def computer_focus_window(device_id: str, project: str, handle: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.focus_window", project=project, space_id=space_id, arguments={"project": project, "handle": handle})
 
 
-@mcp.tool()
 def computer_click(device_id: str, project: str, x: int, y: int, button: str = "left", clicks: int = 1, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.click", project=project, space_id=space_id, arguments={"project": project, "x": x, "y": y, "button": button, "clicks": clicks})
 
 
-@mcp.tool()
 def computer_mouse_move(device_id: str, project: str, x: int, y: int, duration_ms: int = 0, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.mouse_move", project=project, space_id=space_id, arguments={"project": project, "x": x, "y": y, "duration_ms": duration_ms})
 
 
-@mcp.tool()
 def computer_drag(device_id: str, project: str, from_x: int, from_y: int, to_x: int, to_y: int, button: str = "left", duration_ms: int = 500, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.drag", project=project, space_id=space_id, arguments={"project": project, "from_x": from_x, "from_y": from_y, "to_x": to_x, "to_y": to_y, "button": button, "duration_ms": duration_ms})
 
 
-@mcp.tool()
 def computer_clipboard_write(device_id: str, project: str, text: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.clipboard_write", project=project, space_id=space_id, arguments={"project": project, "text": text})
 
 
-@mcp.tool()
 def computer_terminal_exec(
     device_id: str,
     argv: list[str] | None = None,
@@ -882,37 +811,30 @@ def computer_terminal_exec(
     return _invoke(device_id=device_id, action="computer.terminal_exec", arguments=args)
 
 
-@mcp.tool()
 def computer_launch_app(device_id: str, project: str, application: str, args: list[str] | None = None, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.launch_app", project=project, space_id=space_id, arguments={"project": project, "application": application, "args": args or []})
 
 
-@mcp.tool()
 def computer_scroll(device_id: str, project: str, amount: int, horizontal: bool = False, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.scroll", project=project, space_id=space_id, arguments={"project": project, "amount": amount, "horizontal": horizontal})
 
 
-@mcp.tool()
 def computer_type(device_id: str, project: str, text: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.type", project=project, space_id=space_id, arguments={"project": project, "text": text})
 
 
-@mcp.tool()
 def computer_hotkey(device_id: str, project: str, keys: list[str], space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.hotkey", project=project, space_id=space_id, arguments={"project": project, "keys": keys})
 
 
-@mcp.tool()
 def computer_access_status(device_id: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.access_status", space_id=space_id, arguments={})
 
 
-@mcp.tool()
 def computer_file_stat(device_id: str, path: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.file_stat", space_id=space_id, arguments={"path": path})
 
 
-@mcp.tool()
 def computer_directory_list(
     device_id: str,
     path: str,
@@ -934,7 +856,6 @@ def computer_directory_list(
     )
 
 
-@mcp.tool()
 def computer_text_read(
     device_id: str,
     path: str,
@@ -948,7 +869,6 @@ def computer_text_read(
     return _invoke(device_id=device_id, action="computer.text_read", space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def computer_search(
     device_id: str,
     root: str,
@@ -974,7 +894,6 @@ def computer_search(
     )
 
 
-@mcp.tool()
 def computer_processes(
     device_id: str,
     query: str = "",
@@ -989,7 +908,6 @@ def computer_processes(
     )
 
 
-@mcp.tool()
 def computer_terminate_process(
     device_id: str,
     pid: int,
@@ -1011,7 +929,6 @@ def computer_terminate_process(
     )
 
 
-@mcp.tool()
 def computer_text_write(
     device_id: str,
     path: str,
@@ -1026,7 +943,6 @@ def computer_text_write(
     return _invoke(device_id=device_id, action="computer.text_write", space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def computer_text_patch(
     device_id: str,
     path: str,
@@ -1042,7 +958,6 @@ def computer_text_patch(
     )
 
 
-@mcp.tool()
 def computer_directory_create(
     device_id: str,
     path: str,
@@ -1057,7 +972,6 @@ def computer_directory_create(
     )
 
 
-@mcp.tool()
 def computer_path_move(
     device_id: str,
     source: str,
@@ -1073,7 +987,6 @@ def computer_path_move(
     )
 
 
-@mcp.tool()
 def computer_path_remove(
     device_id: str,
     path: str,
@@ -1088,12 +1001,10 @@ def computer_path_remove(
     )
 
 
-@mcp.tool()
 def blender_status(device_id: str, project: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="blender.live_status", project=project, space_id=space_id, arguments={"project": project})
 
 
-@mcp.tool()
 def blender_scene_snapshot(device_id: str, project: str, max_objects: int = 200, object_names: list[str] | None = None, timeout_seconds: float = 45.0, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "max_objects": max_objects, "timeout_seconds": timeout_seconds}
     if object_names is not None:
@@ -1101,7 +1012,6 @@ def blender_scene_snapshot(device_id: str, project: str, max_objects: int = 200,
     return _invoke(device_id=device_id, action="blender.live_scene_snapshot", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def blender_object_inspect(device_id: str, project: str, object_name: str | None = None, ordax_object_id: str | None = None, timeout_seconds: float = 30.0, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "timeout_seconds": timeout_seconds}
     if object_name is not None:
@@ -1111,12 +1021,10 @@ def blender_object_inspect(device_id: str, project: str, object_name: str | None
     return _invoke(device_id=device_id, action="blender.live_object_inspect", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def blender_modeling_schema(device_id: str, project: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="blender.live_modeling_schema", project=project, space_id=space_id, arguments={"project": project})
 
 
-@mcp.tool()
 def blender_start(device_id: str, project: str, wait_seconds: float = 60.0, pid: int | None = None, adopt_blank: bool = False, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "wait_seconds": wait_seconds, "adopt_blank": adopt_blank}
     if pid is not None:
@@ -1124,7 +1032,6 @@ def blender_start(device_id: str, project: str, wait_seconds: float = 60.0, pid:
     return _invoke(device_id=device_id, action="blender.live_start", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def blender_transform(device_id: str, project: str, object_name: str | None = None, ordax_object_id: str | None = None, location: list[float] | None = None, rotation_euler: list[float] | None = None, scale: list[float] | None = None, dimensions: list[float] | None = None, timeout_seconds: float = 30.0, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "timeout_seconds": timeout_seconds}
     values = {"object_name": object_name, "ordax_object_id": ordax_object_id, "location": location, "rotation_euler": rotation_euler, "scale": scale, "dimensions": dimensions}
@@ -1132,7 +1039,6 @@ def blender_transform(device_id: str, project: str, object_name: str | None = No
     return _invoke(device_id=device_id, action="blender.live_object_transform", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def blender_create_primitive(device_id: str, project: str, name: str, primitive: str, location: list[float] | None = None, size: float | None = None, radius: float | None = None, depth: float | None = None, segments: int | None = None, timeout_seconds: float = 30.0, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "name": name, "primitive": primitive, "timeout_seconds": timeout_seconds}
     values = {"location": location, "size": size, "radius": radius, "depth": depth, "segments": segments}
@@ -1140,7 +1046,6 @@ def blender_create_primitive(device_id: str, project: str, name: str, primitive:
     return _invoke(device_id=device_id, action="blender.live_create_primitive", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def blender_apply_material(device_id: str, project: str, material_name: str, object_name: str | None = None, ordax_object_id: str | None = None, base_color: list[float] | None = None, roughness: float = 0.4, metallic: float = 0.0, transmission: float = 0.0, alpha: float = 1.0, ior: float = 1.45, surface_render_method: str | None = None, transparency_overlap: bool = True, timeout_seconds: float = 30.0, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "material_name": material_name, "roughness": roughness, "metallic": metallic, "transmission": transmission, "alpha": alpha, "ior": ior, "transparency_overlap": transparency_overlap, "timeout_seconds": timeout_seconds}
     values = {"object_name": object_name, "ordax_object_id": ordax_object_id, "base_color": base_color, "surface_render_method": surface_render_method}
@@ -1148,7 +1053,6 @@ def blender_apply_material(device_id: str, project: str, material_name: str, obj
     return _invoke(device_id=device_id, action="blender.live_material_apply", project=project, space_id=space_id, arguments=arguments)
 
 
-@mcp.tool()
 def blender_save(device_id: str, project: str, target_path: str | None = None, timeout_seconds: float = 120.0, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "timeout_seconds": timeout_seconds}
     if target_path is not None:
@@ -1157,7 +1061,10 @@ def blender_save(device_id: str, project: str, target_path: str | None = None, t
 
 
 def main() -> None:
-    mcp.run()
+    """Compatibility entrypoint delegated to the canonical Product MCP server."""
+    from .product_mcp_server import main as product_mcp_main
+
+    product_mcp_main()
 
 
 if __name__ == "__main__":

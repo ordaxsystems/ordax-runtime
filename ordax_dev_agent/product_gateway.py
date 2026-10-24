@@ -1026,19 +1026,29 @@ class ProductActionGateway:
                 {"error_code": "audit_unavailable"},
             )
 
-        with bind_product_execution_provenance(
-            request_id=context.request_id,
-            subject_id=context.subject_id,
-            device_id=context.device_id,
-            space_id=context.space_id,
-            grant_id=grant.grant_id,
-        ):
-            local_result = self.executor.execute(spec.local_action, body)
-        result = _sanitize_product_result(
-            action,
-            local_result,
-            allowed_projects=grant.projects,
-        )
+        try:
+            with bind_product_execution_provenance(
+                request_id=context.request_id,
+                subject_id=context.subject_id,
+                device_id=context.device_id,
+                space_id=context.space_id,
+                grant_id=grant.grant_id,
+            ):
+                local_result = self.executor.execute(spec.local_action, body)
+            result = _sanitize_product_result(
+                action,
+                local_result,
+                allowed_projects=grant.projects,
+            )
+        except Exception:
+            # The action may have started or produced side effects. Return a
+            # stable failure, persist its terminal audit outcome, and never
+            # expose adapter exception details in the remote result.
+            result = ActionResult(
+                False,
+                "local action failed",
+                {"error_code": "local_action_failed"},
+            )
 
         try:
             self.audit_sink.record(
@@ -1049,7 +1059,10 @@ class ProductActionGateway:
                     body=body,
                     phase="result",
                     decision="allow",
-                    reason="local_action_completed",
+                    reason=(
+                        "local_action_completed" if result.ok
+                        else "local_action_failed"
+                    ),
                     result_ok=result.ok,
                 )
             )
