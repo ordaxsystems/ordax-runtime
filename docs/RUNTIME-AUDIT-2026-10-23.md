@@ -183,3 +183,38 @@ single presence ownership, packaging, and lifecycle before pinning a release.
 A passing source test or CI workflow is not a claim that the Windows installer
 or an OrdaX OS device was exercised.
 
+## Follow-up after PR #234 — 2026-10-23 (America/Sao_Paulo)
+
+### Repository and validation snapshot
+
+- Canonical repository: `ordaxsystems/ordax-runtime`; audited `main` at `749b688aa4c8be21ba471237135e6cffc699127b`. GitHub reported no open Runtime pull requests at this snapshot.
+- The desktop's current working directory is the parent `ordax-apps` workspace and is not itself a Git checkout (`git rev-parse --show-toplevel` failed). No Apps files were changed. This checkpoint used the canonical Runtime repository through GitHub; it does not claim a local Runtime checkout.
+- The current main commit has 17 completed checks: 11 succeeded and 6 were skipped. Runtime Contracts, Windows installer/build/install-smoke, Native composition, Native Buildroot source/offline probes, and candidate checks succeeded. Signing/publication/release-governance skips are not release evidence.
+- CI validates source and disposable workflow environments. It does not prove a physical user-device install, a live authorized MCP action, or execution under the real OrdaX OS supervisor.
+
+### MCP and idle-resource follow-up
+
+- Runtime PR #232 corrected the canonical Product MCP ingress default; its change is present in main.
+- Runtime PR #233 reuses one bounded HTTP transport pool for Product MCP calls while keeping a fresh client/cookie jar per invocation. The architecture document records the resource limits and isolation boundary.
+- Runtime PR #234 adds bounded exponential backoff to nonterminal Product action status reads while retaining an immediate first read and the existing deadline/recovery behavior. Its regression demonstrates six reads over an 8-second wait instead of sixteen at a fixed 500 ms cadence.
+- These changes reduce connection churn and unnecessary status requests; they do not change grants, dispatch authority, or the meaning of online presence.
+
+### Project-First M1 remains source-only
+
+Runtime PR #229 added strict Product HTTP methods for Owner approval and enrolled Device confirmation using Platform's existing default-off routes. They require explicit positive stage receipts and keep tokens and filesystem paths out of JSON. The native Windows picker, project binding, live Device proof, and issuance client are still not composed into an authenticated packaged Owner/Device host.
+
+Platform PRs #276/#277 provide proposal/source contracts only: the SQL remains unapplied, both `WORKSPACE_RESOURCE_VERIFIER_ENABLED` and `WORKSPACE_RESOURCE_ISSUANCE_ENABLED` remain disabled, and no live grant or deployment is claimed. Keep the Apps consumer at `capability_unavailable`; do not construct approval from MCP/model input or infer a grant from device `full_access`. Runtime issue #184 stays open for trusted host composition and the real disposable-fixture E2E with mid-scan revocation.
+
+### Remaining open Runtime work and handoffs
+
+The open Runtime issues at this checkpoint are #7, #49, #61, #67, #127, #149, and #184. Their gates remain distinct:
+
+- #7 needs the Runtime/Platform action result contract to preserve the original Studio Runtime v3 request binding; Runtime must not synthesize missing actor/Space/project/device/client evidence.
+- #49 needs an approved production signing identity and protected signing service; CI signing skips are expected until that release authority exists.
+- #61 needs the Platform owner to establish and version the canonical endpoint/provenance reference before Runtime can enforce a cutover.
+- #67 needs the Apps owner to provide the canonical conversation UI/host contract for the Windows product; Runtime must not fork that UI.
+- #127 needs the Platform grants and Apps consent/discovery surfaces to align with local policy; Runtime must not invent remote interaction grants.
+- #149 needs authorized Windows recovery/rollback evidence on the real target installation; current install-smoke does not establish byte-exact recovery of a pre-attestation device.
+- #184 needs trusted interactive host composition plus Platform's governed migration/opt-in and Apps integration before the read-only workspace flow can be called operational.
+
+No source-only pass above closes these integration, release-authority, deployment, or physical-device gates.
