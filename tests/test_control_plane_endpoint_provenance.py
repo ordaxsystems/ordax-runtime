@@ -26,6 +26,7 @@ class ControlPlaneEndpointProvenanceTests(unittest.TestCase):
             "version": 24,
             "dns": {"zone": "ordax.com.br"},
             "deployment_ready": False,
+            "readiness_blockers": [],
             "connection_modes": {
                 "direct_user_chatgpt_mcp": {
                     "current_validation_endpoint": "https://mcp.ordax.com.br/mcp"
@@ -39,6 +40,7 @@ class ControlPlaneEndpointProvenanceTests(unittest.TestCase):
                 "workers_dev": False,
                 "validation_deployment_ready": True,
                 "deployment_ready": False,
+                "readiness_blockers": [],
             },
         }
         self._write_foundation()
@@ -85,6 +87,14 @@ class ControlPlaneEndpointProvenanceTests(unittest.TestCase):
         self.foundation["mcp_release"]["deployment_ready"] = True
         self._write_foundation()
         self.assertEqual(self._resolve("production")["environment"], "production")
+
+    def test_production_rejects_remaining_platform_readiness_blockers(self) -> None:
+        self.foundation["deployment_ready"] = True
+        self.foundation["mcp_release"]["deployment_ready"] = True
+        self.foundation["readiness_blockers"] = ["worker_not_provisioned"]
+        self._write_foundation()
+        with self.assertRaisesRegex(ControlPlaneProvenanceError, "unresolved readiness blockers"):
+            self._resolve("production")
 
     def test_validation_endpoint_must_match_pinned_worker_host_and_path(self) -> None:
         self.foundation["connection_modes"]["direct_user_chatgpt_mcp"][
