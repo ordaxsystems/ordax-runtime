@@ -49,12 +49,12 @@ class PersistentProcessRuntimeTests(unittest.TestCase):
 
             def deliver_after_first_poll(interval):
                 intervals.append(interval)
-                if len(intervals) == 1:
+                if len(intervals) == 3:
                     stdin_path.write_text(
                         json.dumps({"text": "wake", "newline": True}) + "\n",
                         encoding="utf-8",
                     )
-                else:
+                elif len(intervals) == 4:
                     runtime._stopping = True
 
             with patch(
@@ -63,7 +63,7 @@ class PersistentProcessRuntimeTests(unittest.TestCase):
             ):
                 runtime._pump_stdin()
 
-        self.assertEqual([0.05, 0.05], intervals)
+        self.assertEqual([0.05, 0.1, 0.2, 0.05], intervals)
         self.assertEqual("wake\n", runtime.child.stdin.getvalue())
 
 
