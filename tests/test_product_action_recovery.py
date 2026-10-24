@@ -114,6 +114,7 @@ class ProductActionRecoveryTests(unittest.TestCase):
     def test_invalid_json_utf8_mime_and_raw_error_detail_are_rejected(self):
         for content, mime in (
             (b'{"ok":true,"targets":[],"value":NaN}', "application/json"),
+            (b'{"ok":true,"targets":[],"value":1e9999}', "application/json"),
             (b'{"ok":true,"targets":[],"value":"\xff"}', "application/json"),
             (b'{"ok":true,"targets":[]}', "text/html"),
             (b'{"ok":true,"targets":' + b"[" * 2000 + b"]" * 2000 + b"}", "application/json"),
@@ -387,3 +388,4 @@ class ProductMcpRecoveryFlowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
