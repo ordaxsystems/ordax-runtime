@@ -65,6 +65,29 @@ class PackagedDeviceIdentityRecoveryTests(unittest.TestCase):
             self.assertEqual(body["machine_binding_sha256"], "machine-binding")
             self.assertEqual(headers["X-Ordax-Device-Token"], "a" * 64)
 
+    def test_invalid_product_endpoint_fails_before_network_and_preserves_state(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            token = resolve_token_path(state)
+            token.write_text("c" * 64, encoding="utf-8")
+            settings = {
+                "product_mcp_url": "http://control.example",
+                "default_project": "demo",
+            }
+            settings_path = state / "agent-settings.json"
+            settings_path.write_text(json.dumps(settings), encoding="utf-8")
+            client = _Client(_Response(500, {}))
+
+            result = recover_existing_device_identity(state, client=client)
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["state"], "product-mcp-invalid")
+            self.assertFalse(result["changed"])
+            self.assertEqual(client.calls, [])
+            self.assertTrue(token.is_file())
+            self.assertEqual(token.read_text(encoding="utf-8"), "c" * 64)
+            self.assertEqual(json.loads(settings_path.read_text(encoding="utf-8")), settings)
+
     def test_configured_identity_does_not_touch_network(self):
         with tempfile.TemporaryDirectory() as temp:
             state = Path(temp)
