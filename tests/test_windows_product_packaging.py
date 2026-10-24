@@ -616,6 +616,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("ORDAX_PLATFORM_SOURCE", builder)
         self.assertIn("rev-parse HEAD", builder)
         self.assertIn("remote get-url origin", builder)
+        self.assertIn("status --porcelain -- $controlPlaneLock.source.path", builder)
         self.assertIn("resolve-control-plane-provenance.py", builder)
         self.assertIn("validation-candidate", builder)
         self.assertIn("ControlPlaneEnvironment", builder)
