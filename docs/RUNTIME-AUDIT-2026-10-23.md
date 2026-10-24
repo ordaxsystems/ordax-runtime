@@ -188,7 +188,7 @@ or an OrdaX OS device was exercised.
 ### Repository and validation snapshot
 
 - Canonical repository: `ordaxsystems/ordax-runtime`; audited `main` at `749b688aa4c8be21ba471237135e6cffc699127b`. GitHub reported no open Runtime pull requests at this snapshot.
-- The desktop's current working directory is the parent `ordax-apps` workspace and is not itself a Git checkout (`git rev-parse --show-toplevel` failed). No Apps files were changed. This checkpoint used the canonical Runtime repository through GitHub; it does not claim a local Runtime checkout.
+- The desktop's current working directory is the parent `ordax-apps` workspace and is not itself a Git checkout (`git rev-parse --show-toplevel` failed). A separate checkout exists at `ordax-apps/_runtime-audit-work`; its `origin` is `https://github.com/ordaxsystems/ordax-runtime.git`, confirming it is an independent canonical Runtime clone. Its local HEAD and cached `origin/main` were still at `9154cb977bbad9f007e7734ebfbeeb4997e7db57`, stale relative to the canonical remote snapshot above, and it contains preexisting tracked and untracked Runtime changes. This continuation left that worktree untouched and used the canonical repository through branch/PR. No Apps repository files were changed.
 - The current main commit has 17 completed checks: 11 succeeded and 6 were skipped. Runtime Contracts, Windows installer/build/install-smoke, Native composition, Native Buildroot source/offline probes, and candidate checks succeeded. Signing/publication/release-governance skips are not release evidence.
 - CI validates source and disposable workflow environments. It does not prove a physical user-device install, a live authorized MCP action, or execution under the real OrdaX OS supervisor.
 
