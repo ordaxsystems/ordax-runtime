@@ -1,7 +1,9 @@
 param(
     [string]$Version = "",
     [string]$OutputDirectory = "",
-    [string]$PythonVersion = "3.12.10"
+    [string]$PythonVersion = "3.12.10",
+    [ValidateSet("validation-candidate", "production")]
+    [string]$ControlPlaneEnvironment = "validation-candidate"
 )
 
 $ErrorActionPreference = "Stop"
@@ -231,6 +233,65 @@ $targetMinor = ($PythonVersion -split '\.')[0..1] -join '.'
 if ($hostVersion.Trim() -ne $targetMinor) {
     throw "Build Python must be $targetMinor.x to match the embedded runtime; found $hostVersion"
 }
+
+$controlPlaneLockPath = Join-Path $repoRoot "control-plane-source.lock.json"
+if (-not (Test-Path -LiteralPath $controlPlaneLockPath -PathType Leaf)) {
+    throw "Control Plane source lock is missing"
+}
+$controlPlaneLock = Get-Content -LiteralPath $controlPlaneLockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if (
+    $controlPlaneLock.schema -ne "ordax.control-plane-source-lock/1" -or
+    $controlPlaneLock.authority -ne "none" -or
+    $controlPlaneLock.source.repository -ne "ordaxsystems/ordax-platform" -or
+    $controlPlaneLock.source.path -ne "control-plane/cloudflare/production-foundation.json" -or
+    [string]$controlPlaneLock.source.commit -cnotmatch '^[0-9a-f]{40}$'
+) {
+    throw "Control Plane source lock is invalid or noncanonical"
+}
+$platformSource = ([string]$env:ORDAX_PLATFORM_SOURCE).Trim()
+if (-not $platformSource) {
+    throw "ORDAX_PLATFORM_SOURCE must point to the pinned canonical Platform checkout"
+}
+$platformSource = (Resolve-Path -LiteralPath $platformSource -ErrorAction Stop).Path
+$platformGitRoot = (& git -C $platformSource rev-parse --show-toplevel)
+if ($LASTEXITCODE -ne 0 -or -not $platformGitRoot -or
+    [IO.Path]::GetFullPath($platformGitRoot.Trim()) -ine [IO.Path]::GetFullPath($platformSource)) {
+    throw "Control Plane source must be the canonical Platform Git checkout"
+}
+$platformGitCommit = (& git -C $platformSource rev-parse HEAD)
+if ($LASTEXITCODE -ne 0 -or [string]$platformGitCommit -cne [string]$controlPlaneLock.source.commit) {
+    throw "Platform checkout does not match control-plane-source.lock.json"
+}
+$platformFoundationChanges = @(& git -C $platformSource status --porcelain -- $controlPlaneLock.source.path)
+if ($LASTEXITCODE -ne 0 -or $platformFoundationChanges.Count -gt 0) {
+    throw "Pinned Platform foundation source contains local changes"
+}
+$platformOrigin = (& git -C $platformSource remote get-url origin)
+$canonicalPlatformOrigins = @(
+    "https://github.com/ordaxsystems/ordax-platform",
+    "https://github.com/ordaxsystems/ordax-platform.git",
+    "git@github.com:ordaxsystems/ordax-platform",
+    "git@github.com:ordaxsystems/ordax-platform.git"
+)
+if ($LASTEXITCODE -ne 0 -or [string]$platformOrigin -cnotin $canonicalPlatformOrigins) {
+    throw "Control Plane checkout does not have the canonical GitHub origin"
+}
+$controlPlaneResolver = Join-Path $repoRoot "scripts\windows\resolve-control-plane-provenance.py"
+$resolvedControlPlaneJson = & python $controlPlaneResolver --lock $controlPlaneLockPath --platform-root $platformSource --environment $ControlPlaneEnvironment
+if ($LASTEXITCODE -ne 0) {
+    throw "Control Plane endpoint provenance validation failed: $($resolvedControlPlaneJson -join ' ')"
+}
+try {
+    $controlPlaneProvenance = ($resolvedControlPlaneJson -join "`n") | ConvertFrom-Json -ErrorAction Stop
+} catch {
+    throw "Control Plane endpoint provenance resolver returned invalid JSON: $_"
+}
+if ($controlPlaneProvenance.schema -ne "ordax.control-plane-endpoint-provenance/1") {
+    throw "Control Plane endpoint provenance schema is invalid"
+}
+Write-Output "ORDAX_CONTROL_PLANE_ENVIRONMENT=$ControlPlaneEnvironment"
+Write-Output "ORDAX_CONTROL_PLANE_SOURCE_COMMIT=$($controlPlaneLock.source.commit)"
+Write-Output "ORDAX_CONTROL_PLANE_ENDPOINT=$($controlPlaneProvenance.endpoint)"
 
 $buildRoot = Join-Path $repoRoot "build\windows-product"
 $stageRoot = Join-Path $buildRoot "stage"
@@ -473,7 +534,8 @@ $manifest = [ordered]@{
     runtime_source_commit = $runtimeSourceCommit
     runtime_source_dirty = [bool]$runtimeSourceDirty
     presentation_host = "electron"
-    control_plane = "https://mcp.ordax.com.br"
+    control_plane = [string]$controlPlaneProvenance.origin
+    control_plane_provenance = $controlPlaneProvenance
     built_at = [DateTimeOffset]::UtcNow.ToString("o")
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stageRoot "product-manifest.json") -Encoding UTF8
