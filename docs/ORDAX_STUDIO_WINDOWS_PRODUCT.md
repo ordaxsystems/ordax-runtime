@@ -65,6 +65,16 @@ Contratos detalhados:
 - `docs/ORDAX_IDENTITY_AND_PROVIDERS.md`;
 - `docs/ORDAX_PROVIDER_CONNECTORS.md`.
 
+## Proveniência do endpoint Control Plane
+
+O instalador deriva o campo `control_plane` de `control-plane-source.lock.json`, que fixa o arquivo de fundação versionado em `ordaxsystems/ordax-platform`. O build valida a revisão Git e a origem canônica do checkout, a versão da fundação, o hostname na zona DNS declarada, o endpoint HTTPS de validação e a correspondência com o default Product MCP do Runtime. A URL não é mantida como uma segunda constante no gerador do instalador.
+
+Builds de PR, `main` e execução manual usam o ambiente `validation-candidate`. Tags `v*` pedem `production` e falham enquanto a fundação pinada não declarar `deployment_ready=true` tanto no arquivo quanto em `mcp_release`. Para habilitar produção, a Runtime deve atualizar o lock para uma revisão Platform revisada e pronta; o pipeline não promove automaticamente um endpoint de validação.
+
+O lock atual fixa a fundação Platform versão 24 no commit `3ae5d914df03f8f6a677ddd18cf3337cd0bcb89a`. Ela declara `https://mcp.ordax.com.br/mcp` como endpoint de validação e produção ainda não pronta. Isso mantém o endpoint atualmente configurado e **não executa cutover ou deploy**. O manifesto registra proveniência do pacote; configurações locais explícitas por `ORDAX_PRODUCT_MCP_URL` ou `agent-settings.json` continuam sendo overrides do processo em execução, portanto esse campo não prova qual URL um Runtime já instalado está usando.
+
+O Windows Install Smoke confere a proveniência gravada no manifesto contra o lock da revisão Runtime testada. CI valida o instalador e sua instalação no runner Windows; isso não afirma que o computador de um usuário recebeu a atualização ou que o serviço remoto está operacional.
+
 ## App Intelligence no produto Windows
 
 O instalador compila o manifesto canônico `apps/studio/ai/manifest.json` da revisão de `ordax-apps` fixada em `studio-source.lock.json` para um registry local do produto.
