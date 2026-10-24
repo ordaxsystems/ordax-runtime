@@ -33,8 +33,9 @@ capped at two seconds.
 Responses are streamed and closed on every exit, bounded to **4 MiB decoded
 bytes**, including gzip expansion. This accommodates the existing 2 MiB inline
 artifact after base64 expansion and metadata. JSON must use application/json,
-valid UTF-8 and a JSON object; invalid, deeply nested or nonfinite constant data
-is rejected. Error codes are bounded public identifiers; arbitrary backend
+valid UTF-8 and a JSON object; invalid or deeply nested JSON, nonfinite
+constants, and syntactically valid exponents that overflow a finite Python float
+are rejected. Error codes are bounded public identifiers; arbitrary backend
 messages and transport exception details are not returned to MCP clients.
 Redirects are not followed with bearer credentials, including with an injected
 HTTP client configured to follow redirects. Wait durations must be finite;
