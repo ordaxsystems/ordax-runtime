@@ -27,6 +27,15 @@ _GITHUB_REPOSITORY = re.compile(
 )
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Product response contains duplicate JSON object keys")
+        result[key] = value
+    return result
+
+
 @dataclass
 class ProductRemoteError(RuntimeError):
     error_code: str
@@ -161,6 +170,7 @@ class ProductRemoteClient:
             body = json.loads(
                 response.content.decode("utf-8"),
                 parse_constant=reject_nonfinite,
+                object_pairs_hook=_reject_duplicate_json_keys,
             )
         except (ValueError, RecursionError) as error:
             raise ProductRemoteError(
