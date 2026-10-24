@@ -30,6 +30,10 @@ outro aplicativo Studio.
 - `ordax_dev_agent/product_mcp_handlers.py` contém as funções tipadas sem
   registrar outra surface FastMCP. Seu entrypoint histórico encaminha para o
   servidor canônico, preservando compatibilidade sem duplicar a registry.
+- `ProductActionGateway` persiste a decisão de autorização antes da execução
+  local e registra o resultado terminal antes de responder. Exceções do executor
+  ou da sanitização viram `local_action_failed`; se a persistência da auditoria
+  falhar, o resultado não é liberado.
 
 O cliente Product usa `DEFAULT_PRODUCT_MCP_URL` de `ordax_dev_agent.config` como
 origem padrão (`https://mcp.ordax.com.br`). O exemplo
