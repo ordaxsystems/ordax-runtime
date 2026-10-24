@@ -244,7 +244,52 @@ if (
     $controlPlaneLock.authority -ne "none" -or
     $controlPlaneLock.source.repository -ne "ordaxsystems/ordax-platform" -or
     $controlPlaneLock.source.path -ne "control-plane/cloudflare/production-foundation.json" -or
-    [string]$controlPlaneLock.source.commit -cnotmatch '^[0-9a-f]{40}
+    [string]$controlPlaneLock.source.commit -cnotmatch '^[0-9a-f]{40}$'
+) {
+    throw "Control Plane source lock is invalid or noncanonical"
+}
+$platformSource = ([string]$env:ORDAX_PLATFORM_SOURCE).Trim()
+if (-not $platformSource) {
+    throw "ORDAX_PLATFORM_SOURCE must point to the pinned canonical Platform checkout"
+}
+$platformSource = (Resolve-Path -LiteralPath $platformSource -ErrorAction Stop).Path
+$platformGitRoot = (& git -C $platformSource rev-parse --show-toplevel)
+if ($LASTEXITCODE -ne 0 -or -not $platformGitRoot -or
+    [IO.Path]::GetFullPath($platformGitRoot.Trim()) -ine [IO.Path]::GetFullPath($platformSource)) {
+    throw "Control Plane source must be the canonical Platform Git checkout"
+}
+$platformGitCommit = (& git -C $platformSource rev-parse HEAD)
+if ($LASTEXITCODE -ne 0 -or [string]$platformGitCommit -cne [string]$controlPlaneLock.source.commit) {
+    throw "Platform checkout does not match control-plane-source.lock.json"
+}
+$platformOrigin = (& git -C $platformSource remote get-url origin)
+$canonicalPlatformOrigins = @(
+    "https://github.com/ordaxsystems/ordax-platform",
+    "https://github.com/ordaxsystems/ordax-platform.git",
+    "git@github.com:ordaxsystems/ordax-platform",
+    "git@github.com:ordaxsystems/ordax-platform.git"
+)
+if ($LASTEXITCODE -ne 0 -or [string]$platformOrigin -cnotin $canonicalPlatformOrigins) {
+    throw "Control Plane checkout does not have the canonical GitHub origin"
+}
+$controlPlaneResolver = Join-Path $repoRoot "scripts\windows\resolve-control-plane-provenance.py"
+$resolvedControlPlaneJson = & python $controlPlaneResolver --lock $controlPlaneLockPath --platform-root $platformSource --environment $ControlPlaneEnvironment
+if ($LASTEXITCODE -ne 0) {
+    throw "Control Plane endpoint provenance validation failed: $($resolvedControlPlaneJson -join ' '))"
+}
+try {
+    $controlPlaneProvenance = ($resolvedControlPlaneJson -join "`n") | ConvertFrom-Json -ErrorAction Stop
+} catch {
+    throw "Control Plane endpoint provenance resolver returned invalid JSON: $_ "
+}
+if ($controlPlaneProvenance.schema -ne "ordax.control-plane-endpoint-provenance/1") {
+    throw "Control Plane endpoint provenance schema is invalid"
+}
+Write-Output "ORDAX_CONTROL_PLANE_ENVIRONMENT=$ControlPlaneEnvironment"
+Write-Output "ORDAX_CONTROL_PLANE_SOURCE_COMMIT=$($controlPlaneLock.source.commit)"
+Write-Output "ORDAX_CONTROL_PLANE_ENDPOINT=$($controlPlaneProvenance.endpoint)"
+
+$buildRoot = Join-Path $repoRoot "build\windows-product"
 $stageRoot = Join-Path $buildRoot "stage"
 $runtimeRoot = Join-Path $stageRoot "runtime"
 $redistRoot = Join-Path $stageRoot "redist"
