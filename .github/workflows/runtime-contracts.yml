@@ -21,7 +21,7 @@ jobs:
       - name: Install the canonical Runtime
         run: python -m pip install --disable-pip-version-check .
       - name: Verify project workspace grant and Git boundaries (Linux)
-        run: python -m unittest tests.test_project_workspace_port tests.test_workspace_resource_selection tests.test_windows_owner_workspace_picker tests.test_owner_project_scope_resolver tests.test_project_workspace_live_proof tests.test_workspace_device_live_authority -v
+        run: python -m unittest tests.test_project_workspace_port tests.test_workspace_resource_selection tests.test_windows_owner_workspace_picker tests.test_owner_project_scope_resolver tests.test_project_workspace_live_proof tests.test_workspace_device_live_authority tests.test_workspace_two_phase_issuance_client -v
 
       - name: Verify native composition and shared transport lifecycle on Linux
         run: >-
