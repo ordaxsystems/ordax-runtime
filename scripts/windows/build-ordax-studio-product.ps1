@@ -530,7 +530,8 @@ $manifest = [ordered]@{
     runtime_source_commit = $runtimeSourceCommit
     runtime_source_dirty = [bool]$runtimeSourceDirty
     presentation_host = "electron"
-    control_plane = "https://mcp.ordax.com.br"
+    control_plane = [string]$controlPlaneProvenance.origin
+    control_plane_provenance = $controlPlaneProvenance
     built_at = [DateTimeOffset]::UtcNow.ToString("o")
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stageRoot "product-manifest.json") -Encoding UTF8
