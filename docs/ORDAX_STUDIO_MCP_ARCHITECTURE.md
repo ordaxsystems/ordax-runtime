@@ -27,6 +27,9 @@ outro aplicativo Studio.
 - `ordax_dev_agent/product_mcp_server.py`: adaptador MCP cliente/local para
   chamadas Product remotas, que reutiliza os handlers tipados. Não concede
   permissões nem substitui o endpoint autenticado `/mcp` do Control Plane.
+- `ordax_dev_agent/product_mcp_handlers.py` contém as funções tipadas sem
+  registrar outra surface FastMCP. Seu entrypoint histórico encaminha para o
+  servidor canônico, preservando compatibilidade sem duplicar a registry.
 
 O cliente Product usa `DEFAULT_PRODUCT_MCP_URL` de `ordax_dev_agent.config` como
 origem padrão (`https://mcp.ordax.com.br`). O exemplo
