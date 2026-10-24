@@ -5,6 +5,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from .config import DEFAULT_PRODUCT_MCP_URL
 from .product_remote_client import ProductActionWaitTimeout, ProductRemoteClient, ProductRemoteError
 
 
@@ -21,7 +22,7 @@ def _access_token() -> str:
 def _base_url() -> str:
     value = os.environ.get(
         "ORDAX_PRODUCT_CONTROL_PLANE_URL",
-        "https://ordax-control-plane-v3.ordax-ac1ca1b50d09.workers.dev",
+        DEFAULT_PRODUCT_MCP_URL,
     ).strip()
     if not value:
         raise RuntimeError("ORDAX_PRODUCT_CONTROL_PLANE_URL is required")
