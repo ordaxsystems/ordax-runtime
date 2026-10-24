@@ -8,6 +8,7 @@ Lost notifications are repaired by periodic bounded claims in main.py.
 from __future__ import annotations
 
 import threading
+import time
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -16,6 +17,9 @@ from websockets.sync.client import connect
 
 WAKE_PATH = "/v3/device/transport/wake"
 WAKE_MESSAGE = "wake"
+_INITIAL_RETRY_SECONDS = 30.0
+_MAX_RETRY_SECONDS = 300.0
+_STABLE_CONNECTION_RESET_SECONDS = 60.0
 TRUSTED_WAKE_HOSTS = frozenset({
     "mcp.ordax.com.br",
     "ordax-mcp.ordaxsystems.workers.dev",
@@ -73,12 +77,13 @@ class ProductWakeListener:
             return False
 
     def _listen(self) -> None:
-        retry_seconds = 30.0
+        retry_seconds = _INITIAL_RETRY_SECONDS
         while not self._stop.is_set():
             if not self._local_allowed():
                 self.connected.clear()
                 self.wake.set()
                 return
+            connection_started: float | None = None
             try:
                 with self._trusted_ingress.websocket(
                     WAKE_PATH,
@@ -92,9 +97,9 @@ class ProductWakeListener:
                         max_size=32,
                     ),
                 ) as socket:
+                    connection_started = time.monotonic()
                     self.connected.set()
                     self.wake.set()  # reconcile a job accepted during reconnect
-                    retry_seconds = 30.0
                     while not self._stop.is_set() and self._local_allowed():
                         try:
                             incoming = socket.recv(timeout=1)
@@ -112,9 +117,13 @@ class ProductWakeListener:
             finally:
                 self.connected.clear()
                 self.wake.set()  # revert immediately to budgeted SQL reconciliation
+                if (connection_started is not None
+                        and time.monotonic() - connection_started
+                        >= _STABLE_CONNECTION_RESET_SECONDS):
+                    retry_seconds = _INITIAL_RETRY_SECONDS
             if self._stop.wait(retry_seconds):
                 break
-            retry_seconds = min(300.0, retry_seconds * 2.0)
+            retry_seconds = min(_MAX_RETRY_SECONDS, retry_seconds * 2.0)
 
     def close(self) -> None:
         # No other thread owns the Runtime transport or its credentials.
