@@ -74,8 +74,13 @@ def resolve_control_plane_provenance(
     if not isinstance(environment, str) or environment not in ENVIRONMENTS:
         raise ControlPlaneProvenanceError(f"Unsupported Control Plane environment: {environment}")
 
-    platform_dir = Path(platform_root).resolve(strict=True)
-    source_file = (platform_dir / CANONICAL_SOURCE_PATH).resolve(strict=True)
+    try:
+        platform_dir = Path(platform_root).resolve(strict=True)
+        source_file = (platform_dir / CANONICAL_SOURCE_PATH).resolve(strict=True)
+    except OSError as error:
+        raise ControlPlaneProvenanceError(
+            f"Cannot resolve pinned Platform foundation: {error}"
+        ) from error
     try:
         source_file.relative_to(platform_dir)
     except ValueError as error:
