@@ -26,9 +26,10 @@ each nonterminal response: the default 0.5-second interval doubles up to
 2 seconds. A caller-supplied initial interval above 2 seconds remains unchanged.
 The wait deadline is checked across HTTP body consumption, receipt decoding and
 validation, and each sleep. A terminal receipt validated after the deadline is
-reported as completion-unknown with the same request ID. This reduces repeated
-reads for longer tasks while keeping the default completion-detection delay
-capped at two seconds.
+reported as completion-unknown with the same request ID. A transport timeout
+that reaches the wait deadline is normalized to the same timeout outcome; earlier
+transport failures remain distinguishable. This reduces repeated reads for longer
+tasks while keeping the default completion-detection delay capped at two seconds.
 
 Responses are streamed and closed on every exit, bounded to **4 MiB decoded
 bytes**, including gzip expansion. This accommodates the existing 2 MiB inline
