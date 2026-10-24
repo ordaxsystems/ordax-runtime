@@ -1,0 +1,10 @@
+{
+  "schema": "ordax.control-plane-source-lock/1",
+  "source": {
+    "repository": "ordaxsystems/ordax-platform",
+    "path": "control-plane/cloudflare/production-foundation.json",
+    "commit": "3ae5d914df03f8f6a677ddd18cf3337cd0bcb89a",
+    "version": 24
+  },
+  "authority": "none"
+}
