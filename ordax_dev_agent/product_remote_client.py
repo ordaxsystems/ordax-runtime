@@ -14,6 +14,7 @@ import httpx
 _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 _ACTION_STATUSES = _TERMINAL_STATUSES | {"queued", "leased", "running"}
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+_MAX_ACTION_POLL_INTERVAL_SECONDS = 2.0
 _REQUEST_ID = re.compile(r"[A-Za-z0-9:_-]{1,128}")
 _ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,127}")
 _UUID = re.compile(
@@ -635,6 +636,10 @@ class ProductRemoteClient:
             raise ValueError("poll_interval_seconds must be between 0.1 and 5")
 
         deadline = time.monotonic() + timeout_seconds
+        poll_interval = poll_interval_seconds
+        poll_interval_cap = max(
+            poll_interval_seconds, _MAX_ACTION_POLL_INTERVAL_SECONDS,
+        )
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -655,4 +660,5 @@ class ProductRemoteClient:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ProductActionWaitTimeout(request_id)
-            time.sleep(min(poll_interval_seconds, remaining))
+            time.sleep(min(poll_interval, remaining))
+            poll_interval = min(poll_interval * 2, poll_interval_cap)
