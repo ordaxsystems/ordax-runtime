@@ -107,6 +107,7 @@ jobs:
           python -m unittest
           tests.test_release_main_ancestry
           tests.test_agent_recovery_governance_contract
+          tests.test_agent_self_heal_scripts
           tests.test_product_gateway
           tests.test_orchestrator_app_bridge
           tests.test_orchestrator_product_authority
