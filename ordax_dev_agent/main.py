@@ -247,6 +247,61 @@ def _end_job_lease(runtime: dict, *, report_committed: bool) -> None:
         lease["lease_expires_at"] = None
 
 
+def _keep_job_alive_tick(
+    control: object,
+    active_job: object,
+    stop_event: threading.Event,
+    operation_lock: threading.Lock,
+    runtime: dict,
+    host_actions: object,
+    agent_version: str,
+) -> None:
+    """Renew an active lease and publish busy status before terminal reporting.
+
+    The lock serializes this pair with the terminal report. Once shutdown is
+    requested, an in-flight renewal must not publish a stale busy heartbeat.
+    """
+    with operation_lock:
+        if stop_event.is_set():
+            return
+        try:
+            lease_response = control.renew(active_job)
+            _record_job_lease_renewal(runtime, lease_response)
+        except Exception as error:
+            _record_job_lease_error(runtime, error)
+            # The command may already have produced side effects. Never
+            # redispatch or infer ownership from a successful heartbeat.
+            print(
+                f"job keepalive error for {active_job.id}: "
+                f"{runtime.get('job_lease', {}).get('last_error_code')}",
+                file=sys.stderr,
+            )
+        if stop_event.is_set():
+            return
+        try:
+            control.heartbeat(
+                host_actions, agent_version=agent_version, status="busy",
+            )
+            runtime["last_heartbeat_at"] = time.time()
+            _mark_transport_healthy(runtime)
+        except Exception as error:
+            _mark_transport_unavailable(runtime, error)
+            print(f"busy heartbeat error: {error}", file=sys.stderr)
+
+
+def _complete_job_after_stopping_keepalive(
+    control: object,
+    active_job: object,
+    result: object,
+    stop_event: threading.Event,
+    operation_lock: threading.Lock,
+) -> None:
+    """Stop renewal and serialize terminal reporting after any in-flight tick."""
+    stop_event.set()
+    with operation_lock:
+        control.complete(active_job, result)
+
+
 def _agent_metadata(config: AgentConfig) -> dict:
     from .projects import load_projects
 
@@ -756,30 +811,14 @@ def run(
                 registry.on_observation = publish_observation
 
                 keepalive_stop = threading.Event()
+                keepalive_operation_lock = threading.Lock()
 
                 def _keep_job_alive(active_job=job, stop_event=keepalive_stop) -> None:
                     while not stop_event.wait(20.0):
-                        try:
-                            lease_response = control.renew(active_job)
-                            _record_job_lease_renewal(runtime, lease_response)
-                        except Exception as error:
-                            _record_job_lease_error(runtime, error)
-                            # The command may already have produced side effects.
-                            # Never redispatch or pretend that a good heartbeat
-                            # means the active job still owns its fence.
-                            print(
-                                f"job keepalive error for {active_job.id}: "
-                                f"{runtime.get('job_lease', {}).get('last_error_code')}",
-                                file=sys.stderr,
-                            )
-                        try:
-                            control.heartbeat(host_actions, agent_version=__version__,
-                                              status="busy")
-                            runtime["last_heartbeat_at"] = time.time()
-                            _mark_transport_healthy(runtime)
-                        except Exception as error:
-                            _mark_transport_unavailable(runtime, error)
-                            print(f"busy heartbeat error: {error}", file=sys.stderr)
+                        _keep_job_alive_tick(
+                            control, active_job, stop_event, keepalive_operation_lock,
+                            runtime, host_actions, __version__,
+                        )
 
                 keepalive_thread = threading.Thread(
                     target=_keep_job_alive,
@@ -842,7 +881,9 @@ def run(
                         except Exception as error:
                             # An optional progress event must not block the terminal result.
                             print(f"terminal progress event failed: {error}", file=sys.stderr)
-                    control.complete(job, result)
+                    _complete_job_after_stopping_keepalive(
+                        control, job, result, keepalive_stop, keepalive_operation_lock,
+                    )
                     _end_job_lease(runtime, report_committed=True)
                     runtime["job_timings"]["report_seconds"] = round(time.monotonic() - report_started, 3)
                 finally:
