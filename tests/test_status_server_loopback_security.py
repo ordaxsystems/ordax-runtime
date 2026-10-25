@@ -110,7 +110,8 @@ class LocalRuntimeStatusSecurityTests(unittest.TestCase):
     def test_watchdog_uses_lightweight_health_without_cim(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "scripts" / "windows"
                   / "ordax-agent-watchdog.ps1").read_text(encoding="utf-8")
-        self.assertIn('$healthUrl = "http://127.0.0.1:8765/health"', source)
+        self.assertIn('[int]$HealthPort = 8765', source)
+        self.assertIn('$healthUrl = "http://127.0.0.1:$HealthPort/health"', source)
         self.assertIn("$runtime.last_job_id", source)
         self.assertNotIn("Get-CimInstance", source)
 
