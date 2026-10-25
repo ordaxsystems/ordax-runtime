@@ -194,7 +194,8 @@ class AgentSelfHealScriptTests(unittest.TestCase):
 
         self.assertIn("function Ensure-ConfiguredDeviceIdentity", bootstrap)
         self.assertIn("ordax_dev_agent.device_setup", bootstrap)
-        self.assertIn("--control-plane-url", bootstrap)
+        self.assertIn("--product-mcp-url", bootstrap)
+        self.assertNotIn("--control-plane-url", bootstrap)
         self.assertIn("device-token.cloudflare-v3.txt", bootstrap)
         self.assertIn("cloudflare-v3", bootstrap)
         self.assertIn('"device_id"', bootstrap)
@@ -456,10 +457,10 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertIn("task-entry.log", entry)
         self.assertIn("agent-startup.log", main)
 
-        server_index = main.index("start_status_server(status_payload)")
+        server_index = main.index("status_server = start_status_server(")
         registry_import_index = main.index("from .actions import ActionRegistry")
         self.assertLess(server_index, registry_import_index)
-        self.assertIn("STATUS_SERVER_READY port=8765", main)
+        self.assertIn('f"STATUS_SERVER_READY port={status_server.server_port}"', main)
 
     def test_recovery_retargets_task_to_external_bootstrap(self) -> None:
         root = Path(__file__).resolve().parents[1]
