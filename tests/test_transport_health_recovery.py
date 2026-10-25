@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import threading
 import unittest
 from unittest.mock import patch
 
 from ordax_dev_agent.main import (
     _begin_job_lease,
+    _complete_job_after_stopping_keepalive,
+    _keep_job_alive_tick,
     _end_job_lease,
     _mark_transport_delivery_error,
     _mark_transport_healthy,
@@ -110,6 +113,51 @@ class TransportHealthRecoveryTests(unittest.TestCase):
         self.assertEqual("unverified", runtime["job_lease"]["state"])
         _record_job_lease_renewal(runtime, {"lease_expires_at": "2026-10-20T17:30:00"})
         self.assertEqual("unverified", runtime["job_lease"]["state"])
+
+    def test_terminal_report_waits_for_keepalive_and_suppresses_late_busy_heartbeat(self) -> None:
+        stop_event = threading.Event()
+        operation_lock = threading.Lock()
+        renewal_started = threading.Event()
+        release_renewal = threading.Event()
+        operations: list[str] = []
+        runtime = {"job_lease": {"state": "started", "renewal_attempts": 0}}
+
+        class Control:
+            def renew(self, _job: object) -> dict:
+                operations.append("renew_started")
+                renewal_started.set()
+                if not release_renewal.wait(2):
+                    raise AssertionError("test did not release the renewal")
+                operations.append("renew_returned")
+                return {"lease_expires_at": "2026-10-24T12:00:00Z"}
+
+            def heartbeat(self, *_args: object, **_kwargs: object) -> None:
+                operations.append("busy_heartbeat")
+
+            def complete(self, *_args: object) -> None:
+                operations.append("complete")
+
+        control = Control()
+        keepalive = threading.Thread(
+            target=_keep_job_alive_tick,
+            args=(control, object(), stop_event, operation_lock, runtime, [], "test"),
+        )
+        keepalive.start()
+        self.assertTrue(renewal_started.wait(1))
+
+        reporter = threading.Thread(
+            target=_complete_job_after_stopping_keepalive,
+            args=(control, object(), object(), stop_event, operation_lock),
+        )
+        reporter.start()
+        self.assertTrue(stop_event.wait(1))
+        release_renewal.set()
+        keepalive.join(2)
+        reporter.join(2)
+
+        self.assertFalse(keepalive.is_alive())
+        self.assertFalse(reporter.is_alive())
+        self.assertEqual(["renew_started", "renew_returned", "complete"], operations)
 
     def test_non_transient_state_is_not_reported_as_recovery(self) -> None:
         runtime = {
