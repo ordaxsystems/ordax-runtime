@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.control_plane import build_control_plane
-from ordax_dev_agent.main import run, _wait_for_native_access
+from ordax_dev_agent.main import run, _start_local_watchdog, _wait_for_native_access
 from ordax_dev_agent.models import AgentJob
 from ordax_dev_agent.models import ActionResult
 from ordax_dev_agent.actions import ActionRegistry, COMPUTER_GRAPHICAL_ACTIONS
@@ -40,6 +40,16 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
             product_mcp_url="https://mcp.ordax.com.br",
         )
         self.provider = Mock(return_value={"device_id": DEVICE, "device_token": "b" * 64})
+
+    def test_windows_watchdog_receives_selected_health_port(self):
+        with (
+            patch("ordax_dev_agent.main.sys.platform", "win32"),
+            patch("ordax_dev_agent.main.subprocess.Popen") as popen,
+        ):
+            _start_local_watchdog(self.config, health_port=43127)
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[command.index("-HealthPort") + 1], "43127")
 
     def test_factory_uses_native_identity_without_creating_token_file(self):
         plane = build_control_plane(self.config, device_credential_provider=self.provider)
@@ -256,14 +266,19 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                     patch("ordax_dev_agent.config.AgentConfig.from_env", side_effect=AssertionError("host config required")),
                     patch("ordax_dev_agent.control_plane.build_control_plane", return_value=plane) as factory,
                     patch("ordax_dev_agent.main.start_status_server") as server,
-                    patch("ordax_dev_agent.main._start_local_watchdog", return_value=None),
+                    patch("ordax_dev_agent.main._start_local_watchdog", return_value=None) as watchdog,
                     patch("ordax_dev_agent.main.signal.signal", side_effect=lambda kind, handler: handlers.__setitem__(kind, handler)),
                     redirect_stdout(io.StringIO()),
                 ):
+                    server.return_value.server_port = 43219
                     self.assertEqual(run(self.config, device_credential_provider=self.provider,
                                          native_access_enabled=lambda: True, status_port=0), 0)
                     factory.assert_called_once_with(self.config, device_credential_provider=self.provider)
                     self.assertEqual(server.call_args.kwargs["port"], 0)
+                    watchdog.assert_called_once_with(
+                        self.config,
+                        health_port=43219,
+                    )
                     server.return_value.shutdown.assert_called_once_with()
                 self.assertEqual(len(results), 1)
                 self.assertEqual(results[0].ok, enabled, results[0].summary)

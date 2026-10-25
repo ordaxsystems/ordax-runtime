@@ -6,11 +6,13 @@ param(
     [int]$MaxConsecutiveFailures = 6,
     [int]$MaxBusyMinutes = 15,
     [string]$RestartTaskName = "OrdaX Dev Agent",
-    [int]$RestartDelaySeconds = 5
+    [int]$RestartDelaySeconds = 5,
+    [ValidateRange(1, 65535)]
+    [int]$HealthPort = 8765
 )
 
 $ErrorActionPreference = "SilentlyContinue"
-$healthUrl = "http://127.0.0.1:8765/health"
+$healthUrl = "http://127.0.0.1:$HealthPort/health"
 $stateDir = Join-Path $env:LOCALAPPDATA "OrdaX\DevAgent"
 $logPath = Join-Path $stateDir "watchdog.log"
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null

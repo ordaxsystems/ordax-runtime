@@ -258,9 +258,15 @@ def _agent_metadata(config: AgentConfig) -> dict:
     }
 
 
-def _start_local_watchdog(config: AgentConfig) -> subprocess.Popen | None:
+def _start_local_watchdog(
+    config: AgentConfig,
+    *,
+    health_port: int = 8765,
+) -> subprocess.Popen | None:
     if sys.platform != "win32":
         return None
+    if type(health_port) is not int or not 1 <= health_port <= 65535:
+        raise ValueError("watchdog health port is invalid")
 
     repo_root = Path(__file__).resolve().parents[1]
     script = (
@@ -282,6 +288,8 @@ def _start_local_watchdog(config: AgentConfig) -> subprocess.Popen | None:
         str(script),
         "-AgentPid",
         str(os.getpid()),
+        "-HealthPort",
+        str(health_port),
     ]
     try:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -509,7 +517,10 @@ def run(
         if callable(orchestrator_installation_provider) else set())})
     _startup_log(config, f"ACTION_REGISTRY_READY actions={len(registry.names)}")
 
-    watchdog_process = _start_local_watchdog(config)
+    watchdog_process = _start_local_watchdog(
+        config,
+        health_port=status_server.server_port,
+    )
     runtime["watchdog_pid"] = watchdog_process.pid if watchdog_process else None
     protocol = str(config.control_plane_protocol or "").strip().lower()
     remote_control_configured = bool(
