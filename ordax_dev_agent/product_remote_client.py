@@ -247,6 +247,73 @@ class ProductRemoteClient:
             )
         return [dict(item) for item in targets]
 
+    # Canonical Owner Central session API: no grant issuance, no model-selected
+    # target and no local session mapping. Signed first-party Owner PKCE is
+    # supplied by the caller on each request and never retained by this client.
+    def owner_central_targets(self, access_token: str, *, client_id: str) -> dict[str, Any]:
+        client = self._client_id(client_id)
+        response = self._request(
+            "GET", f"{self.base_url}/v3/owner/central-session-targets",
+            headers=self._headers(access_token), params={"client_id": client},
+        )
+        body = self._body(response)
+        count = body.get("eligible_device_count")
+        targets = body.get("targets")
+        if (body.get("client_id") != client or not isinstance(count, int)
+            or isinstance(count, bool) or not 0 <= count <= 25
+            or not isinstance(targets, list) or len(targets) != count
+            or not all(isinstance(item, dict)
+                       and _UUID.fullmatch(str(item.get("device_id") or "")) for item in targets)
+            or body.get("attested") is not False
+            or body.get("dispatch_authorized") is not False):
+            raise ProductRemoteError("product_remote_invalid_response", response.status_code,
+                                     "Owner Central targets invalid")
+        return dict(body)
+
+    def owner_central_pending(self, access_token: str, *, client_id: str) -> dict[str, Any]:
+        client = self._client_id(client_id)
+        response = self._request(
+            "GET", f"{self.base_url}/v3/owner/central-session-selections",
+            headers=self._headers(access_token), params={"client_id": client},
+        )
+        body = self._body(response)
+        waiting = body.get("pending_selections")
+        count = body.get("count")
+        if (not isinstance(waiting, list)
+            or not isinstance(count, int) or isinstance(count, bool)
+            or not 0 <= count <= 25 or len(waiting) != count
+            or not all(isinstance(item, dict)
+                       and _UUID.fullmatch(str(item.get("challenge_id") or ""))
+                       and isinstance(item.get("created_at"), str)
+                       and isinstance(item.get("expires_at"), str)
+                       for item in waiting)
+            or body.get("attested") is not False
+            or body.get("dispatch_authorized") is not False):
+            raise ProductRemoteError("product_remote_invalid_response", response.status_code,
+                                     "Owner Central pending choices invalid")
+        return dict(body)
+
+    def owner_central_select(
+        self, access_token: str, *, client_id: str, challenge_id: str, device_id: str,
+    ) -> dict[str, Any]:
+        client = self._client_id(client_id)
+        challenge = self._uuid(challenge_id, "challenge_id")
+        device = self._uuid(device_id, "device_id")
+        response = self._request(
+            "POST", f"{self.base_url}/v3/owner/central-session-selections",
+            headers={**self._headers(access_token), "content-type": "application/json"},
+            json={"client_id": client, "challenge_id": challenge, "device_id": device},
+        )
+        body = self._body(response)
+        if (body.get("status") != "pending"
+            or body.get("device_id") != device
+            or body.get("challenge_id") != challenge
+            or body.get("attested") is not False
+            or body.get("dispatch_authorized") is not False):
+            raise ProductRemoteError("product_remote_invalid_response", response.status_code,
+                                     "Owner Central selection was not a pending challenge")
+        return dict(body)
+
     def owner_remote_authority(
         self,
         access_token: str,
