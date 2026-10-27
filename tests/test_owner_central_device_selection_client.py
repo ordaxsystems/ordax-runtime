@@ -110,6 +110,50 @@ class OwnerCentralDeviceSelectionClientTests(unittest.TestCase):
                 call()
         self.assertEqual(observed, [])
 
+    def test_installed_owner_cli_only_selects_with_explicit_confirmation(self):
+        from ordax_dev_agent.owner_grants_cli import parse_args, perform
+
+        with self.assertRaises(SystemExit):
+            parse_args(["central-select", "--device", DESKTOP,
+                        "--client", CLIENT, "--challenge", TICKET])
+        with self.assertRaises(SystemExit):
+            parse_args(["central-select", "--device", DESKTOP,
+                        "--challenge", TICKET, "--confirm"])
+        with self.assertRaises(SystemExit):
+            parse_args(["central-select", "--device", DESKTOP,
+                        "--client", CLIENT, "--challenge", "invalid", "--confirm"])
+
+        class FakeOwner:
+            def __init__(self):
+                self.calls = []
+            def owner_remote_authority(self, token, *, device_id):
+                self.calls.append(("authority", device_id))
+                return {"device_id": device_id,
+                        "clients": [{"client_id": CLIENT}], "grant_groups": []}
+            def owner_central_session_targets(self, token, *, client_id):
+                self.calls.append(("targets", client_id))
+                return {"ok": True, "client_id": client_id}
+            def owner_central_session_selections(self, token, *, client_id):
+                self.calls.append(("selections", client_id))
+                return {"ok": True, "pending_selections": []}
+            def owner_select_central_device(self, token, *, client_id, challenge_id, device_id):
+                self.calls.append(("selection", client_id, challenge_id, device_id))
+                return {"ok": True, "status": "pending", "attested": False,
+                        "dispatch_authorized": False}
+
+        remote = FakeOwner()
+        common = ["--device", DESKTOP, "--client", CLIENT]
+        result = perform(parse_args(["central-targets", *common]), "owner", remote)
+        self.assertEqual(result["client_id"], CLIENT)
+        result = perform(parse_args(["central-selections", *common]), "owner", remote)
+        self.assertEqual(result["pending_selections"], [])
+        self.assertFalse(any(row[0] == "selection" for row in remote.calls))
+        result = perform(parse_args(["central-select", *common,
+                                    "--challenge", TICKET, "--confirm"]), "owner", remote)
+        self.assertEqual(result["status"], "pending")
+        self.assertFalse(result["attested"])
+        self.assertEqual(remote.calls[-1], ("selection", CLIENT, TICKET, DESKTOP))
+
 
 if __name__ == "__main__":
     unittest.main()
