@@ -37,10 +37,10 @@ def select_consented_owner_mcp_client(
 ) -> str:
     """Resolve one client from canonical owner_remote_authority response.
 
-    If several OAuth clients are consented, reuse the single client with a
-    currently active, owner-authorized computer-observe grant for this exact
-    device. A grant for another device, client, scope, or revoked OAuth consent
-    is never enough. Otherwise explicit client selection is required.
+    One consented OAuth client can be selected without an explicit argument.
+    With multiple clients, require the exact Owner-selected client_id: existing
+    device grants are NOT proof of which ChatGPT connection the Owner intended.
+    Never infer a new grant recipient from previous profile assignments.
     """
     normalized_device = _uuid(device_id)
     if not normalized_device or _uuid(authority.get("device_id")) != normalized_device:
@@ -74,24 +74,8 @@ def select_consented_owner_mcp_client(
     if len(consented) == 1:
         return next(iter(consented))
 
-    prior: set[str] = set()
-    for group in groups:
-        if not isinstance(group, Mapping):
-            raise OwnerMcpClientSelectionError("owner_mcp_authority_invalid")
-        client_id = _uuid(group.get("client_id"))
-        if (
-            client_id in consented
-            and _uuid(group.get("device_id")) == normalized_device
-            and group.get("profile_key") == "computer-observe"
-            and group.get("scope_kind") == "device"
-            and group.get("space_id") is None
-            and group.get("project_id") is None
-            and group.get("client_consent_active") is True
-        ):
-            prior.add(client_id)
-
-    if len(prior) == 1:
-        return next(iter(prior))
+    # Ambiguity must be resolved by the authenticated Owner, not by a
+    # previous grant on another OAuth connection (or on another device).
     raise OwnerMcpClientSelectionError("owner_mcp_client_ambiguous")
 
 
