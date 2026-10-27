@@ -484,6 +484,115 @@ class ProductRemoteClient:
         )
         return self._body(response)
 
+    def owner_central_session_targets(
+        self, access_token: str, *, client_id: str,
+    ) -> dict[str, Any]:
+        """Read-only canonical eligible devices; never an attestation or grant."""
+        oauth_client = self._client_id(client_id)
+        response = self._request(
+            "GET",
+            f"{self.base_url}/v3/owner/central-session-targets",
+            headers=self._headers(access_token),
+            params={"client_id": oauth_client},
+        )
+        body = self._body(response)
+        if body.get("client_id") != oauth_client:
+            raise ProductRemoteError(
+                "product_remote_invalid_response", response.status_code,
+                "Owner target preflight returned a different OAuth client",
+            )
+        count = body.get("eligible_device_count")
+        targets = body.get("targets")
+        if (
+            type(count) is not int or count < 0 or count > 25
+            or not isinstance(targets, list) or len(targets) != count
+            or not all(isinstance(item, dict) and isinstance(item.get("device_id"), str)
+                       and _UUID.fullmatch(item["device_id"]) is not None
+                       for item in targets)
+            or body.get("attested") is not False
+            or body.get("dispatch_authorized") is not False
+            or body.get("owner_choice_performed") is not False
+        ):
+            raise ProductRemoteError(
+                "product_remote_invalid_response", response.status_code,
+                "Owner target preflight is not a read-only eligibility projection",
+            )
+        return body
+
+    def owner_central_session_selections(
+        self, access_token: str, *, client_id: str,
+    ) -> dict[str, Any]:
+        """Owner-only pending tickets, never exposing provider session hashes."""
+        oauth_client = self._client_id(client_id)
+        response = self._request(
+            "GET",
+            f"{self.base_url}/v3/owner/central-session-selections",
+            headers=self._headers(access_token),
+            params={"client_id": oauth_client},
+        )
+        body = self._body(response)
+        selections = body.get("pending_selections")
+        count = body.get("count")
+        if (
+            not isinstance(selections, list) or type(count) is not int
+            or count < 0 or count > 25 or len(selections) != count
+            or body.get("attested") is not False
+            or body.get("dispatch_authorized") is not False
+        ):
+            raise ProductRemoteError(
+                "product_remote_invalid_response", response.status_code,
+                "Owner pending selection response is invalid",
+            )
+        for item in selections:
+            if not isinstance(item, dict) or set(item) != {
+                "challenge_id", "created_at", "expires_at",
+            }:
+                raise ProductRemoteError(
+                    "product_remote_invalid_response", response.status_code,
+                    "Owner selection ticket has unexpected fields",
+                )
+            try:
+                self._uuid(item["challenge_id"], "challenge_id")
+            except ValueError as error:
+                raise ProductRemoteError(
+                    "product_remote_invalid_response", response.status_code,
+                    "Owner selection ticket is invalid",
+                ) from error
+        return body
+
+    def owner_select_central_device(
+        self, access_token: str, *, client_id: str,
+        challenge_id: str, device_id: str,
+    ) -> dict[str, Any]:
+        """Only an explicit Owner action selects the already-granted target.
+
+        Selection does not attest a session; the exact Native Device must
+        still confirm its challenge with its credential.
+        """
+        oauth_client = self._client_id(client_id)
+        ticket = self._uuid(challenge_id, "challenge_id")
+        target = self._uuid(device_id, "device_id")
+        response = self._request(
+            "POST",
+            f"{self.base_url}/v3/owner/central-session-selections",
+            headers={**self._headers(access_token), "content-type": "application/json"},
+            json={"client_id": oauth_client, "challenge_id": ticket,
+                  "device_id": target},
+        )
+        body = self._body(response)
+        if (
+            body.get("status") != "pending"
+            or body.get("challenge_id") != ticket
+            or body.get("device_id") != target
+            or body.get("attested") is not False
+            or body.get("dispatch_authorized") is not False
+        ):
+            raise ProductRemoteError(
+                "product_remote_invalid_response", response.status_code,
+                "Owner device selection returned inconsistent challenge state",
+            )
+        return body
+
     def replace_owner_remote_grant_group(
         self,
         access_token: str,

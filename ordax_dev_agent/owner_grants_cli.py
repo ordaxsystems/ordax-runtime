@@ -51,11 +51,15 @@ def _days(value: str) -> int:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="ordax-owner-grants", description="Manage authorized OrdaX MCP grants without the Studio UI")
     commands = parser.add_subparsers(dest="operation", required=True)
-    for name in ("list", "authorize", "revoke", "diagnose", "dev-enable"):
+    for name in ("list", "authorize", "revoke", "diagnose", "dev-enable",
+                 "central-targets", "central-selections", "central-select"):
         sub = commands.add_parser(name)
         sub.add_argument("--device", required=True, type=_uuid)
         if name != "list":
             sub.add_argument("--client", type=_uuid)
+        if name == "central-select":
+            sub.add_argument("--challenge", required=True, type=_uuid)
+            sub.add_argument("--confirm", action="store_true", help="Confirm this exact Owner session-device choice")
         if name == "authorize":
             sub.add_argument("--profile", required=True, type=_profile)
             sub.add_argument("--space", type=_uuid)
@@ -65,6 +69,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         if name == "revoke":
             sub.add_argument("--group", type=_uuid, required=True)
     args = parser.parse_args(argv)
+    if args.operation == "central-select" and not args.client:
+        parser.error("central-select requires the exact OAuth client with --client")
+    if args.operation == "central-select" and not args.confirm:
+        parser.error("central-select requires explicit --confirm")
     if args.operation == "authorize":
         if bool(args.space) != bool(args.project):
             parser.error("project grants require both --space and --project")
@@ -188,6 +196,19 @@ def perform(args: argparse.Namespace, token: str, remote: ProductRemoteClient,
     if args.operation == "list":
         return {"device_id": args.device, "clients": authority["clients"], "grant_groups": authority["grant_groups"]}
     client = select_client(authority, args.client)
+    if args.operation == "central-targets":
+        return remote.owner_central_session_targets(token, client_id=client)
+    if args.operation == "central-selections":
+        return remote.owner_central_session_selections(token, client_id=client)
+    if args.operation == "central-select":
+        # Only this explicit Owner command can ask Platform to choose the
+        # previously granted device for one exact pending native challenge.
+        # This is NOT attestation, a grant change, or remote action execution.
+        if args.confirm is not True:
+            raise ValueError("owner_central_selection_explicit_confirmation_required")
+        return remote.owner_select_central_device(
+            token, client_id=client, challenge_id=args.challenge, device_id=args.device,
+        )
     if args.operation == "diagnose":
         return diagnose_owner_mcp_readiness(authority, client, policy_checker(
             config if config is not None else AgentConfig.from_env()))
