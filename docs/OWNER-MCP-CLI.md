@@ -43,6 +43,46 @@ O `ProductRemoteClient` do Runtime é o único cliente HTTP, usando:
 PostgreSQL/Platform permanece autoridade final, inclusive revogação.
 `device-native-terminal` e `full-computer-control` exigem Full Access ativado na política local. Ambos passam pela autoridade canônica PostgreSQL/Platform, com OAuth Owner explícito. O primeiro concede somente execução de terminal no dispositivo, sem GitHub/Space, e não habilita outras famílias de ações.
 
+## Escolha de dispositivo para sessão Central (fonte candidata, OFF)
+
+Os comandos abaixo pertencem **ao mesmo CLI e OAuth Owner PKCE**. São integração de
+source com a Platform [PR #293](https://github.com/ordaxsystems/ordax-platform/pull/293)
+e continuam **inoperantes em produção** enquanto os dois flags governados
+`CENTRAL_OWNER_TARGET_PREFLIGHT_ENABLED` / `CENTRAL_OWNER_SELECTION_ENABLED`
+estiverem desligados e o schema SQL permanecer em `proposals/`.
+Não os use como instrução para transferir grants entre clientes.
+
+```powershell
+& '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli central-targets --device <DEVICE_UUID> --client <CLIENTE_OAUTH_EXATO>
+& '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli central-selections --device <DEVICE_UUID> --client <CLIENTE_OAUTH_EXATO>
+& '.\\runtime\\python.exe' -m ordax_dev_agent.owner_grants_cli central-select --device <DEVICE_UUID> --client <CLIENTE_OAUTH_EXATO> --challenge <DESAFIO_DA_SESSAO> --confirm
+```
+
+`central-targets` apenas relata candidatos pelas permissões existentes;
+`central-selections` lista somente challenges esperando a escolha do Owner.
+`central-select` **exige** `--client`, `--device`, `--challenge` e
+`--confirm`; a opção só existe para uma decisão deliberada do proprietário,
+depois de identificar o desafio correto. A operação envia `POST` autenticado
+ao **Platform canônico**, sem criar grants nem executar ação MCP. A resposta
+`status=pending`, `attested=false`, `dispatch_authorized=false`
+**não** significa que o Runtime confirmou: só o dispositivo exato com sua
+credencial Native pode fazer a confirmação; um novo comando com outro dispositivo
+não pode roubar o challenge selecionado.
+
+O CLI começa consultando o inventário oficial da autoridade Owner para
+validar o cliente OAuth consentido. Caso haja mais de um cliente, a seleção
+sem `--client` exato é proibida; **jamais** reutilizar os grants do cliente
+A para B. Um Notebook ainda autorizado não deve ser revogado somente para
+facilitar o uso do Desktop. A Platform escolhe por challenge e cliente,
+não pelo `device_id` dos argumentos do modelo. Sem migração aplicada e
+prova real de atestação, o comportamento esperado é falhar fechado.
+
+**Aceite físico ainda pendente:** UX de identificação do challenge sem hash
+do marcador privado, Runtime instalado atualizado, Owner login PKCE válido,
+dois dispositivos autorizados, Runtime presence/digest, challenge confirmado,
+`computer_access_status` read-only com receipt e revogação exercitada.
+Não tratar merge de cliente HTTP ou CI como comprovação E2E.
+
 ## Ativação explícita para desenvolvimento (sem abrir MCP público)
 
 No **próprio notebook OrdaX**, com o Runtime atualizado a partir do repositório
