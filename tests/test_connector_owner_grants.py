@@ -59,8 +59,11 @@ class OwnerMcpClientSelectionTests(unittest.TestCase):
     def test_single_consented_client(self):
         self.assertEqual(self.select(authority(clients=(A,))), A)
 
-    def test_exact_prior_observe_grant_selects_owner_consented_client(self):
-        self.assertEqual(self.select(authority(groups=[previous(A)])), A)
+    def test_existing_observe_grant_never_selects_a_different_oauth_connection(self):
+        self.assert_denied("owner_mcp_client_ambiguous",
+                           authority(groups=[previous(A)]))
+        self.assert_denied("owner_mcp_client_ambiguous",
+                           authority(groups=[previous(B)]))
 
     def test_explicit_consented_selection_overrides_prior(self):
         self.assertEqual(self.select(authority(groups=[previous(A)]), requested=B), B)
@@ -103,7 +106,8 @@ class OwnerMcpClientSelectionTests(unittest.TestCase):
         remote = FakeRemote(authority(groups=[previous(A)]))
         result = grant_consented_owner_device_profile(
             remote, "owner-token", device_id=DEVICE,
-            profile_key="computer-filesystem", valid_until="2026-11-17T00:00:00Z",
+            profile_key="computer-filesystem", requested_client_id=A,
+            valid_until="2026-11-17T00:00:00Z",
         )
         self.assertTrue(result["ok"])
         self.assertEqual(remote.calls[0], ("authority", "owner-token", DEVICE))
@@ -111,6 +115,24 @@ class OwnerMcpClientSelectionTests(unittest.TestCase):
         self.assertEqual(remote.calls[1][2]["client_id"], A)
         self.assertEqual(remote.calls[1][2]["profile_key"], "computer-filesystem")
         self.assertIsNone(remote.calls[1][2]["project_id"])
+
+    def test_previous_observe_grant_requires_explicit_client_before_any_write(self):
+        remote = FakeRemote(authority(groups=[previous(A)]))
+        with self.assertRaises(OwnerMcpClientSelectionError) as caught:
+            grant_consented_owner_device_profile(
+                remote, "owner-token", device_id=DEVICE,
+                profile_key="computer-observe",
+            )
+        self.assertEqual(caught.exception.code, "owner_mcp_client_ambiguous")
+        self.assertEqual([call[0] for call in remote.calls], ["authority"])
+
+        # A user explicitly selecting B must never inherit A's prior grant.
+        result = grant_consented_owner_device_profile(
+            remote, "owner-token", device_id=DEVICE,
+            profile_key="computer-observe", requested_client_id=B,
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(remote.calls[-1][2]["client_id"], B)
 
     def test_failed_resolution_does_not_grant(self):
         remote = FakeRemote(authority())
