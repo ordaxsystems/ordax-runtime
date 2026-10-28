@@ -55,6 +55,8 @@ jobs:
         run: .\scripts\windows\test-ordax-update-runtime-health.ps1
 
   build-installer:
+    # Development PRs run fast contracts; full installers only on main, tags or manual dispatch.
+    if: github.event_name != 'pull_request'
     needs: packaging-contracts
     runs-on: windows-latest
     timeout-minutes: 20
