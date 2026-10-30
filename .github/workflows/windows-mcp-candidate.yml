@@ -1,0 +1,143 @@
+# Independent OrdaX MCP package proof. No Studio source, no publishing.
+name: OrdaX MCP Windows Candidate
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-mcp-candidate.yml"
+      - "scripts/windows/build-ordax-mcp.ps1"
+      - "packaging/windows/ordax-mcp.iss"
+      - "packaging/windows/ordax_launcher.c"
+      - "scripts/windows/assert-runtime-package-capabilities.ps1"
+      - "scripts/windows/ordax-upgrade-quiesce.ps1"
+      - "tests/test_windows_mcp_distribution.py"
+      - "control-plane-source.lock.json"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mcp-windows-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Check canonical independent installer ownership
+        shell: pwsh
+        run: |
+          python -m unittest tests.test_windows_mcp_distribution
+          if ($LASTEXITCODE -ne 0) { throw 'MCP distribution source contract failed' }
+          $tokens = $null
+          $errors = $null
+          foreach ($path in @(
+            'scripts/windows/build-ordax-mcp.ps1',
+            'scripts/windows/assert-runtime-package-capabilities.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if (@($errors).Count -gt 0) { throw "MCP packaging PowerShell syntax invalid in $path : $errors" }
+          }
+
+  mcp-windows-installer:
+    runs-on: windows-latest
+    needs: mcp-windows-contract
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Resolve existing canonical Platform source pin
+        id: lock
+        shell: pwsh
+        run: |
+          $lock = Get-Content .\control-plane-source.lock.json -Raw | ConvertFrom-Json
+          if ($lock.schema -ne 'ordax.control-plane-source-lock/1' -or
+              $lock.authority -ne 'none' -or
+              $lock.source.repository -ne 'ordaxsystems/ordax-platform' -or
+              [string]$lock.source.commit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Invalid existing Platform lock'
+          }
+          "commit=$($lock.source.commit)" >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ordaxsystems/ordax-platform
+          ref: ${{ steps.lock.outputs.commit }}
+          path: .ordax/platform
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Enable pinned native Runtime launcher compiler
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+      - name: Build standalone Runtime candidate without Studio checkout
+        shell: pwsh
+        run: |
+          .\scripts\windows\build-ordax-mcp.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\dist\mcp-windows" -PlatformSource "$env:GITHUB_WORKSPACE\.ordax\platform" -ControlPlaneEnvironment validation-candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Independent OrdaX MCP candidate build failed' }
+      - name: Verify installation, private Runtime, lifecycle, and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setups = @(Get-ChildItem .\dist\mcp-windows\OrdaX-MCP-Setup-*-x64.exe)
+          if ($setups.Count -ne 1) { throw 'Expected one exact MCP installer' }
+          $hash = (Get-FileHash $setups[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -cnotmatch '^[0-9a-f]{64}$') { throw 'MCP installer digest missing' }
+          function Invoke-Bounded([string]$binary, [string]$arguments) {
+            $proc = [System.Diagnostics.Process]::new()
+            $proc.StartInfo = [System.Diagnostics.ProcessStartInfo]::new($binary, $arguments)
+            $proc.StartInfo.UseShellExecute = $false
+            if (-not $proc.Start()) { throw "Unable to start $binary" }
+            if (-not $proc.WaitForExit(120000)) {
+              $proc.Kill()
+              throw "Installer/uninstaller exceeded time bound"
+            }
+            if ($proc.ExitCode -ne 0) { throw "Installer/uninstaller failed code $($proc.ExitCode)" }
+            $proc.Dispose()
+          }
+          Invoke-Bounded $setups[0].FullName '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\OrdaX MCP'
+          $privatePython = Join-Path $root 'runtime\python.exe'
+          if (-not (Test-Path (Join-Path $root 'ORDAX Runtime.exe')) -or
+              -not (Test-Path $privatePython) -or
+              -not (Test-Path (Join-Path $root 'product-manifest.json')) -or
+              (Test-Path (Join-Path $root 'ORDAX Studio.exe')) -or
+              (Test-Path (Join-Path $root 'presentation'))) {
+            throw 'MCP installed inventory contains missing Runtime or Studio duplication'
+          }
+          $manifest = Get-Content (Join-Path $root 'product-manifest.json') -Raw | ConvertFrom-Json
+          if ($manifest.schema -ne 'ordax.mcp-windows-candidate/1' -or
+              $manifest.product -ne 'OrdaX MCP' -or
+              $manifest.studio_required -ne $false -or
+              $manifest.signed_public_release -ne $false -or
+              $manifest.runtime_source_commit -cne $env:GITHUB_SHA) {
+            throw 'Candidate provenance, ownership or release status invalid'
+          }
+          & .\scripts\windows\assert-runtime-package-capabilities.ps1 -PrivatePython $privatePython -RuntimeRoot (Join-Path $root 'runtime') -Phase installed
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Runtime capability proof failed' }
+          & $privatePython -m ordax_dev_agent.owner_grants_cli --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Installed OAuth Owner CLI unavailable' }
+          $uninstaller = Join-Path $root 'unins000.exe'
+          if (-not (Test-Path $uninstaller)) { throw 'Standalone MCP uninstaller missing' }
+          Invoke-Bounded $uninstaller '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+          if (Test-Path (Join-Path $root 'ORDAX Runtime.exe')) { throw 'Standalone MCP Runtime remained after uninstall' }
+          Write-Host "ORDAX_MCP_STANDALONE_INSTALL_SMOKE=PASS SHA256=$hash"
+      - name: Retain unsigned validation candidate (never publish public release)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ordax-mcp-windows-candidate-${{ github.sha }}
+          path: dist/mcp-windows/OrdaX-MCP-Setup-*-x64.exe
+          if-no-files-found: error
+          retention-days: 3
