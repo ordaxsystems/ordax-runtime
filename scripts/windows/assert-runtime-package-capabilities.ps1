@@ -171,20 +171,3 @@ if ($Phase -ne "staged") {
 
 Write-Output ("ORDAX_PRODUCT_DEVICE_CONTROL_PLANE_{0}=PASS" -f $Phase.ToUpperInvariant())
 Write-Output ("ORDAX_RUNTIME_VERSION_PROVENANCE_{0}=PASS" -f $Phase.ToUpperInvariant())
- -and
-                       $manifest.runtime -eq "ORDAX Runtime.exe" -and
-                       $manifest.control_plane_provenance.schema -eq "ordax.control-plane-endpoint-provenance/1")
-    if (-not ($isStudio -or $isMcpCandidate)) {
-        throw "Installed ORDAX product manifest is incompatible for phase '$Phase'"
-    }
-    if ([string]$manifest.runtime_version -ne $runtimePackageVersion) {
-        throw "Installed manifest Runtime version does not match packaged Runtime for phase '$Phase'"
-    }
-    $versionInfo = (Get-Item -LiteralPath $runtimeExe).VersionInfo
-    if ($versionInfo.FileVersion -ne $runtimePackageVersion -or $versionInfo.ProductVersion -ne $runtimePackageVersion) {
-        throw "Installed ORDAX Runtime VERSIONINFO does not match packaged Runtime for phase '$Phase'"
-    }
-}
-
-Write-Output ("ORDAX_PRODUCT_DEVICE_CONTROL_PLANE_{0}=PASS" -f $Phase.ToUpperInvariant())
-Write-Output ("ORDAX_RUNTIME_VERSION_PROVENANCE_{0}=PASS" -f $Phase.ToUpperInvariant())
