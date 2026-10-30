@@ -9,6 +9,7 @@ from unittest.mock import patch
 from ordax_dev_agent.control_plane_provenance import (
     ControlPlaneProvenanceError,
     resolve_control_plane_provenance,
+    read_control_plane_source_lock,
 )
 
 
@@ -69,6 +70,26 @@ class ControlPlaneEndpointProvenanceTests(unittest.TestCase):
         return resolve_control_plane_provenance(
             self.lock_path, self.platform_root, environment
         )
+
+    def test_exact_source_lock_parser_is_reused_before_platform_checkout(self) -> None:
+        source = read_control_plane_source_lock(self.lock_path)
+        self.assertEqual(source["repository"], "ordaxsystems/ordax-platform")
+        self.assertEqual(source["path"], "control-plane/cloudflare/production-foundation.json")
+        self.assertEqual(source["commit"], self.lock["source"]["commit"])
+        self.assertEqual(source["version"], 24)
+
+        for invalid_version in (True, "24", 0):
+            with self.subTest(invalid_version=invalid_version):
+                self.lock["source"]["version"] = invalid_version
+                self._write_lock()
+                with self.assertRaisesRegex(ControlPlaneProvenanceError, "positive integer"):
+                    read_control_plane_source_lock(self.lock_path)
+        self.lock["source"]["version"] = 24
+        self._write_lock()
+        self.lock["source"]["unexpected"] = "second-authority"
+        self._write_lock()
+        with self.assertRaisesRegex(ControlPlaneProvenanceError, "source fields"):
+            read_control_plane_source_lock(self.lock_path)
 
     def test_pinned_validation_candidate_resolves_to_runtime_default_origin(self) -> None:
         provenance = self._resolve()
