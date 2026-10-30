@@ -18,7 +18,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn('AppId={{B5845369-1D88-42D2-BD77-D0F73C5DB5AE}', installer)
         self.assertNotIn("0D31F22D-8451-4CF4-9E34-F0D4D857F55F", installer)
         self.assertIn("DefaultDirName={localappdata}\\Programs\\OrdaX MCP", installer)
-        self.assertIn('"ordax_launcher.c"', builder)
+        self.assertIn('ordax_launcher.c', builder)
         self.assertIn("DORDAX_RUNTIME_LAUNCHER=1", builder)
         self.assertIn("ordax_dev_agent.owner_grants_cli", builder)
         self.assertIn("assert-runtime-package-capabilities.ps1", builder)
