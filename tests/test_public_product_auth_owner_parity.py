@@ -2,17 +2,35 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tomllib
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
 from ordax_dev_agent.config import DEFAULT_PRODUCT_MCP_URL
+from ordax_dev_agent.control_plane_provenance import read_control_plane_source_lock
 from ordax_studio import public_auth_metadata
 from ordax_studio.product_auth import _auth_config
 
 
 class PublicProductAuthOwnerParityTests(TestCase):
+    def test_platform_owner_checkout_uses_the_single_immutable_runtime_release_pin(self):
+        root = Path(__file__).resolve().parents[1]
+        source_root = root / ".ordax" / "platform"
+        self.assertTrue(source_root.is_dir(), "CI must check out pinned ordax-platform owner")
+        source = read_control_plane_source_lock(root / "control-plane-source.lock.json")
+        actual = subprocess.check_output(
+            ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+            text=True, timeout=15,
+        ).strip()
+        self.assertEqual(actual, source["commit"])
+        self.assertEqual(source["repository"], "ordaxsystems/ordax-platform")
+        foundation = json.loads(
+            (source_root / source["path"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(foundation["version"], source["version"])
+
     def test_owner_public_auth_metadata_matches_runtime_default_without_overrides(self):
         root = Path(__file__).resolve().parents[1]
         source = root / ".ordax" / "platform" / "control-plane" / "cloudflare" / "wrangler.toml"
