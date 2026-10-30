@@ -69,7 +69,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $commit = (& python -c 'from ordax_dev_agent.control_plane_provenance import read_control_plane_source_lock; print(read_control_plane_source_lock("control-plane-source.lock.json")["commit"])').Trim()
-          if ($LASTEXITCODE -ne 0 -or $commit -cnotmatch '^[0-9a-f]{40}) {
+          if ($LASTEXITCODE -ne 0 -or $commit.Length -ne 40 -or $commit -cmatch '[^0-9a-f]') {
             throw 'Invalid immutable Platform revision from the canonical Runtime lock'
           }
           "commit=$commit" >> $env:GITHUB_OUTPUT
