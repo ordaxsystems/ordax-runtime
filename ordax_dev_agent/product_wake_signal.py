@@ -49,6 +49,10 @@ class ProductWakeListener:
         # Reuse the SAME selector used by heartbeat/claim on this agent.
         # No second ingress state machine or credentials may be created.
         self._trusted_ingress = getattr(control, "_trusted_ingress")
+        # Native OS identity must use the existing Product transport guard.
+        # The wake receiver is only an advisory channel; it cannot retain an
+        # authenticated websocket after its OS-owned token is withdrawn.
+        self._credential_guard = getattr(control, "_assert_native_credential_current", None)
         self.headers = {
             "x-ordax-device-id": str(getattr(control, "device_id")),
             "x-ordax-device-token": str(getattr(control, "device_token")),
@@ -76,10 +80,24 @@ class ProductWakeListener:
         except Exception:
             return False
 
+    def _credential_is_current(self) -> bool:
+        guard = self._credential_guard
+        if guard is None:
+            return True  # Existing Windows transport has no Native OS identity.
+        if not callable(guard):
+            return False
+        try:
+            guard()
+            return True
+        except Exception:
+            # A private OS credential change is not a retriable websocket
+            # outage. Never log an identity-store error or try stale headers.
+            return False
+
     def _listen(self) -> None:
         retry_seconds = _INITIAL_RETRY_SECONDS
         while not self._stop.is_set():
-            if not self._local_allowed():
+            if not self._local_allowed() or not self._credential_is_current():
                 self.connected.clear()
                 self.wake.set()
                 return
@@ -97,10 +115,14 @@ class ProductWakeListener:
                         max_size=32,
                     ),
                 ) as socket:
+                    if not self._credential_is_current():
+                        return
                     connection_started = time.monotonic()
                     self.connected.set()
                     self.wake.set()  # reconcile a job accepted during reconnect
                     while not self._stop.is_set() and self._local_allowed():
+                        if not self._credential_is_current():
+                            return
                         try:
                             incoming = socket.recv(timeout=1)
                         except TimeoutError:
