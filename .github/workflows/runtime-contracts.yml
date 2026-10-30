@@ -58,16 +58,28 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Read canonical Platform public Product auth configuration
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: ordaxsystems/ordax-platform
-          ref: main
-          path: .ordax/platform
-          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
+      # The Windows package already consumes this exact Platform source lock.
+      # Do not test a floating Platform main while packaging an immutable pin.
+      - name: Resolve canonical Platform consumer revision from existing Runtime lock
+        id: platform-source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $commit = (& python -c 'from ordax_dev_agent.control_plane_provenance import read_control_plane_source_lock; print(read_control_plane_source_lock("control-plane-source.lock.json")["commit"])').Trim()
+          if ($LASTEXITCODE -ne 0 -or $commit.Length -ne 40 -or $commit -cmatch '[^0-9a-f]') {
+            throw 'Invalid immutable Platform revision from the canonical Runtime lock'
+          }
+          "commit=$commit" >> $env:GITHUB_OUTPUT
+      - name: Checkout pinned Platform public Product auth configuration
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ordaxsystems/ordax-platform
+          ref: ${{ steps.platform-source.outputs.commit }}
+          path: .ordax/platform
+          persist-credentials: false
       - name: Assert every repository workflow uses immutable remote actions
         run: python -m unittest tests.test_release_signing_contract.ReleaseSigningContractTests.test_repository_workflow_remote_actions_are_immutable -v
       - name: Install Runtime package and test dependencies

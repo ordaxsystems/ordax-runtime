@@ -18,17 +18,24 @@ autenticador, segredo, grant ou URL de produção embutida em outra
 camada. Variáveis explícitas de provisionamento continuam permitidas
 com validação HTTPS.
 
-`ORDAX Runtime Contracts` faz checkout temporário do **owner Platform
-main** sem credenciais persistidas e executa
-`tests.test_public_product_auth_owner_parity` no Windows. O teste
-compara **issuer, audience, JWKS URL e publishable key reais** com o
-snapshot entregue pelo pacote, e falha em divergência. Não aceita
-conferência por hostname isolado; todos os campos devem coincidir.
+`ORDAX Runtime Contracts` faz checkout temporário da **revisão imutável
+do owner Platform fixada em `control-plane-source.lock.json`**, a mesma
+referência usada pelo empacotamento Windows. O pin passa pela validação
+compartilhada de `ordax_dev_agent.control_plane_provenance` e o
+teste Windows exige que o HEAD real do checkout e a versão da fundação
+sejam idênticos aos do lock; ref móvel `main` não serve como prova
+de compatibilidade do pacote. O teste compara **issuer, audience,
+JWKS URL e publishable key reais** com o snapshot entregue e falha em
+divergência, sem aceitar comparação por hostname isolado.
 
 Esse é um **contrato de dependência versionável**, não transferência
 de autoridade do Platform para Runtime. Quando o Platform alterar
-issuer/key, a mudança deve ser coordenada e validada na Runtime CI
-antes de empacotar o app. A PR de entrada da sessão Electron usa
+issuer/key, a mudança deve ser coordenada: atualizar o único lock
+consumidor do Runtime para o commit aprovado e revalidar a Runtime CI
+antes de empacotar o app. A evolução independente de `Platform/main`
+não altera silenciosamente uma revisão já pinada pelo Runtime. O
+resultado de CI não comprova por si só que o deploy remoto aplicou
+aquela configuração. A PR de entrada da sessão Electron usa
 `sign_in_with_password` e `ProductRemoteClient.session` desse mesmo
 owner; ela depende dessa correção para autenticação real.
 

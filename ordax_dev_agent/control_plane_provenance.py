@@ -46,12 +46,8 @@ def _valid_hostname(hostname: str) -> bool:
     return len(labels) >= 2 and all(_HOST_LABEL_RE.fullmatch(label) for label in labels)
 
 
-def resolve_control_plane_provenance(
-    lock_path: str | Path,
-    platform_root: str | Path,
-    environment: str,
-) -> dict:
-    """Resolve an installer endpoint from one immutable Platform foundation commit."""
+def read_control_plane_source_lock(lock_path: str | Path) -> dict:
+    """Validate the sole pinned Platform consumer revision without a checkout."""
     lock_file = Path(lock_path)
     lock = _read_object(lock_file, "Control Plane source lock")
     if lock.get("schema") != LOCK_SCHEMA or lock.get("authority") != "none":
@@ -70,6 +66,19 @@ def resolve_control_plane_provenance(
     version = source.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise ControlPlaneProvenanceError("Control Plane source version must be a positive integer")
+
+    return dict(source)
+
+
+def resolve_control_plane_provenance(
+    lock_path: str | Path,
+    platform_root: str | Path,
+    environment: str,
+) -> dict:
+    """Resolve an installer endpoint from one immutable Platform foundation commit."""
+    source = read_control_plane_source_lock(lock_path)
+    commit = source["commit"]
+    version = source["version"]
 
     if not isinstance(environment, str) or environment not in ENVIRONMENTS:
         raise ControlPlaneProvenanceError(f"Unsupported Control Plane environment: {environment}")
