@@ -31,6 +31,24 @@ continue using the public branded hostname; this patch does not change them.
    before network delivery, and can be reconciled by the same fenced attempt
    when the Runtime reconnects. No automatic command re-execution.
 
+## Native OS identity revocation and advisory wake
+
+The optional WebSocket wake receiver uses the same Runtime Product device
+credential, but it cannot authorize or execute actions. For the Native OS
+credential provider, it now invokes the **existing** canonical Runtime
+credential-current guard before opening the socket, after the handshake and
+while receiving wake notifications. A rotated, revoked or unreadable OS
+credential closes the connection and terminates the listener without
+reconnecting with cached headers; the Runtime's ordinary heartbeat and
+Supervisor lifecycle own recovery and re-acquisition. Windows continues to use
+its existing managed identity semantics. No second credential storage,
+heartbeat, grants, dispatch mechanism or separate scheduler is introduced.
+
+The socket check is not proof of an authenticated MCP session or of device
+readiness. Native regression coverage lives in
+`tests/test_product_wake_signal.py` and runs in the existing Runtime
+Native composition gate; physical verification remains independent.
+
 ## Observed evidence — 2026-10-20
 
 On DESKTOP-COHT67R, normal DNS resolution of mcp.ordax.com.br returned
