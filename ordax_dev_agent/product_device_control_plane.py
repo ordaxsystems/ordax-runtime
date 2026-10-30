@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import re
 import time
@@ -76,6 +77,10 @@ class ProductDeviceControlPlane:
             uuid.UUID(self.device_id)
         except ValueError as error:
             raise RuntimeError("ORDAX_DEVICE_ID must be a UUID.") from error
+        # The native callback is owned by the existing OS identity store. It
+        # must be rechecked before transport: an enrolled credential can be
+        # rotated or revoked while this Runtime process is still alive.
+        self._native_credential_provider = device_credential_provider
         if device_credential_provider is None:
             # Windows product Runtime retains the existing canonical token file.
             self.device_token = read_secret(resolve_token_path(config.state_dir))
@@ -164,7 +169,35 @@ class ProductDeviceControlPlane:
             raise RuntimeError("canonical Product job execution context is incomplete")
         return required
 
+    def _assert_native_credential_current(self) -> None:
+        """Refuse stale native identity before the canonical Product transport.
+
+        A changed/revoked OS credential must terminate this Runtime instance,
+        not silently keep the old token or read a Windows fallback token file.
+        The existing Supervisor can restart it and reacquire the new identity.
+        """
+        provider = self._native_credential_provider
+        if provider is None:
+            return  # Windows continues to use its existing managed credential.
+        try:
+            credential = provider()
+            if (
+                not isinstance(credential, dict)
+                or set(credential) != {"device_id", "device_token"}
+                or credential.get("device_id") != self.device_id
+                or not isinstance(credential.get("device_token"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", credential["device_token"]) is None
+                or not hmac.compare_digest(credential["device_token"], self.device_token)
+            ):
+                raise DeviceAuthorizationError("NATIVE_DEVICE_CREDENTIAL_CHANGED")
+        except DeviceAuthorizationError:
+            raise
+        except Exception:
+            # Never leak credentials, file paths, or identity-store internals.
+            raise DeviceAuthorizationError("NATIVE_DEVICE_CREDENTIAL_UNAVAILABLE") from None
+
     def _post(self, operation: str, body: dict[str, Any], *, timeout: float = 20.0) -> dict[str, Any]:
+        self._assert_native_credential_current()
         try:
             response = self._trusted_ingress.request(
                 f"/v3/device/transport/{operation}",
