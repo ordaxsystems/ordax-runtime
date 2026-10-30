@@ -32,6 +32,7 @@ jobs:
           tests.test_native_buildroot_agent_probe
           tests.test_product_device_control_plane
           tests.test_native_product_credential_guard
+          tests.test_product_wake_signal
           tests.test_product_central_session
           tests.test_terminal_outbox
           tests.test_orchestrator_app_bridge
