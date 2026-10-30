@@ -136,7 +136,7 @@ class ProductDeviceControlPlane:
         self.product_central_session = ProductCentralSessionClient(
             self.base_http_url,
             self.device_id,
-            lambda: self.device_token,
+            self._current_session_device_token,
         )
 
     @property
@@ -195,6 +195,12 @@ class ProductDeviceControlPlane:
         except Exception:
             # Never leak credentials, file paths, or identity-store internals.
             raise DeviceAuthorizationError("NATIVE_DEVICE_CREDENTIAL_UNAVAILABLE") from None
+
+    def _current_session_device_token(self) -> str:
+        # Central-session attestation must not bypass the same OS identity
+        # revalidation as the Product action/heartbeat transport.
+        self._assert_native_credential_current()
+        return self.device_token
 
     def _post(self, operation: str, body: dict[str, Any], *, timeout: float = 20.0) -> dict[str, Any]:
         self._assert_native_credential_current()
