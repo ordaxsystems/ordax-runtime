@@ -34,10 +34,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'MCP distribution source contract failed' }
           $tokens = $null
           $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path 'scripts/windows/build-ordax-mcp.ps1'), [ref]$tokens, [ref]$errors
-          ) | Out-Null
-          if (@($errors).Count -gt 0) { throw "MCP builder PowerShell syntax invalid: $errors" }
+          foreach ($path in @(
+            'scripts/windows/build-ordax-mcp.ps1',
+            'scripts/windows/assert-runtime-package-capabilities.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if (@($errors).Count -gt 0) { throw "MCP packaging PowerShell syntax invalid in $path : $errors" }
+          }
 
   mcp-windows-installer:
     runs-on: windows-latest
