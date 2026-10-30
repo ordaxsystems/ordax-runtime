@@ -119,6 +119,7 @@ $manifest = [ordered]@{
   schema = "ordax.mcp-windows-candidate/1"
   product = "OrdaX MCP"
   version = $packageVersion
+  runtime_version = $packageVersion
   runtime_source_commit = $sourceCommit
   runtime = "ORDAX Runtime.exe"
   account_authority = "ordax-platform"
