@@ -154,7 +154,13 @@ if ($Phase -ne "staged") {
                        $manifest.product -eq "OrdaX MCP" -and
                        $manifest.studio_required -eq $false -and
                        $manifest.signed_public_release -eq $false -and
-                       [string]$manifest.runtime_source_commit -cmatch '^[0-9a-f]{40}    if ([string]$manifest.runtime_version -ne $runtimePackageVersion) {
+                       [string]$manifest.runtime_source_commit -cmatch '^[0-9a-f]{40}$' -and
+                       $manifest.runtime -eq "ORDAX Runtime.exe" -and
+                       $manifest.control_plane_provenance.schema -eq "ordax.control-plane-endpoint-provenance/1")
+    if (-not ($isStudio -or $isMcpCandidate)) {
+        throw "Installed ORDAX product manifest is incompatible for phase '$Phase'"
+    }
+    if ([string]$manifest.runtime_version -ne $runtimePackageVersion) {
         throw "Installed manifest Runtime version does not match packaged Runtime for phase '$Phase'"
     }
     $versionInfo = (Get-Item -LiteralPath $runtimeExe).VersionInfo
