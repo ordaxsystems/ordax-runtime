@@ -323,6 +323,70 @@ class ProductWakeTests(unittest.TestCase):
         self.assertEqual(called, [])
         self.assertFalse(listener.connected.is_set())
 
+    def test_native_revoked_credential_never_opens_wake_connection(self):
+        stop = threading.Event()
+        seen = []
+        def stale():
+            raise RuntimeError("revoked private OS credential")
+        control = SimpleNamespace(
+            base_http_url="https://mcp.ordax.com.br",
+            device_id="900943fd-8397-471e-bf05-c66ba4de7884",
+            device_token="a" * 64,
+            _trusted_ingress=TrustedProductIngress("https://mcp.ordax.com.br"),
+            _assert_native_credential_current=stale,
+        )
+        listener = ProductWakeListener(
+            control, stop, connect_websocket=lambda *_a, **_k: seen.append(True),
+        )
+        listener.start()
+        listener._thread.join(timeout=2)
+        self.assertFalse(listener._thread.is_alive())
+        self.assertEqual(seen, [])
+        self.assertFalse(listener.connected.is_set())
+        self.assertTrue(listener.wake.is_set())
+
+    def test_native_credential_revocation_closes_existing_wake_without_retry(self):
+        stop = threading.Event()
+        count = [0]
+        connections = []
+        class Socket:
+            def __init__(self):
+                self.exited = False
+                self.received = 0
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                self.exited = True
+            def recv(self, *, timeout):
+                self.received += 1
+                raise TimeoutError()
+        socket = Socket()
+        def verify():
+            count[0] += 1
+            if count[0] >= 4:
+                raise RuntimeError("OS device identity was replaced")
+        def connect(url, **kwargs):
+            connections.append((url, kwargs))
+            return socket
+        control = SimpleNamespace(
+            base_http_url="https://mcp.ordax.com.br",
+            device_id="900943fd-8397-471e-bf05-c66ba4de7884",
+            device_token="a" * 64,
+            _trusted_ingress=TrustedProductIngress("https://mcp.ordax.com.br"),
+            _assert_native_credential_current=verify,
+        )
+        listener = ProductWakeListener(control, stop, connect_websocket=connect)
+        listener.start()
+        listener._thread.join(timeout=2)
+        self.assertFalse(listener._thread.is_alive())
+        self.assertEqual(count[0], 4)
+        self.assertEqual(socket.received, 1)
+        self.assertTrue(socket.exited)
+        self.assertEqual(len(connections), 1)
+        self.assertFalse(listener.connected.is_set())
+        self.assertTrue(listener.wake.is_set())
+
+
 
 if __name__ == "__main__":
     unittest.main()
