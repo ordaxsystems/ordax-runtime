@@ -41,6 +41,13 @@ class NativeCredentialBoundaryTests(unittest.TestCase):
         self.assertNotIn("private-state-unavailable", str(failed.exception))
         self.agent._trusted_ingress.request.assert_not_called()
 
+    def test_central_session_attestation_rechecks_same_os_identity(self):
+        self.assertEqual(self.agent._current_session_device_token(), "a" * 64)
+        self.active = {"device_id": self.agent.device_id, "device_token": "b" * 64}
+        with self.assertRaises(DeviceAuthorizationError):
+            self.agent._current_session_device_token()
+        self.agent._trusted_ingress.request.assert_not_called()
+
     def test_windows_identity_is_not_requeried(self):
         self.agent._native_credential_provider = None
         self.agent._assert_native_credential_current()
