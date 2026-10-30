@@ -1,4 +1,4 @@
-# Independent OrdaX MCP Windows candidate. Does not consume ordax-apps/Studio.
+# Independent OrdaX MCP Windows candidate. Does not consume Studio application source.
 [CmdletBinding()]
 param(
   [string]$OutputDirectory = "",
