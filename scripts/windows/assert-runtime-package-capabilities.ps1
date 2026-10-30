@@ -145,7 +145,30 @@ if ($Phase -ne "staged") {
         throw "Installed ORDAX Runtime executable is missing for phase '$Phase'"
     }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($manifest.schema -ne "ordax.windows-product/1" -or $manifest.product -ne "ORDAX Studio") {
+    # One executor probe, two deliberately distinct distribution identities.
+    # The standalone MCP candidate may not claim to be a signed public release
+    # or silently adopt the legacy Studio installer/product identity.
+    $isStudio = ($manifest.schema -eq "ordax.windows-product/1" -and
+                 $manifest.product -eq "ORDAX Studio")
+    $isMcpCandidate = ($manifest.schema -eq "ordax.mcp-windows-candidate/1" -and
+                       $manifest.product -eq "OrdaX MCP" -and
+                       $manifest.studio_required -eq $false -and
+                       $manifest.signed_public_release -eq $false -and
+                       [string]$manifest.runtime_source_commit -cmatch '^[0-9a-f]{40}    if ([string]$manifest.runtime_version -ne $runtimePackageVersion) {
+        throw "Installed manifest Runtime version does not match packaged Runtime for phase '$Phase'"
+    }
+    $versionInfo = (Get-Item -LiteralPath $runtimeExe).VersionInfo
+    if ($versionInfo.FileVersion -ne $runtimePackageVersion -or $versionInfo.ProductVersion -ne $runtimePackageVersion) {
+        throw "Installed ORDAX Runtime VERSIONINFO does not match packaged Runtime for phase '$Phase'"
+    }
+}
+
+Write-Output ("ORDAX_PRODUCT_DEVICE_CONTROL_PLANE_{0}=PASS" -f $Phase.ToUpperInvariant())
+Write-Output ("ORDAX_RUNTIME_VERSION_PROVENANCE_{0}=PASS" -f $Phase.ToUpperInvariant())
+ -and
+                       $manifest.runtime -eq "ORDAX Runtime.exe" -and
+                       $manifest.control_plane_provenance.schema -eq "ordax.control-plane-endpoint-provenance/1")
+    if (-not ($isStudio -or $isMcpCandidate)) {
         throw "Installed ORDAX product manifest is incompatible for phase '$Phase'"
     }
     if ([string]$manifest.runtime_version -ne $runtimePackageVersion) {
