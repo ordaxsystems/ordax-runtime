@@ -37,9 +37,6 @@ VersionInfoDescription=OrdaX MCP standalone Runtime candidate
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-[Icons]
-Name: "{group}\OrdaX MCP — Estado do dispositivo"; Filename: "{app}\runtime\python.exe"; Parameters: "-m ordax_dev_agent.owner_grants_cli --help"; WorkingDir: "{app}"; Comment: "Ferramentas administrativas; nao concede autorizacao"
-
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OrdaX MCP"; ValueData: """{app}\{#RuntimeExe}"""; Flags: uninsdeletevalue
 
