@@ -12,6 +12,27 @@ O build Windows testa essa chamada diretamente no Python privado. Em uma instala
 Python padrão, `ordax-owner-grants` também fica disponível via console script.
 Não requer um serviço MCP adicional.
 
+## Registro inicial deste computador (após instalação ou formatação)
+
+O Runtime pode abrir o OAuth Owner existente e registrar **somente a máquina local**
+sem depender da UI do Studio:
+
+```powershell
+& '.\runtime\python.exe' -m ordax_dev_agent.owner_device_connect_cli --connect
+```
+
+No checkout de desenvolvimento, use o Python virtualenv do Runtime. O OAuth
+PKCE exige aprovação explícita no navegador; o código é trocado por token em
+memória e entregue ao **mesmo** `device_setup.configure` canônico. Nenhum token
+OAuth é impresso, aceito na linha de comando ou armazenado. O único estado
+persistente é a credencial de dispositivo local protegida e o `device_id`
+validado pela Platform. A operação não inicia um Runtime adicional, não
+concede permissões e não prova presença online nem `capability_digest`.
+
+Depois do registro, o Supervisor proprietário deve iniciar o Runtime único,
+publicar a presença e conferir os grants deste dispositivo e do cliente OAuth
+exato. Nunca copiar token/identidade de outro computador após formatação.
+
 ## Comandos
 
 ```powershell
