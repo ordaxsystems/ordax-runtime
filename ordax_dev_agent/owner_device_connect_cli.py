@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import socket
 import sys
+from pathlib import Path
 from uuid import UUID
 from collections.abc import Callable
 from typing import Any
@@ -35,6 +38,23 @@ def enroll_owner_device(
     config = config_provider()
     if not config.product_mcp_url:
         raise SetupError("PRODUCT_MCP_URL_INVALID")
+    override = {}
+    profile = os.environ.get("ORDAX_RUNTIME_HOST_PROFILE")
+    if profile is not None:
+        if profile != "ordax-desktop":
+            raise SetupError("UNKNOWN_PRODUCT_RUNTIME_HOST_PROFILE")
+        raw_user_data = os.environ.get("ORDAX_DESKTOP_USER_DATA", "")
+        user_data = Path(raw_user_data)
+        identity_root = user_data / "native-state" / "product-runtime"
+        if (not raw_user_data or not user_data.is_absolute()
+                or config.state_dir != identity_root or config.projects or config.adapters
+                or any(p.is_symlink() or (hasattr(p, "is_junction") and p.is_junction())
+                       for p in (user_data, user_data / "native-state", identity_root))):
+            raise SetupError("ORDAX_DESKTOP_IDENTITY_SCOPE_INVALID")
+        # Never import the Windows user\'s Documents/github projects during
+        # OS Desktop enrollment; the Product authority is this OS profile.
+        override["home"] = identity_root / "private-home"
+        override["device_name"] = ("OrdaX Desktop (" + socket.gethostname() + ")")[:80]
     code, verifier = auth_code()
     access_token = exchange(code, verifier)
     result = configure(
@@ -43,6 +63,7 @@ def enroll_owner_device(
         product_access_token=access_token,
         device_kind="desktop",
         channel="development",
+        **override,
     )
     if (result.get("ok") is not True
         or not isinstance(result.get("device_id"), str)

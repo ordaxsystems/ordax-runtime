@@ -149,6 +149,16 @@ class SetupTests(unittest.TestCase):
             self.run_setup(channel="nightly")
         self.assertEqual([], self.calls)
 
+    def test_separate_desktop_product_name_reaches_only_enrollment(self):
+        self.run_setup(device_name="OrdaX Desktop (test)")
+        self.assertEqual(self.calls[0]["device_name"], "OrdaX Desktop (test)")
+
+    def test_invalid_custom_device_names_fail_before_io(self):
+        for invalid in ("", " " * 3, "a" * 81, " trailing "):
+            with self.subTest(name=repr(invalid)), self.assertRaisesRegex(SetupError, "DEVICE_NAME_INVALID"):
+                self.run_setup(device_name=invalid)
+        self.assertEqual(self.calls, [])
+
     def test_new_machine_requires_explicit_ordax_account_session(self):
         with self.assertRaisesRegex(SetupError, "PRODUCT_ACCOUNT_LOGIN_REQUIRED"):
             self.run_setup(product_access_token=None)

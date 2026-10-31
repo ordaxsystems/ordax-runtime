@@ -251,6 +251,7 @@ def _configure(
     product_access_token: str | None = None,
     device_kind: str | None = None,
     channel: str | None = None,
+    device_name: str | None = None,
 ) -> dict:
     settings_path = state / "agent-settings.json"
     settings = load_settings(settings_path)
@@ -274,6 +275,10 @@ def _configure(
         raise SetupError("DEVICE_KIND_INVALID")
     if resolved_channel not in {"stable", "development"}:
         raise SetupError("PRODUCT_CHANNEL_INVALID")
+    selected_name = socket.gethostname() if device_name is None else device_name
+    if (type(selected_name) is not str or selected_name != selected_name.strip()
+            or not 1 <= len(selected_name) <= 80):
+        raise SetupError("DEVICE_NAME_INVALID")
 
     try:
         identity = None
@@ -316,7 +321,7 @@ def _configure(
                 {
                     "operation": "enroll",
                     "machine_binding_sha256": binding,
-                    "device_name": socket.gethostname(),
+                    "device_name": selected_name,
                     "device_kind": resolved_device_kind,
                     "channel": resolved_channel,
                     "token_sha256": hashlib.sha256(secret.encode()).hexdigest(),

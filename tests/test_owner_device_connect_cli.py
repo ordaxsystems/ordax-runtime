@@ -65,6 +65,43 @@ class OwnerDeviceConnectCliTests(unittest.TestCase):
         self.assertNotIn("TOKEN", json.dumps(result))
         self.assertFalse(self.state.exists())
 
+    def test_os_desktop_enrollment_uses_only_its_private_identity(self):
+        from unittest.mock import patch
+        user_data = Path(self.temporary.name) / "OrdaX OS Desktop Dev"
+        self.state = user_data / "native-state" / "product-runtime"
+        self.config.state_dir = self.state
+        self.config.projects = {}
+        self.config.adapters = ()
+        def capture(state, **kwargs):
+            self.assertEqual(state, self.state)
+            self.assertEqual(kwargs["home"], self.state / "private-home")
+            self.assertTrue(kwargs["device_name"].startswith("OrdaX Desktop ("))
+            self.assertEqual(kwargs["product_access_token"], "TOP_SECRET_OWNER_ACCESS_TOKEN")
+            self.calls.append("configure")
+            return {"ok": True, "device_id": "11111111-1111-4111-8111-111111111111", "protocol": "cloudflare-v3"}
+        with patch.dict("os.environ", {
+            "ORDAX_RUNTIME_HOST_PROFILE": "ordax-desktop",
+            "ORDAX_DESKTOP_USER_DATA": str(user_data),
+        }):
+            result = connect.enroll_owner_device(config_provider=self.provider,
+                auth_code=self.auth, exchange=self.exchange, configure=capture)
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.calls, ["oauth", "exchange", "configure"])
+        self.assertFalse(self.state.exists())
+
+    def test_wrong_desktop_scope_rejected_before_owner_browser(self):
+        from unittest.mock import patch
+        self.config.projects = {}
+        self.config.adapters = ()
+        with patch.dict("os.environ", {
+            "ORDAX_RUNTIME_HOST_PROFILE": "ordax-desktop",
+            "ORDAX_DESKTOP_USER_DATA": str(Path(self.temporary.name) / "OrdaX OS Desktop Dev"),
+        }):
+            with self.assertRaisesRegex(SetupError, "ORDAX_DESKTOP_IDENTITY_SCOPE_INVALID"):
+                connect.enroll_owner_device(config_provider=self.provider,
+                    auth_code=self.auth, exchange=self.exchange, configure=self.configure)
+        self.assertEqual(self.calls, [])
+
     def test_owner_rejection_cannot_call_enrollment(self):
         def reject():
             raise OwnerOAuthError("owner_oauth_rejected")
