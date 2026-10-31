@@ -177,3 +177,25 @@ Este comando **não** autoriza automaticamente o dispositivo. Em ambiente
 novo, o navegador deve confirmar o OAuth do proprietário. A prova final
 precisa testar `computer_launch_app` via OrdaX MCP depois de um grant
 real, e não executar o aplicativo por um segundo conector.
+
+
+## OrdaX OS Desktop Windows — ação de observação MCP (2026-10-31)
+
+O Runtime **canônico** do OrdaX Desktop, supervisionado pelo OS, permite
+somente `agent.status` e `computer.access_status` (leitura da política
+local, sem habilitá-la). O perfil `computer-observe` da Platform deve ser
+concedido por OAuth Owner ao **cliente ChatGPT exato e ao Product Device do
+Desktop**, sem emprestar grants de um agente Windows auxiliar ou notebook.
+A escolha transacional do dispositivo (`central-select`) é uma etapa
+distinta de consentimento, não um grant nem uma prova de execução.
+
+A primeira prova física em Windows demonstrou que a sessão MCP alcança
+o Runtime e recebe o erro verdadeiro `action not allowed:
+computer.access_status` na revisão que publicava apenas `agent.status`.
+Esta correção permite a leitura canônica sem ampliar terminal, arquivos,
+processos mutáveis ou GUI do Desktop e não substitui o adaptador Windows
+auxiliar. A conclusão só existe com uma chamada MCP que retorne
+`ok=true` e recibo de ação executada no dispositivo; publicação da
+ferramenta, CI, presença, `pending`, `queued` ou atestação isolada não
+comprovam E2E. A issue de implementação e evidência física continua
+[ordax-os#1985](https://github.com/ordaxsystems/ordax-os/issues/1985).

@@ -18,9 +18,10 @@ from .config import AgentConfig
 from .main import run
 
 # Positive, minimal read-only authority during Desktop's first integration.
-# Additional OS actions must arrive through verified OS Native adapters;
-# do not delegate unscoped Windows filesystem, terminal, or computer control.
-DESKTOP_OS_ACTIONS = frozenset({"agent.status"})
+# computer.access_status reads the local policy only; it does NOT enable it.
+# Additional OS actions require verified Native adapters; no unscoped Windows
+# filesystem, terminal, GUI control or host adapter is delegated.
+DESKTOP_OS_ACTIONS = frozenset({"agent.status", "computer.access_status"})
 
 
 def main() -> int:

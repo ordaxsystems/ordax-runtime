@@ -34,10 +34,14 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
             product_mcp_url="https://mcp.ordax.com.br", projects={},
         )
 
-    def test_only_explicit_os_status_capability_is_advertised(self):
+    def test_only_explicit_os_readonly_capabilities_are_advertised(self):
         registry = ActionRegistry(self.config, computer_adapter={},
                                   allowed_action_names=DESKTOP_OS_ACTIONS)
-        self.assertEqual(registry.names, ["agent.status"])
+        self.assertEqual(registry.names, ["agent.status", "computer.access_status"])
+        policy = registry.execute("computer.access_status", {})
+        self.assertTrue(policy.ok)
+        self.assertFalse(policy.data["full_access"])
+        self.assertFalse(registry.execute("computer.access_status", {"enabled": True}).ok)
         for forbidden in (
             "terminal.exec", "computer.terminal_exec", "computer.text_read",
             "computer.click", "computer.windows", "workspace.text_read",
@@ -89,7 +93,7 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         self.assertEqual(args[0].agent_name, "OrdaX Desktop")
         self.assertEqual(args[0].workspace_root, self.root / "Files")
         self.assertEqual(kwargs, {"computer_adapter": {},
-                                  "allowed_action_names": frozenset({"agent.status"}),
+                                  "allowed_action_names": frozenset({"agent.status", "computer.access_status"}),
                                   "status_port": 0})
 
     def test_windows_auxiliary_device_path_cannot_be_reused(self):

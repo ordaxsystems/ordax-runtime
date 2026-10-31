@@ -74,7 +74,7 @@ def main() -> None:
                    APPDATA=str(isolated / "roaming"), PYTHONNOUSERSITE="1")
         proof = json.loads(run(str(executable), "--self-test", cwd=isolated, env=env, timeout=90))
         if (proof.get("ok") is not True or proof.get("profile") != "ordax-desktop"
-                or proof.get("actions") != ["agent.status"]
+                or proof.get("actions") != ["agent.status", "computer.access_status"]
                 or proof.get("network_used") is not False
                 or proof.get("device_credential_used") is not False
                 or proof.get("remote_action_proven") is not False):

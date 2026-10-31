@@ -25,7 +25,7 @@ def self_test() -> dict:
         root = Path(temporary)
         state = root / "native-state" / "product-runtime"
         state.mkdir(parents=True)
-        with (patch.dict(os.environ, {}, clear=True),
+        with (patch.dict(os.environ, {"USERPROFILE": str(root), "HOME": str(root)}, clear=True),
               patch.object(socket.socket, "connect", side_effect=RuntimeError("offline probe")),
               patch.object(socket.socket, "connect_ex", side_effect=RuntimeError("offline probe"))):
             config = AgentConfig(agent_name="OrdaX Desktop", poll_seconds=60,
@@ -34,11 +34,16 @@ def self_test() -> dict:
                                  workspace_root=root / "Files", projects={})
             registry = ActionRegistry(config, computer_adapter={},
                                       allowed_action_names=DESKTOP_OS_ACTIONS)
-            if registry.names != ["agent.status"]:
+            if registry.names != ["agent.status", "computer.access_status"]:
                 raise RuntimeError("Desktop capability boundary changed")
             result = registry.execute("agent.status", {})
-            if not result.ok or result.data["actions"] != ["agent.status"]:
+            if not result.ok or result.data["actions"] != ["agent.status", "computer.access_status"]:
                 raise RuntimeError("Packaged canonical agent.status failed")
+            policy = registry.execute("computer.access_status", {})
+            if not policy.ok or policy.data.get("full_access") is True:
+                raise RuntimeError("Packaged read-only Desktop policy status failed")
+            if registry.execute("computer.access_status", {"enabled": True}).ok:
+                raise RuntimeError("Desktop policy status accepted mutation fields")
             for action in ("terminal.exec", "computer.click", "workspace.text_read",
                            "workspace.text_write", "process.start", "git.command"):
                 if registry.execute(action, {}).ok:
@@ -50,7 +55,7 @@ def self_test() -> dict:
             if not ProductDeviceControlPlane or not ProductCentralSessionClient:
                 raise RuntimeError("Canonical Product transport missing")
     return {"schema": "ordax.desktop-runtime-offline-proof/1", "ok": True,
-            "profile": "ordax-desktop", "actions": ["agent.status"],
+            "profile": "ordax-desktop", "actions": ["agent.status", "computer.access_status"],
             "network_used": False, "device_credential_used": False,
             "remote_action_proven": False, "runtime_version": runtime_package_version()}
 
