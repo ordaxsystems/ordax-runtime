@@ -33,7 +33,12 @@ O comando `ordax-owner-device-connect --connect` reconhece o perfil de host
 exato, rejeita qualquer estado fora dessa raiz, usa um `home` privado
 para impedir importacao automatica de projetos do Windows e registra o
 nome `OrdaX Desktop (<nome-do-computador>)`. O navegador exige a aprovacao
-Owner explicita, sem credenciais no argv. Falta
+Owner explicita, sem credenciais no argv. O cadastro usa o seletor de
+entrada ja canonico do mesmo Worker PostgreSQL: se e somente se a conexao
+TCP/DNS falhar antes de enviar a requisicao para `mcp.ordax.com.br`,
+pode tentar `ordax-mcp.ordaxsystems.workers.dev`. Nenhum HTTP 401/403/5xx,
+ReadTimeout ou confirmacao ambigua autoriza repeticao do POST de enrollment.
+Falta
 credencial, existe link de pasta, ou IDs/transport divergem? Falha
 fechada sem publicar uma falsa disponibilidade MCP.
 

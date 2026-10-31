@@ -44,7 +44,7 @@ class TrustedProductIngress:
 
     @staticmethod
     def _allowed(path: str) -> bool:
-        if path == _SESSION_PATH:
+        if path in {_SESSION_PATH, "/v3/device/setup"}:
             return True
         prefix = "/v3/device/transport/"
         return path.startswith(prefix) and path[len(prefix):] in _TRANSPORT_OPS
