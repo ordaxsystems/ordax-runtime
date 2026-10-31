@@ -25,7 +25,7 @@ def self_test() -> dict:
         root = Path(temporary)
         state = root / "native-state" / "product-runtime"
         state.mkdir(parents=True)
-        with (patch.dict(os.environ, {}, clear=True),
+        with (patch.dict(os.environ, {"USERPROFILE": str(root), "HOME": str(root)}, clear=True),
               patch.object(socket.socket, "connect", side_effect=RuntimeError("offline probe")),
               patch.object(socket.socket, "connect_ex", side_effect=RuntimeError("offline probe"))):
             config = AgentConfig(agent_name="OrdaX Desktop", poll_seconds=60,
