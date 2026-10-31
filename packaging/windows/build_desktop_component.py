@@ -27,7 +27,11 @@ def main() -> None:
         raise RuntimeError("Exact Runtime source required")
     if run("git", "status", "--porcelain", "--untracked-files=no"):
         raise RuntimeError("Tracked Runtime source must be clean")
-    if os.environ.get("GITHUB_SHA", source) != source:
+    expected_source = os.environ.get("GITHUB_SHA", source)
+    if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+        event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+        expected_source = event["pull_request"]["head"]["sha"]
+    if expected_source != source:
         raise RuntimeError("CI source binding mismatch")
     output = ROOT / "dist" / "desktop-component"
     output.mkdir(parents=True, exist_ok=True)
@@ -90,6 +94,7 @@ def main() -> None:
                 "profile": "ordax-desktop", "platform": "windows-amd64",
                 "artifact": binary.name, "sha256": digest, "size_bytes": binary.stat().st_size,
                 "runtime_version": proof["runtime_version"],
+                "build_python_version": sys.version.split()[0],
                 "python_required_on_device": False, "studio_required": False,
                 "offline_proof_verified": True, "device_execution_proven": False,
                 "signature_present": False, "signed_distribution_authorized": False,
