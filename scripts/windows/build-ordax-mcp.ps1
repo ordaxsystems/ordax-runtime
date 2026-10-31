@@ -69,6 +69,8 @@ $privatePython = Join-Path $runtime "python.exe"
 if ($LASTEXITCODE -ne 0) { throw "Private Runtime package capability gate failed" }
 & $privatePython -m ordax_dev_agent.owner_grants_cli --help | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Owner OAuth CLI missing" }
+& $privatePython -m ordax_dev_agent.owner_device_connect_cli --help | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Owner device enrollment CLI missing" }
 & $privatePython -c "import importlib.metadata as m; assert m.version('ordax-runtime') == '$packageVersion'"
 if ($LASTEXITCODE -ne 0) { throw "Private Runtime version mismatch" }
 # Reuse the ONE official native Runtime launcher source and OS mutex.
