@@ -15,7 +15,10 @@ and executes an isolated copy with no Python or checkout on PATH. The
 This proves local packaging, not a remote MCP session or device grant.
 
 `candidate.json`, `self-test.json` and `SHA256SUMS` bind proof to exact source
-and executable bytes. These are unsigned CI evidence, never a trusted slot
+and executable bytes. `product-runtime.zip` and `runtime-component-release.json`
+use the OS component-channel v1 format, with one Windows executable and pending
+health required. They contain no signature or signing key.
+These are unsigned CI evidence, never a trusted slot
 receipt. The OS owns component signing, trust and activation. Promotion still
 requires the official external custody ceremony, public trust promotion,
 signed Windows component verification and separate runtime health proof.

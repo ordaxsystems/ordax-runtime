@@ -89,6 +89,8 @@ def main() -> None:
             if result.returncode == 0 or expected not in result.stderr:
                 raise RuntimeError("Unenrolled or foreign-profile launch did not fail closed")
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    from desktop_package import package
+    release = package(binary, source, proof["runtime_version"])
     manifest = {"schema": "ordax.desktop-runtime-candidate/1",
                 "source_repository": "ordaxsystems/ordax-runtime", "source_commit": source,
                 "profile": "ordax-desktop", "platform": "windows-amd64",
@@ -102,6 +104,7 @@ def main() -> None:
                 "stable_activation_authorized": False,
                 "recipe_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "requirements_sha256": hashlib.sha256((ROOT / "packaging/windows/desktop-requirements.lock").read_bytes()).hexdigest()}
+    manifest["component_package"] = release["package"]
     (output / "self-test.json").write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
     (output / "candidate.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     (output / "SHA256SUMS").write_text(f"{digest}  {binary.name}\n", encoding="ascii")
