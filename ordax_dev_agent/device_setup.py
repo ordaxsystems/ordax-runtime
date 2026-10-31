@@ -17,6 +17,7 @@ import httpx
 from .config import DEFAULT_PRODUCT_MCP_URL
 from .device_credentials import resolve_pending_token_path, resolve_token_path
 from .identity import machine_id
+from .product_ingress import TrustedProductIngress
 
 
 class SetupError(RuntimeError):
@@ -147,9 +148,18 @@ def migrate_legacy_bridge_path(settings: dict, *, state: Path, home: Path) -> bo
     return True
 
 
-def request(client, endpoint: str, body: dict, headers: dict) -> dict:
+def request(
+    client, endpoint: str, body: dict, headers: dict,
+    *, ingress: TrustedProductIngress | None = None,
+) -> dict:
     try:
-        response = client.post(endpoint, json=body, headers=headers)
+        if ingress is None:
+            response = client.post(endpoint, json=body, headers=headers)
+        else:
+            # Only a preconnect failure may use the same-Worker restricted
+            # ingress. Lost response or HTTP errors never repeat enrollment.
+            response = ingress.request("/v3/device/setup",
+                lambda url: client.post(url, json=body, headers=headers))
         if response.status_code in (401, 403):
             return {"ok": False, "denied": response.status_code}
         if response.status_code >= 400:
@@ -251,6 +261,7 @@ def _configure(
     product_access_token: str | None = None,
     device_kind: str | None = None,
     channel: str | None = None,
+    device_name: str | None = None,
 ) -> dict:
     settings_path = state / "agent-settings.json"
     settings = load_settings(settings_path)
@@ -258,6 +269,7 @@ def _configure(
         product_mcp_url,
         allow_loopback_http=True,
     )
+    ingress = TrustedProductIngress(product_mcp)
     binding = binding or machine_id()
     token = resolve_token_path(state)
     pending = resolve_pending_token_path(state)
@@ -274,6 +286,10 @@ def _configure(
         raise SetupError("DEVICE_KIND_INVALID")
     if resolved_channel not in {"stable", "development"}:
         raise SetupError("PRODUCT_CHANNEL_INVALID")
+    selected_name = socket.gethostname() if device_name is None else device_name
+    if (type(selected_name) is not str or selected_name != selected_name.strip()
+            or not 1 <= len(selected_name) <= 80):
+        raise SetupError("DEVICE_NAME_INVALID")
 
     try:
         identity = None
@@ -288,6 +304,7 @@ def _configure(
                 endpoint,
                 {"operation": "identify", "machine_binding_sha256": binding},
                 {"X-Ordax-Device-Token": secret},
+                ingress=ingress,
             )
             if identity.get("ok"):
                 if candidate == pending:
@@ -316,12 +333,13 @@ def _configure(
                 {
                     "operation": "enroll",
                     "machine_binding_sha256": binding,
-                    "device_name": socket.gethostname(),
+                    "device_name": selected_name,
                     "device_kind": resolved_device_kind,
                     "channel": resolved_channel,
                     "token_sha256": hashlib.sha256(secret.encode()).hexdigest(),
                 },
                 {"Authorization": "Bearer " + credential},
+                ingress=ingress,
             )
             if not identity.get("ok"):
                 raise SetupError("USER_AUTHORIZATION_REQUIRED")

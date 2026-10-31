@@ -71,6 +71,8 @@ if ($LASTEXITCODE -ne 0) { throw "Private Runtime package capability gate failed
 if ($LASTEXITCODE -ne 0) { throw "Owner OAuth CLI missing" }
 & $privatePython -m ordax_dev_agent.owner_device_connect_cli --help | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Owner device enrollment CLI missing" }
+& $privatePython -c "from ordax_dev_agent.desktop_host_main import DESKTOP_OS_ACTIONS; assert DESKTOP_OS_ACTIONS == frozenset({'agent.status'})"
+if ($LASTEXITCODE -ne 0) { throw "OrdaX Desktop host action scope missing from canonical runtime package" }
 & $privatePython -c "import importlib.metadata as m; assert m.version('ordax-runtime') == '$packageVersion'"
 if ($LASTEXITCODE -ne 0) { throw "Private Runtime version mismatch" }
 # Reuse the ONE official native Runtime launcher source and OS mutex.

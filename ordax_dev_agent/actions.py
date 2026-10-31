@@ -172,6 +172,7 @@ class ActionRegistry(
     def __init__(
         self, config: AgentConfig, *,
         computer_adapter: Mapping[str, Action] | None = None,
+        allowed_action_names: frozenset[str] | None = None,
     ):
         if computer_adapter is not None:
             if not isinstance(computer_adapter, Mapping):
@@ -496,6 +497,17 @@ class ActionRegistry(
                 self._actions[f"{name}.{operation}"] = (
                     lambda payload, fn=handler: fn(self._project(payload), payload))
             self._adapter_contracts[name] = external_adapter_contract(name)
+        # The Desktop-hosted OrdaX OS is a distinct Product Device context,
+        # not an implicit Windows host administrator. A trusted host passes
+        # the exact allowed actions, never an allowlist from remote requests.
+        if allowed_action_names is not None:
+            if (type(allowed_action_names) is not frozenset
+                    or not allowed_action_names
+                    or any(type(action) is not str for action in allowed_action_names)
+                    or not allowed_action_names.issubset(self._actions)):
+                raise ValueError("Invalid trusted host action boundary")
+            self._actions = {name: action for name, action in self._actions.items()
+                             if name in allowed_action_names}
 
     @property
     def names(self) -> list[str]:

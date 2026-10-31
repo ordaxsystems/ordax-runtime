@@ -423,6 +423,12 @@ def _upload_result_artifacts(
 
 
 def main() -> int:
+    host_profile = os.environ.get("ORDAX_RUNTIME_HOST_PROFILE")
+    if host_profile is not None:
+        if host_profile != "ordax-desktop":
+            raise RuntimeError("Unknown Product Runtime host profile")
+        from .desktop_host_main import main as desktop_main
+        return desktop_main()
     _startup_log(None, f"MAIN_ENTER pid={os.getpid()} version={__version__}")
     return run(AgentConfig.from_env())
 
@@ -471,6 +477,7 @@ def run(
     *,
     device_credential_provider: Callable[[], dict[str, str] | None] | None = None,
     computer_adapter: Mapping | None = None,
+    allowed_action_names: frozenset[str] | None = None,
     status_port: int = 8765,
     orchestrator_installation_provider: Callable | None = None,
     native_access_enabled: Callable[[], bool] | None = None,
@@ -565,7 +572,8 @@ def run(
 
     from .actions import ActionRegistry
     _startup_log(config, "ACTION_REGISTRY_IMPORT_OK")
-    registry = ActionRegistry(config, computer_adapter=computer_adapter)
+    registry = ActionRegistry(config, computer_adapter=computer_adapter,
+                              allowed_action_names=allowed_action_names)
     # Host composition owns App installation provenance; never advertise a
     # capability that this host cannot connect to an installed App.
     host_actions = sorted({*registry.names, *({"orchestrator.app_read"}

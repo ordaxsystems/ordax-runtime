@@ -17,6 +17,49 @@ de capacidades e o CLI de autorizacao Owner. Nao empacota Electron,
 `presentation` ou source `ordax-apps`. O processo visivel ao sistema
 continua `ORDAX Runtime.exe`; o produto apresentado e `OrdaX MCP`.
 
+## Perfil de host do OrdaX Desktop (fonte, sem ativacao)
+
+O Desktop Windows do OrdaX OS e um host do **mesmo produto OrdaX**,
+nao o agente de controle do Windows. A entrada assinada/pacote canonico do
+Runtime aceita um perfil **explicito** por ambiente:
+
+- `ORDAX_RUNTIME_HOST_PROFILE=ordax-desktop`;
+- `ORDAX_DESKTOP_USER_DATA` = userData privado do Electron OrdaX;
+- `ORDAX_AGENT_STATE_DIR` = `<userData>/native-state/product-runtime`.
+
+A inscricao **Owner OAuth** deve ser concluida nessa pasta, com ID
+de dispositivo e token distintos dos do agente auxiliar do Windows.
+O comando `ordax-owner-device-connect --connect` reconhece o perfil de host
+exato, rejeita qualquer estado fora dessa raiz, usa um `home` privado
+para impedir importacao automatica de projetos do Windows e registra o
+nome `OrdaX Desktop (<nome-do-computador>)`. O navegador exige a aprovacao
+Owner explicita, sem credenciais no argv. O cadastro usa o seletor de
+entrada ja canonico do mesmo Worker PostgreSQL: se e somente se a conexao
+TCP/DNS falhar antes de enviar a requisicao para `mcp.ordax.com.br`,
+pode tentar `ordax-mcp.ordaxsystems.workers.dev`. Nenhum HTTP 401/403/5xx,
+ReadTimeout ou confirmacao ambigua autoriza repeticao do POST de enrollment.
+Falta
+credencial, existe link de pasta, ou IDs/transport divergem? Falha
+fechada sem publicar uma falsa disponibilidade MCP.
+
+Essa composicao usa o mesmo `ordax_dev_agent.main.run`, nao um segundo
+dispatcher, mas o seu `ActionRegistry` declara somente
+`agent.status` na primeira fatia: nao expor Win32, terminal, browser,
+workspace ou controle de arquivos Windows por causa do nome "OrdaX OS".
+Se a Surface apresentar presença, ela nao pode transformar isso em
+`capability_digest`, grant ou acao autorizada. Novas capacidades devem
+vir dos adaptadores Native do OS, com comprovacao da fronteira de Space.
+
+A invocacao canônica deve ser feita **somente** pelo Supervisor de
+`ordax-os` a partir de um pacote verificado. Esta fonte não instala
+o Runtime no Electron, não cria credenciais automaticamente e não faz
+prova de execução MCP no OrdaX Desktop. Enquanto a custódia/trust do
+runtime component não estiver pronta, a ativação permanece bloqueada.
+O launcher Windows mantém `Local\\ORDAXRuntime` como mutex de instância
+unica: não assumir que uma identidade Windows auxiliar e uma identidade
+Desktop podem executar simultaneamente sem contrato de coexistência
+ou handoff atestado. Na execução final, o OS é o dono do lifecycle.
+
 ## Estado real — candidato de validacao, nao instalador publico
 
 `scripts/windows/build-ordax-mcp.ps1` consome exclusivamente o Runtime

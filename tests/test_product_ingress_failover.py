@@ -110,6 +110,8 @@ class TrustedProductIngressTests(unittest.TestCase):
         control = ProductDeviceControlPlane.__new__(ProductDeviceControlPlane)
         control.base_http_url = PRIMARY
         control._trusted_ingress = TrustedProductIngress(PRIMARY)
+        # __new__ skips constructor; reproduce the Windows credential mode.
+        control._native_credential_provider = None
         with httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False) as client:
             control.http = client
             response = control._post("lease", {"execution_epoch": 1})
@@ -126,6 +128,8 @@ class TrustedProductIngressTests(unittest.TestCase):
         control = ProductDeviceControlPlane.__new__(ProductDeviceControlPlane)
         control.base_http_url = PRIMARY
         control._trusted_ingress = TrustedProductIngress(PRIMARY)
+        # __new__ skips constructor; reproduce the Windows credential mode.
+        control._native_credential_provider = None
         with httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False) as client:
             control.http = client
             with self.assertRaises(TransientDeliveryError):
