@@ -52,7 +52,7 @@ class DesktopComponentPackageTests(unittest.TestCase):
     def test_offline_probe_uses_only_canonical_status_and_never_claims_remote_execution(self):
         proof = component.self_test()
         self.assertTrue(proof["ok"])
-        self.assertEqual(proof["actions"], ["agent.status"])
+        self.assertEqual(proof["actions"], ["agent.status", "computer.access_status"])
         self.assertFalse(proof["remote_action_proven"])
         self.assertFalse(proof["network_used"])
         self.assertFalse(proof["device_credential_used"])
