@@ -44,6 +44,52 @@ class ProductCentralSessionClientTests(unittest.TestCase):
         self.assertIsNone(status.last_error)
         self.assertEqual(calls, [("GET", "/v3/product/device/central-session")])
 
+    def test_central_device_token_never_follows_redirects_with_injected_client(self):
+        # The injected HTTP client may enable redirects globally. Both signed
+        # device calls MUST override that option per request.
+        for redirected_method in ("GET", "POST"):
+            with self.subTest(method=redirected_method):
+                requests = []
+                token = "a" * 64
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    requests.append((request.method, request.url.host,
+                                     request.headers.get("X-Ordax-Device-Token")))
+                    if request.url.host != "mcp.ordax.com.br":
+                        return httpx.Response(200, json={"ok": True})
+                    if request.method == "GET" and redirected_method == "POST":
+                        return httpx.Response(200, json={
+                            "ok": True, "pending": True,
+                            "challenge_id": CHALLENGE_ID,
+                        })
+                    return httpx.Response(
+                        307,
+                        headers={"Location": "https://attacker.example/steal-device-token"},
+                        json={"ok": False, "error": "redirect_not_authorized"},
+                    )
+
+                client_http = httpx.Client(
+                    transport=httpx.MockTransport(handler),
+                    follow_redirects=True,
+                )
+                self.addCleanup(client_http.close)
+                client = ProductCentralSessionClient(
+                    "https://mcp.ordax.com.br",
+                    DEVICE_ID,
+                    lambda: token,
+                    http=client_http,
+                )
+                status = client.tick(now=10.0)
+                self.assertFalse(status.confirmed)
+                self.assertEqual(status.last_error, "product_central_session_unavailable")
+                self.assertEqual(
+                    requests,
+                    [("GET", "mcp.ordax.com.br", token)]
+                    + ([("POST", "mcp.ordax.com.br", token)]
+                       if redirected_method == "POST" else []),
+                    "No redirected HTTP request may carry the Product Device token",
+                )
+
     def test_pending_challenge_is_confirmed_for_exact_device(self):
         token = ["a" * 64]
         calls: list[tuple[str, dict | None]] = []

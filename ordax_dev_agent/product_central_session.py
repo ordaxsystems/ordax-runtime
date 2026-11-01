@@ -141,7 +141,9 @@ class ProductCentralSessionClient:
             credential = self._credential(self._credential_provider())
             polled = self._trusted_ingress.request(
                 "/v3/product/device/central-session",
-                lambda url: self._http.get(url, headers=self._headers(credential)),
+                lambda url: self._http.get(
+                    url, headers=self._headers(credential), follow_redirects=False,
+                ),
             )
             if polled.status_code == 401:
                 raise RuntimeError("product_identity_reenrollment_required")
@@ -170,6 +172,7 @@ class ProductCentralSessionClient:
                         "Content-Type": "application/json",
                     },
                     json={"challenge_id": challenge_id},
+                    follow_redirects=False,
                 ),
             )
             if confirmed.status_code == 401:

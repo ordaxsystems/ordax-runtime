@@ -79,3 +79,20 @@ Product transport/session/outbox suites.
 - Verify end-to-end ChatGPT MCP discovery/attestation through the public
   hostname independently; the alternate device ingress does not solve public
   MCP network availability.
+
+## Device credential isolation against HTTP redirects (01/11/2026)
+
+`ProductCentralSessionClient` sends the existing canonical Device token only
+to Product Central session poll/confirm. Although the Runtime-owned default
+`httpx.Client` already disables redirects, the class accepts an injected
+HTTP client. It now **explicitly sets `follow_redirects=False` per GET and
+POST request**, independently of the injected client's default. A redirect
+response is treated as a denied/unavailable authority reply; it is never
+followed with `X-Ordax-Device-Token`, never grants a session and never
+triggers replay to an untrusted origin. The existing ingress policy for
+connect-stage fallback to the **same** Worker is unchanged.
+
+Regression tests use `httpx.MockTransport` with a globally redirect-following
+client and cross-origin `307` replies for both poll and confirmation. They
+prove that no request reaches the foreign host. This does not require
+additional jobs, a new transport, a second identity or physical access.
