@@ -91,6 +91,25 @@ fisico, nem autoriza release publico antes de assinatura e gates E2E. O aplicati
 precisa de `npx` ou Node.js no Windows. A conexao remota requer
 autenticacao Owner, vinculacao do dispositivo e grants explicitos.
 
+## Proveniencia do Python privado — SSOT Windows
+
+Os dois empacotadores em `ordax-runtime` usam exclusivamente
+`packaging/windows/embedded-python.lock.json` e o verificador
+`scripts/windows/get-locked-embedded-python.ps1`. O lock fixa versao,
+arquitetura, nome, URL HTTPS oficial e SHA-256 do arquivo
+`python-3.12.10-embeddable-amd64.zip`, conforme o manifesto publico do
+Python.org `windows-3.12.10.json`. Arquivos presentes em cache sao
+verificados novamente **antes** de qualquer extracao. Cache adulterado ou
+lock divergente bloqueia o build, sem redownload silencioso nem origem
+alternativa. Arquivo ausente e baixado para nome temporario, validado e
+entao movido ao cache.
+
+A CI executa verificacao negativa offline com ZIP de cache adulterado e
+prova a construcao do candidato MCP. Essa prova de integridade da base
+Python **nao** equivale a reproducibilidade total das dependencias Python,
+assinatura Authenticode, consentimento Owner real ou release publico.
+Essas etapas permanecem com suas autoridades e gates proprios.
+
 ## Coexistencia e migracao com instalacoes Studio existentes
 
 O instalador Studio historico usa a raiz
