@@ -45,6 +45,18 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ORDAX_INSTALLER_COMPLETION_CONTRACT=PASS", result.stdout)
 
+    def test_windows_journal_replacement_is_atomic_and_non_replayable(self) -> None:
+        # Execute only the extracted canonical journal writer in isolated
+        # temporary storage; neither a real installer nor Owner state is used.
+        script = ROOT / "scripts" / "windows" / "test-updater-journal-atomicity.ps1"
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            capture_output=True, text=True, timeout=40, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("ORDAX_UPDATE_DURABLE_JOURNAL_CONTRACT=PASS", result.stdout)
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
