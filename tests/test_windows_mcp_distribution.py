@@ -61,6 +61,30 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertNotIn("Register-ScheduledTask", installer)
         self.assertNotIn("DeleteFile", installer)
 
+    def test_normal_wizard_offers_explicit_connect_but_silent_install_never_opens_oauth(self):
+        installer = INNO.read_text(encoding="utf-8")
+        run_section = installer.split("[Run]", 1)[1].split("[Code]", 1)[0]
+        entries = [
+            line for line in run_section.splitlines()
+            if line.strip().startswith('Filename: ')
+        ]
+        self.assertEqual(len(entries), 2, "One Runtime + one optional Owner GUI only")
+        self.assertIn('Filename: "{app}\\{#RuntimeExe}"', entries[0])
+        self.assertIn('Flags: nowait runhidden', entries[0])
+        connect = entries[1]
+        self.assertIn('Filename: "{app}\\runtime\\pythonw.exe"', connect)
+        self.assertIn('Parameters: "-m ordax_dev_agent.owner_device_connect_gui"', connect)
+        self.assertIn('Description: "Conectar este computador ao OrdaX MCP"', connect)
+        for flag in ("postinstall", "nowait", "skipifsilent"):
+            self.assertRegex(connect, r"\\b" + flag + r"\\b")
+        self.assertNotIn("runhidden", connect)
+        self.assertNotIn("shellexec", connect)
+        self.assertNotIn("Unchecked", connect)
+        # No standalone OAuth token injection, grant creation or duplicate
+        # agent is performed directly by the Inno installer itself.
+        self.assertNotIn("product_access_token", run_section)
+        self.assertNotIn("owner_grants_cli", run_section)
+
     def test_candidate_build_proof_is_real_windows_and_never_public_release(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("  pull_request:", workflow)
