@@ -72,13 +72,39 @@ function Assert-TransactionHandoff {
 
 function Write-TransactionPhase {
     param([string]$Phase, [string]$Detail = '')
+    # An interrupted write must leave either the old complete journal or the
+    # new complete journal. Never delete/move the destination as a separate
+    # step: another bootstrap must not interpret a missing phase as authority.
     if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
-        throw "Update transaction journal is missing"
+        throw 'Update transaction journal is missing'
+    }
+    $journalInfo = Get-Item -LiteralPath $journalPath -Force -ErrorAction Stop
+    if (($journalInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $journalInfo.Length -gt 65536) {
+        throw 'Update transaction journal is unsafe'
     }
     $journal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($journal.schema -ne 'ordax.windows-update-transaction/1') {
-        throw "Update transaction schema is invalid"
+    if ($journal.schema -cne 'ordax.windows-update-transaction/1' -or
+        $journal.authority -cne 'local-privileged-updater' -or
+        [string]$journal.transactionId -cne (Split-Path -Path $transactionRootPath -Leaf)) {
+        throw 'Update transaction identity is invalid'
     }
+
+    # These are the only permitted transitions of the existing single-use
+    # transaction. No terminal phase can be reopened after a reboot or replay.
+    $nextPhases = @{
+        'handoff-launching' = @('bootstrap-verifying', 'blocked')
+        'bootstrap-verifying' = @('bootstrap-verified', 'blocked')
+        'bootstrap-verified' = @('installing-target', 'blocked')
+        'installing-target' = @('committed', 'rolling-back', 'recovery-required')
+        'rolling-back' = @('rolled-back', 'recovery-required')
+    }
+    $previousPhase = [string]$journal.phase
+    if (-not $nextPhases.ContainsKey($previousPhase) -or
+        $Phase -cnotin $nextPhases[$previousPhase]) {
+        throw 'Update transaction phase transition is invalid'
+    }
+
     $journal.phase = $Phase
     $journal | Add-Member -NotePropertyName updatedAtUtc -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force
     if ($Detail) {
@@ -87,9 +113,38 @@ function Write-TransactionPhase {
     } else {
         $journal.PSObject.Properties.Remove('detail')
     }
-    $pending = "$journalPath.next"
-    [IO.File]::WriteAllText($pending, ($journal | ConvertTo-Json -Depth 10 -Compress), [Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $pending -Destination $journalPath -Force
+
+    $payload = [Text.UTF8Encoding]::new($false, $true).GetBytes(
+        ($journal | ConvertTo-Json -Depth 10 -Compress)
+    )
+    if ($payload.Length -gt 65536) {
+        throw 'Update transaction journal exceeds its size bound'
+    }
+    # A fresh, same-directory temporary file prevents a stale .next or
+    # pre-existing reparse point from substituting unverified journal bytes.
+    $pending = Join-Path $transactionRootPath (
+        'transaction.' + [guid]::NewGuid().ToString('N') + '.next'
+    )
+    try {
+        $handle = [IO.FileStream]::new(
+            $pending, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+            [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough
+        )
+        try {
+            $handle.Write($payload, 0, $payload.Length)
+            $handle.Flush($true)
+        } finally {
+            $handle.Dispose()
+        }
+        # File.Replace is atomic on the same Windows volume and retains a
+        # complete journal on either side of the transition; no backup copy
+        # with owner's state is created or published to CI.
+        [IO.File]::Replace($pending, $journalPath, $null)
+    } finally {
+        if (Test-Path -LiteralPath $pending) {
+            Remove-Item -LiteralPath $pending -Force
+        }
+    }
 }
 
 function Get-Sha256 {
