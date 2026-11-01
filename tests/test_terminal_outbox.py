@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 from pathlib import Path
 
 from ordax_dev_agent.terminal_outbox import TerminalOutbox
@@ -62,6 +66,55 @@ class TerminalOutboxTests(unittest.TestCase):
                 outbox.persist(report(summary="different"))
 
             self.assertEqual(outbox.pending(), [(first_path, first)])
+
+    def test_two_writers_never_overwrite_a_terminal_result(self) -> None:
+        # Force both writers past the absent-target check before publishing.
+        # A concurrent divergent receipt must not replace the winner; two
+        # identical receipts should remain idempotent.
+        for summaries, divergent in (
+            (("same", "same"), False),
+            (("first", "second"), True),
+        ):
+            with self.subTest(divergent=divergent), tempfile.TemporaryDirectory() as raw:
+                state = Path(raw)
+                outbox = TerminalOutbox(state, "cloudflare-v3", DEVICE_ID)
+                candidates = [report(summary=value) for value in summaries]
+                barrier = threading.Barrier(2, timeout=10)
+                real_link = os.link
+
+                def link_at_same_time(source, destination):
+                    barrier.wait()
+                    return real_link(source, destination)
+
+                def write(candidate):
+                    return TerminalOutbox(state, "cloudflare-v3", DEVICE_ID).persist(candidate)
+
+                with mock.patch(
+                    "ordax_dev_agent.terminal_outbox.os.link",
+                    side_effect=link_at_same_time,
+                ):
+                    with ThreadPoolExecutor(max_workers=2) as workers:
+                        futures = [workers.submit(write, item) for item in candidates]
+                        accepted = []
+                        conflicts = []
+                        for item, future in zip(candidates, futures):
+                            try:
+                                accepted.append((item, future.result(timeout=15)))
+                            except RuntimeError as exc:
+                                conflicts.append(str(exc))
+
+                self.assertEqual(len(accepted), 1 if divergent else 2)
+                self.assertEqual(len(conflicts), 1 if divergent else 0)
+                if conflicts:
+                    self.assertIn("outbox conflict", conflicts[0])
+                entries = outbox.pending()
+                self.assertEqual(len(entries), 1)
+                self.assertEqual(entries[0][1], accepted[0][0])
+                self.assertEqual(
+                    {file.name for file in entries[0][0].parent.iterdir()},
+                    {f"{JOB_ID}.json"},
+                    "no losing or orphaned temporary receipt may remain",
+                )
 
     def test_malformed_entry_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
