@@ -50,7 +50,7 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
     def test_presence_heartbeat_is_independent_of_idle_claim_budget(self):
         # Default Product wake is off; the long idle claim wait must not
         # suppress the independently scheduled 20-second heartbeat.
-         self.assertEqual(product_idle_wait_seconds(
+        self.assertEqual(product_idle_wait_seconds(
             now=100.0, next_claim_due=160.0, next_heartbeat=120.0,
         ), 20.0)
         # After the heartbeat at 120, the next SQL claim is still due at 160.
