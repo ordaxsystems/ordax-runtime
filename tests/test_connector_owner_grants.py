@@ -62,13 +62,19 @@ class OwnerMcpClientSelectionTests(unittest.TestCase):
             require_owner_mcp_device_identity(authority(), device_id=DEVICE),
             DEVICE,
         )
+        # UUID case normalization must not manufacture an identity mismatch.
+        self.assertEqual(
+            require_owner_mcp_device_identity(
+                authority(device=DEVICE.upper()), device_id=DEVICE,
+            ),
+            DEVICE,
+        )
         for response, requested in (
             (authority(device=OTHER_DEVICE), DEVICE),
             (authority(), OTHER_DEVICE),
             ({}, DEVICE),
             (None, DEVICE),
             ({"device_id": "not-a-uuid"}, DEVICE),
-            ({"device_id": DEVICE.upper()}, DEVICE),
         ):
             with self.subTest(response=response, requested=requested):
                 with self.assertRaises(OwnerMcpClientSelectionError) as caught:
