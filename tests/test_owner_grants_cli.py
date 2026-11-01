@@ -12,7 +12,7 @@ import httpx
 from ordax_core.owner_oauth import (
     OwnerOAuthError, browser_authorization_code, exchange_owner_code,
 )
-from ordax_dev_agent.owner_grants_cli import parse_args, perform, select_client, diagnose_owner_mcp_readiness, _DIAGNOSTIC_ACTIONS
+from ordax_dev_agent.owner_grants_cli import parse_args, perform, diagnose_owner_mcp_readiness, _DIAGNOSTIC_ACTIONS
 from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 
 DEVICE = "24630b00-e9c0-4d93-b38a-2367048cd9d1"
@@ -136,10 +136,65 @@ class OwnerGrantsCliTests(unittest.TestCase):
                 parse_args(["authorize", "--device", DEVICE, "--profile", "computer-observe", "--days", days])
         with self.assertRaises(SystemExit):
             parse_args(["list", "--device", "../../escape"])
-        authority = {"clients": [{"client_id": CLIENT}, {"client_id": DEVICE}]}
-        with self.assertRaisesRegex(ValueError, "select an exact"):
-            select_client(authority, None)
-        self.assertEqual(select_client(authority, CLIENT), CLIENT)
+        remote = FakeOwner()
+        remote.authority["clients"] = [
+            {"client_id": CLIENT}, {"client_id": DEVICE},
+        ]
+        args = parse_args([
+            "authorize", "--device", DEVICE, "--profile", "computer-observe",
+        ])
+        with self.assertRaisesRegex(ValueError, "owner_mcp_client_ambiguous"):
+            perform(args, "token", remote)
+        self.assertEqual([call[0] for call in remote.calls], ["authority"])
+
+        selected = parse_args([
+            "authorize", "--device", DEVICE,
+            "--profile", "computer-observe", "--client", CLIENT,
+        ])
+        result = perform(selected, "token", remote)
+        self.assertTrue(result["ok"])
+        self.assertEqual(remote.calls[-1][2]["client_id"], CLIENT)
+
+    def test_owner_authority_wrong_device_blocks_every_cli_entrypoint(self):
+        # The same trusted response may not be replayed from another device,
+        # even for inventory or diagnosis, which could expose another owner's
+        # grants and guide a mistaken authorization.
+        operation_args = (
+            ["list", "--device", DEVICE],
+            ["diagnose", "--device", DEVICE],
+            ["authorize", "--device", DEVICE, "--profile", "computer-observe"],
+            ["revoke", "--device", DEVICE, "--group", DEVICE],
+            ["central-targets", "--device", DEVICE],
+            ["central-selections", "--device", DEVICE],
+            ["dev-enable", "--device", DEVICE],
+        )
+        for argv in operation_args:
+            with self.subTest(operation=argv[0]):
+                remote = FakeOwner()
+                remote.authority["device_id"] = (
+                    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+                )
+                with self.assertRaisesRegex(ValueError, "owner_mcp_device_mismatch"):
+                    perform(parse_args(argv), "token", remote, config=object())
+                self.assertEqual([call[0] for call in remote.calls], ["authority"])
+
+    def test_invalid_owner_authority_never_selects_or_grants(self):
+        for clients in (
+            [],
+            [{"client_id": "not-a-uuid"}],
+            [{"client_id": CLIENT}, {"client_id": "not-a-uuid"}],
+        ):
+            with self.subTest(clients=clients):
+                remote = FakeOwner()
+                remote.authority["clients"] = clients
+                with self.assertRaisesRegex(
+                    ValueError, "owner_mcp_no_consented_client|owner_mcp_authority_invalid",
+                ):
+                    perform(parse_args([
+                        "authorize", "--device", DEVICE,
+                        "--profile", "computer-observe",
+                    ]), "token", remote)
+                self.assertEqual([call[0] for call in remote.calls], ["authority"])
 
     def test_revocation_matches_client_and_group(self):
         remote = FakeOwner()

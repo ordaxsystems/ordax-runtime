@@ -29,6 +29,21 @@ def _uuid(value: Any) -> str | None:
     return normalized if value.lower() == normalized else None
 
 
+def require_owner_mcp_device_identity(
+    authority: Mapping[str, Any], *, device_id: str,
+) -> str:
+    """Bind a Product Owner authority response to the exact requested device.
+
+    This must also be used by read-only inventory/list commands; a response
+    for another device may not be displayed or used to choose grant targets.
+    """
+    normalized_device = _uuid(device_id)
+    if (not isinstance(authority, Mapping) or not normalized_device
+            or _uuid(authority.get("device_id")) != normalized_device):
+        raise OwnerMcpClientSelectionError("owner_mcp_device_mismatch")
+    return normalized_device
+
+
 def select_consented_owner_mcp_client(
     authority: Mapping[str, Any],
     *,
@@ -42,9 +57,7 @@ def select_consented_owner_mcp_client(
     device grants are NOT proof of which ChatGPT connection the Owner intended.
     Never infer a new grant recipient from previous profile assignments.
     """
-    normalized_device = _uuid(device_id)
-    if not normalized_device or _uuid(authority.get("device_id")) != normalized_device:
-        raise OwnerMcpClientSelectionError("owner_mcp_device_mismatch")
+    require_owner_mcp_device_identity(authority, device_id=device_id)
 
     clients = authority.get("clients")
     groups = authority.get("grant_groups")

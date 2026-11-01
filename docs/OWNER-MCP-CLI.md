@@ -93,7 +93,19 @@ não pode roubar o challenge selecionado.
 O CLI começa consultando o inventário oficial da autoridade Owner para
 validar o cliente OAuth consentido. Caso haja mais de um cliente, a seleção
 sem `--client` exato é proibida; **jamais** reutilizar os grants do cliente
-A para B. Um Notebook ainda autorizado não deve ser revogado somente para
+A para B.
+O CLI reutiliza diretamente o seletor canônico
+`ordax_connector.owner_grants.select_consented_owner_mcp_client`, sem
+segunda regra de seleção. Antes até mesmo de `list` ou `diagnose`, exige
+que a resposta `owner_remote_authority` identifique **exatamente o
+dispositivo solicitado** por `--device`; uma resposta de outro dispositivo
+gera `owner_mcp_device_mismatch` e não exibe informações, concede, revoga
+ou seleciona grants. Uma resposta com clientes OAuth inválidos, sem
+consentimento listado ou com mais de um candidato sem `--client` exato
+é rejeitada antes de qualquer mutação. O `device_id` nunca é inferido
+a partir de grants antigos, de um cliente vizinho nem de texto do modelo.
+
+ Um Notebook ainda autorizado não deve ser revogado somente para
 facilitar o uso do Desktop. A Platform escolhe por challenge e cliente,
 não pelo `device_id` dos argumentos do modelo. Sem migração aplicada e
 prova real de atestação, o comportamento esperado é falhar fechado.
