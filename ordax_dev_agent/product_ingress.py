@@ -74,6 +74,55 @@ def inspect_pinned_https_ingress(
     return result
 
 
+# Only pre-HTTP TCP/DNS failures allow a second request to the existing
+# restricted hostname. httpx.ConnectError is NOT sufficient evidence on its
+# own: it also wraps certificate verification and other TLS failures.
+_PRECONNECT_OS_CODES = frozenset({
+    errno.ECONNREFUSED, errno.ECONNRESET, errno.ENETUNREACH,
+    errno.EHOSTUNREACH, errno.ETIMEDOUT,
+    10051, 10054, 10060, 10061, 10065,  # Windows Winsock.
+})
+
+
+def _can_retry_on_restricted_ingress(
+    error: httpx.ConnectError | httpx.ConnectTimeout,
+) -> bool:
+    """Permit only demonstrated DNS/TCP failure; reject all SSL causes.
+
+    Trace nested httpx/httpcore exceptions without parsing exception messages:
+    client- or proxy-generated ConnectError with no OS cause is ambiguous and
+    must never cause a second Owner enrollment or an action delivery.
+    """
+    network_failure = isinstance(error, httpx.ConnectTimeout)
+    pending: list[BaseException] = [error]
+    seen: set[int] = set()
+    while pending:
+        # Exception cause and context form a graph, not necessarily a chain.
+        # Unusually deep or cyclic graphs are ambiguous: fail closed.
+        if len(seen) >= 32:
+            return False
+        current = pending.pop()
+        if id(current) in seen:
+            return False
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLError):
+            return False
+        if current is not error and isinstance(current, OSError):
+            if isinstance(current, (
+                socket.gaierror, ConnectionRefusedError,
+                ConnectionResetError, ConnectionAbortedError, TimeoutError,
+            )):
+                network_failure = True
+            elif current.errno in _PRECONNECT_OS_CODES:
+                network_failure = True
+        cause = current.__cause__
+        context = current.__context__
+        if context is not None and context is not cause:
+            pending.append(context)
+        if cause is not None:
+            pending.append(cause)
+    return network_failure
+
 class TrustedProductIngress:
     """Use only two pinned TLS origins, retaining the same request/fencing ID."""
 
@@ -149,14 +198,18 @@ class TrustedProductIngress:
         if self._clock() < self._use_restricted_until:
             try:
                 return send(_RESTRICTED + path)
-            except (httpx.ConnectError, httpx.ConnectTimeout):
-                # This fallback is also inaccessible. Probe the primary now.
+            except (httpx.ConnectError, httpx.ConnectTimeout) as error:
+                if not _can_retry_on_restricted_ingress(error):
+                    raise
+                # Only a demonstrated network failure may probe primary.
                 self._use_restricted_until = 0.0
                 return send(_PRIMARY + path)
 
         try:
             response = send(_PRIMARY + path)
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+        except (httpx.ConnectError, httpx.ConnectTimeout) as error:
+            if not _can_retry_on_restricted_ingress(error):
+                raise
             response = send(_RESTRICTED + path)
             self._use_restricted_until = self._clock() + self._reprobe_seconds
         else:

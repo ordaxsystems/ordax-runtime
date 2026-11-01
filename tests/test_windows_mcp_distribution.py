@@ -66,6 +66,34 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertNotIn("Register-ScheduledTask", installer)
         self.assertNotIn("DeleteFile", installer)
 
+    def test_runtime_quiesce_only_tolerates_confirmed_exited_process_races(self):
+        script = (
+            ROOT / "scripts" / "windows" / "ordax-upgrade-quiesce.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("$current.CreationDate -ne $process.CreationDate", script)
+        self.assertIn("ORDAX_UPGRADE_IDENTITY_CHANGED", script)
+        self.assertIn("ORDAX_UPGRADE_PROCESS_PATH_UNVERIFIED", script)
+        self.assertIn(
+            "Stop-Process -InputObject $handle -Force -ErrorAction Stop",
+            script,
+        )
+        self.assertIn(
+            'throw "ORDAX packaged processes are still running',
+            script,
+        )
+        # All three transient gaps (Get-Process, executable path, Stop-
+        # Process) must re-query exact PID and continue only when absent.
+        self.assertEqual(
+            script.count(
+                'if (-not (Get-CimInstance Win32_Process '
+                '-Filter "ProcessId = $pidValue" -ErrorAction Stop))'
+            ),
+            3,
+        )
+        self.assertNotIn("Stop-Process -Name", script)
+        self.assertNotIn("taskkill", script)
+        self.assertNotIn("SilentlyContinue", script)
+
     def test_normal_wizard_offers_explicit_connect_but_silent_install_never_opens_oauth(self):
         installer = INNO.read_text(encoding="utf-8")
         run_section = installer.split("[Run]", 1)[1].split("[Code]", 1)[0]

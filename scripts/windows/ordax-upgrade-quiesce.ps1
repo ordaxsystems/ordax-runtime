@@ -60,13 +60,35 @@ do {
         if ($currentPath -ine $expectedPath -or -not $currentPath.ToLowerInvariant().StartsWith($rootPrefix)) {
             throw "ORDAX_UPGRADE_IDENTITY_CHANGED pid=$pidValue"
         }
-        $handle = Get-Process -Id $pidValue -ErrorAction Stop
+        # A packaged process can exit between CIM discovery and Get-Process
+        # (or between Get-Process and Stop-Process). Only accept this benign
+        # race if a fresh CIM query confirms the PID is already gone. A reused
+        # or still-live PID must never be assumed stopped.
+        $handle = $null
+        try {
+            $handle = Get-Process -Id $pidValue -ErrorAction Stop
+        } catch {
+            if (-not (Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop)) {
+                continue
+            }
+            throw
+        }
         $handlePath = [string]$handle.Path
         if (-not $handlePath -or ([IO.Path]::GetFullPath($handlePath) -ine $expectedPath)) {
+            if (-not (Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop)) {
+                continue
+            }
             throw "ORDAX_UPGRADE_PROCESS_PATH_UNVERIFIED pid=$pidValue"
         }
         Write-Output ("ORDAX_UPGRADE_STOP pid={0} name={1} path={2}" -f $pidValue, $process.Name, $process.ExecutablePath)
-        Stop-Process -InputObject $handle -Force -ErrorAction Stop
+        try {
+            Stop-Process -InputObject $handle -Force -ErrorAction Stop
+        } catch {
+            if (-not (Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop)) {
+                continue
+            }
+            throw
+        }
     }
 
     Start-Sleep -Milliseconds 250

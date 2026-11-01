@@ -1,4 +1,6 @@
 """Network failover contracts: same Worker, no ambiguous HTTP replay."""
+import errno
+import ssl
 import unittest
 import uuid
 
@@ -13,6 +15,22 @@ from ordax_dev_agent.remote_protocol import TransientDeliveryError
 PRIMARY = "https://mcp.ordax.com.br"
 RESTRICTED = "https://ordax-mcp.ordaxsystems.workers.dev"
 PATH = "/v3/device/transport/report"
+
+
+def _raise_tcp_refusal():
+    # Real httpx/httpcore ConnectError always has an underlying socket cause.
+    try:
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "TCP refused")
+    except ConnectionRefusedError as error:
+        raise httpx.ConnectError("TCP connect unavailable") from error
+
+
+def _raise_bad_tls():
+    try:
+        raise ssl.SSLCertVerificationError(1, "certificate verify failed")
+    except ssl.SSLCertVerificationError as error:
+        raise httpx.ConnectError("TLS handshake rejected") from error
+
 
 
 class TrustedProductIngressTests(unittest.TestCase):
@@ -80,6 +98,142 @@ class TrustedProductIngressTests(unittest.TestCase):
         self.assertEqual(observation["restricted"]["transport"], "unavailable")
         self.assertEqual(len(calls), 2)
         self.assertIs(observation["grantsAuthorized"], False)
+
+    def test_tls_certificate_rejection_never_switches_from_primary(self):
+        attempted = []
+        ingress = TrustedProductIngress(PRIMARY)
+        def send(url):
+            attempted.append(url)
+            _raise_bad_tls()
+        with self.assertRaises(httpx.ConnectError):
+            ingress.request(PATH, send)
+        self.assertEqual(attempted, [PRIMARY + PATH])
+        self.assertEqual(ingress._use_restricted_until, 0.0)
+
+    def test_tls_rejection_on_restricted_never_probes_primary(self):
+        attempted = []
+        ingress = TrustedProductIngress(PRIMARY, monotonic=lambda: 20.0)
+        ingress._use_restricted_until = 150.0
+        def send(url):
+            attempted.append(url)
+            _raise_bad_tls()
+        with self.assertRaises(httpx.ConnectError):
+            ingress.request(PATH, send)
+        self.assertEqual(attempted, [RESTRICTED + PATH])
+        self.assertEqual(ingress._use_restricted_until, 150.0)
+
+    def test_unknown_connect_error_without_socket_provenance_fails_closed(self):
+        for error_kind in ("opaque", "local-permission"):
+            attempted = []
+            ingress = TrustedProductIngress(PRIMARY)
+            def send(url):
+                attempted.append(url)
+                if error_kind == "opaque":
+                    raise httpx.ConnectError("unspecified transport failure")
+                try:
+                    raise PermissionError(errno.EACCES, "local policy denied")
+                except PermissionError as error:
+                    raise httpx.ConnectError("local network policy") from error
+            with self.subTest(error_kind=error_kind):
+                with self.assertRaises(httpx.ConnectError):
+                    ingress.request(PATH, send)
+                self.assertEqual(attempted, [PRIMARY + PATH])
+
+    def test_nested_httpcore_tcp_refusal_can_use_same_restricted_worker(self):
+        attempted = []
+        ingress = TrustedProductIngress(PRIMARY)
+        def send(url):
+            attempted.append(url)
+            if url.startswith(PRIMARY):
+                try:
+                    _raise_tcp_refusal()
+                except httpx.ConnectError as error:
+                    raise httpx.ConnectError("outer HTTPX wrapper") from error
+            return "restricted response"
+        self.assertEqual(ingress.request(PATH, send), "restricted response")
+        self.assertEqual(attempted, [PRIMARY + PATH, RESTRICTED + PATH])
+
+    def test_ssl_verification_nested_below_socket_error_still_fails_closed(self):
+        attempted = []
+        ingress = TrustedProductIngress(PRIMARY)
+        def send(url):
+            attempted.append(url)
+            try:
+                raise ssl.SSLCertVerificationError(1, "invalid certificate")
+            except ssl.SSLCertVerificationError as tls:
+                try:
+                    raise ConnectionRefusedError(errno.ECONNREFUSED, "wrapping")
+                except ConnectionRefusedError as tcp:
+                    raise httpx.ConnectError("wrapped transport") from tcp
+        with self.assertRaises(httpx.ConnectError):
+            ingress.request(PATH, send)
+        self.assertEqual(attempted, [PRIMARY + PATH])
+
+    def test_explicit_tcp_refused_exception_without_errno_is_still_proven(self):
+        attempted = []
+        ingress = TrustedProductIngress(PRIMARY)
+        def send(url):
+            attempted.append(url)
+            if url.startswith(PRIMARY):
+                try:
+                    raise ConnectionRefusedError("primary TCP refused")
+                except ConnectionRefusedError as error:
+                    raise httpx.ConnectError("wake TCP connection failed") from error
+            return "restricted"
+        self.assertEqual(ingress.request(PATH, send), "restricted")
+        self.assertEqual(attempted, [PRIMARY + PATH, RESTRICTED + PATH])
+
+    def test_tls_context_cannot_be_masked_by_a_separate_tcp_cause(self):
+        attempted = []
+        ingress = TrustedProductIngress(PRIMARY)
+        # Some transport adapters preserve both an explicit TCP cause and
+        # an implicit certificate-verification context. Both must be checked.
+        ambiguous = httpx.ConnectError("two independent transport failures")
+        ambiguous.__cause__ = ConnectionRefusedError(errno.ECONNREFUSED, "TCP")
+        ambiguous.__context__ = ssl.SSLCertVerificationError(
+            1, "certificate verification rejected",
+        )
+        def send(url):
+            attempted.append(url)
+            raise ambiguous
+        with self.assertRaises(httpx.ConnectError):
+            ingress.request(PATH, send)
+        self.assertEqual(attempted, [PRIMARY + PATH])
+
+    def test_cyclic_or_too_deep_exception_graph_never_allows_replay(self):
+        for kind in ("cycle", "deep"):
+            attempted = []
+            ingress = TrustedProductIngress(PRIMARY)
+            root = RuntimeError("untrusted context")
+            if kind == "cycle":
+                wrapper = RuntimeError("other context")
+                root.__cause__ = wrapper
+                wrapper.__cause__ = root
+            else:
+                for _ in range(36):
+                    wrapper = RuntimeError("another wrapping layer")
+                    wrapper.__cause__ = root
+                    root = wrapper
+            opaque = httpx.ConnectError("ambiguous cause graph")
+            opaque.__cause__ = ConnectionRefusedError(errno.ECONNREFUSED, "TCP")
+            opaque.__context__ = root
+            def send(url):
+                attempted.append(url)
+                raise opaque
+            with self.subTest(kind=kind), self.assertRaises(httpx.ConnectError):
+                ingress.request(PATH, send)
+            self.assertEqual(attempted, [PRIMARY + PATH])
+
+    def test_connection_timeout_keeps_legitimate_physical_windows_fallback(self):
+        attempted = []
+        ingress = TrustedProductIngress(PRIMARY)
+        def send(url):
+            attempted.append(url)
+            if url.startswith(PRIMARY):
+                raise httpx.ConnectTimeout("TCP timeout before HTTP request")
+            return "restricted"
+        self.assertEqual(ingress.request(PATH, send), "restricted")
+        self.assertEqual(attempted, [PRIMARY + PATH, RESTRICTED + PATH])
 
     def test_preconnect_failure_uses_restricted_same_worker_and_reprobes_primary(self):
         now = [100.0]
@@ -154,7 +308,7 @@ class TrustedProductIngressTests(unittest.TestCase):
         def send(url):
             calls.append(url)
             if len(calls) == 1 or len(calls) == 3:
-                raise httpx.ConnectError("connect unavailable")
+                _raise_tcp_refusal()
             return url
         self.assertEqual(RESTRICTED + PATH, ingress.request(PATH, send))
         now[0] = 6.0

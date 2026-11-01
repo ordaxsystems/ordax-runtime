@@ -38,6 +38,19 @@ entrada ja canonico do mesmo Worker PostgreSQL: se e somente se a conexao
 TCP/DNS falhar antes de enviar a requisicao para `mcp.ordax.com.br`,
 pode tentar `ordax-mcp.ordaxsystems.workers.dev`. Nenhum HTTP 401/403/5xx,
 ReadTimeout ou confirmacao ambigua autoriza repeticao do POST de enrollment.
+
+O seletor `TrustedProductIngress` aceita o fallback **apenas** quando
+`ConnectTimeout` indica falha anterior à entrega ou `ConnectError`
+carrega uma causa verificável de DNS/TCP (incluindo códigos de rede Winsock
+do Windows). Um `ConnectError` genérico, erro de permissão local ou
+falha TLS/validacao de certificado, mesmo encapsulada em várias exceções,
+**não autoriza mudar o hostname nem repetir o POST**. O mesmo vale quando
+a entrada de contingência estava temporariamente selecionada e sua
+verificação TLS falha: propagar a falha, não disfarçá-la sondando a
+entrada principal. O timeout TCP real observado no Windows permanece
+elegível para o mesmo Worker alternativo, sem criar nova autoridade,
+identidade, token ou override de certificado.
+
 Falta
 credencial, existe link de pasta, ou IDs/transport divergem? Falha
 fechada sem publicar uma falsa disponibilidade MCP.
