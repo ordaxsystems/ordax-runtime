@@ -119,6 +119,7 @@ class ProductDeviceControlPlane:
         self.agent_version = str(DEVICE_AGENT_VERSION)
         self._heartbeat_capabilities: tuple[str, ...] | None = None
         self._heartbeat_capability_digest: str | None = None
+        self._remote_heartbeat_recorded = False
         self._jobs: dict[str, AgentJob] = {}
         self._terminal_outbox = TerminalOutbox(
             config.state_dir, "product-http-v1", self.device_id,
@@ -141,7 +142,8 @@ class ProductDeviceControlPlane:
 
     @property
     def is_paired(self) -> bool:
-        return True
+        # A loaded token never implies accepted remote presence.
+        return self._remote_heartbeat_recorded
 
     def pair_if_needed(self, capabilities: list[str], *, agent_version: str,
                        metadata: dict[str, Any] | None = None) -> bool:
@@ -259,6 +261,7 @@ class ProductDeviceControlPlane:
             # Existing Windows and legacy heartbeat payloads remain unchanged.
             payload["runtime_kind"] = self.runtime_kind
         self._post("heartbeat", payload, timeout=10.0)
+        self._remote_heartbeat_recorded = status != "offline"
         if status != "offline":
             try:
                 self.product_central_session.tick()

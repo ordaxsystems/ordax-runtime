@@ -4,6 +4,8 @@ import unittest
 
 from ordax_dev_agent.main import (
     _mark_transport_healthy,
+    _mark_identity_loaded,
+    _record_product_heartbeat,
     _mark_transport_unavailable,
     _runtime_status_snapshot,
     product_dispatch_readiness,
@@ -69,6 +71,25 @@ class RuntimeOperationalStatusTests(unittest.TestCase):
                 )
                 self.assertFalse(result["product_dispatch_ready"])
                 self.assertEqual(expected_code, result["product_readiness_code"])
+
+    def test_loaded_identity_is_not_remote_pairing_until_heartbeat(self):
+        runtime = {"state": "initializing", "paired": True,
+                   "transport_state": "connected", "last_result": None}
+        _mark_identity_loaded(runtime)
+        self.assertFalse(runtime["paired"])
+        self.assertEqual(runtime["state"], "pairing")
+        self.assertEqual(runtime["transport_state"], "connecting")
+        self.assertNotIn("last_heartbeat_at", runtime)
+        self.assertFalse(runtime["last_result"]["ok"])
+        unready = product_dispatch_readiness(
+            runtime, action_registry_ready=True, remote_control_configured=True, now=100)
+        self.assertEqual(unready["product_readiness_code"], "pairing_required")
+        _record_product_heartbeat(runtime)
+        self.assertTrue(runtime["paired"])
+        self.assertEqual(runtime["state"], "ready")
+        self.assertEqual(runtime["transport_state"], "connected")
+        self.assertTrue(runtime["last_result"]["ok"])
+        self.assertIsInstance(runtime["last_heartbeat_at"], float)
 
     def test_busy_heartbeat_failure_marks_transport_without_hiding_active_job(self):
         runtime = {
