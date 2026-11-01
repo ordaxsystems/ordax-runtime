@@ -51,9 +51,10 @@ $runtime = Join-Path $stage "runtime"
 $cache = Join-Path $build "cache"
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $runtime,$cache,$OutputDirectory | Out-Null
-$zip = Join-Path $cache "python-$PythonVersion-embed-amd64.zip"
-if (-not (Test-Path -LiteralPath $zip)) {
-  Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip" -OutFile $zip
+# Same verified source and SHA-256 policy as the Windows Studio builder.
+$zip = & (Join-Path $PSScriptRoot 'get-locked-embedded-python.ps1') -CacheRoot $cache -PythonVersion $PythonVersion
+if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) {
+  throw 'ORDAX_EMBEDDED_PYTHON_VERIFIED_ARCHIVE_MISSING'
 }
 Expand-Archive -LiteralPath $zip -DestinationPath $runtime -Force
 $stdlib = Get-ChildItem $runtime -Filter "python*.zip" | Select-Object -First 1
