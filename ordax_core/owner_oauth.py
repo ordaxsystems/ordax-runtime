@@ -33,6 +33,7 @@ def browser_authorization_code(
     server_factory: Callable[..., HTTPServer] = HTTPServer,
     timeout_seconds: float = 300.0,
     studio_callback: bool = False,
+    mcp_callback: bool = False,
 ) -> tuple[str, str]:
     redirect = urlparse(STUDIO_OAUTH_REDIRECT_URI)
     if (redirect.scheme, redirect.hostname, redirect.port, redirect.path) != (
@@ -76,6 +77,9 @@ def browser_authorization_code(
             if studio_callback:
                 message = ("Volte ao ORDAX Studio para concluir a validação deste computador."
                            if accepted else "Volte ao ORDAX Studio e tente novamente.")
+            elif mcp_callback:
+                message = ("Volte ao OrdaX MCP para concluir a conexão deste computador."
+                           if accepted else "Volte ao OrdaX MCP e tente novamente.")
             else:
                 message = ("Volte ao terminal OrdaX Runtime para concluir a autorização."
                            if accepted else "A autorização OrdaX não foi concluída.")
