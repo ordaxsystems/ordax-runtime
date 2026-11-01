@@ -93,6 +93,52 @@ class OwnerCentralDeviceSelectionClientTests(unittest.TestCase):
                             "jwt", client_id=CLIENT, challenge_id=TICKET, device_id=DESKTOP)
                 self.assertEqual(err.exception.error_code, "product_remote_invalid_response")
 
+    def test_pending_timestamp_values_require_nonempty_text(self):
+        # An old unmerged client branch only checked for string types.
+        # The canonical Owner selection response must also reject empty
+        # timestamps without leaking pending session details.
+        for key in ("created_at", "expires_at"):
+            for value in (None, 0, False, {}, [], "", "   "):
+                with self.subTest(field=key, value=value):
+                    ticket = {
+                        "challenge_id": TICKET,
+                        "created_at": "2026-10-27T04:00:00Z",
+                        "expires_at": "2026-10-27T04:05:00Z",
+                    }
+                    ticket[key] = value
+                    payload = {
+                        "ok": True, "count": 1,
+                        "attested": False, "dispatch_authorized": False,
+                        "pending_selections": [ticket],
+                    }
+                    remote = ProductRemoteClient(
+                        "https://mcp.example.test",
+                        http=httpx.Client(transport=httpx.MockTransport(
+                            lambda _request: httpx.Response(200, json=payload)
+                        )),
+                    )
+                    with self.assertRaises(ProductRemoteError) as error:
+                        remote.owner_central_session_selections(
+                            "signed-owner", client_id=CLIENT,
+                        )
+                    self.assertEqual(
+                        error.exception.error_code, "product_remote_invalid_response",
+                    )
+
+    def test_canonical_owner_selection_has_no_legacy_duplicate_methods(self):
+        methods = (
+            "owner_central_targets", "owner_central_pending",
+            "owner_central_select",
+        )
+        for name in methods:
+            with self.subTest(legacy=name):
+                self.assertFalse(hasattr(ProductRemoteClient, name))
+        for name in (
+            "owner_central_session_targets", "owner_central_session_selections",
+            "owner_select_central_device",
+        ):
+            self.assertTrue(callable(getattr(ProductRemoteClient, name)))
+
     def test_invalid_ids_fail_before_network_or_owner_action(self):
         observed = []
         remote = ProductRemoteClient("https://mcp.example.test",
