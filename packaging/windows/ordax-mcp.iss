@@ -41,6 +41,8 @@ Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 ; This shortcut only opens the existing Owner PKCE enrollment flow in the
 ; packaged, private Python. It does not launch another Runtime or issue grants.
 Name: "{group}\\Conectar dispositivo"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
+; A read-only network check. Never launches OAuth or issues grants.
+Name: "{group}\\Verificar conexão"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OrdaX MCP"; ValueData: """{app}\{#RuntimeExe}"""; Flags: uninsdeletevalue
