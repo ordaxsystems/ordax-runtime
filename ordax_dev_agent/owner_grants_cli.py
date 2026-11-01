@@ -12,6 +12,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code, exchange_owner_code
+from ordax_connector.owner_grants import (
+    require_owner_mcp_device_identity,
+    select_consented_owner_mcp_client,
+)
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.computer_filesystem_actions import (
     computer_access_management_status,
@@ -79,19 +83,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         # Profile scope and supported profile names are validated by the
         # authenticated Control Plane, the sole profile catalog authority.
     return args
-
-
-def select_client(authority: dict[str, Any], requested: str | None) -> str:
-    clients = authority.get("clients", [])
-    matching = [
-        str(c["client_id"]).lower() for c in clients
-        if isinstance(c, dict) and isinstance(c.get("client_id"), str)
-        and _UUID.fullmatch(c["client_id"])
-        and (requested is None or c["client_id"].lower() == requested)
-    ]
-    if len(matching) != 1:
-        raise ValueError("select an exact consented OAuth client with --client" if matching else "no consented OAuth client matched")
-    return matching[0]
 
 
 # This diagnostic inventory is not a second profile catalog: it selects the
@@ -193,9 +184,15 @@ def perform(args: argparse.Namespace, token: str, remote: ProductRemoteClient,
             policy_updater=update_computer_access_policy,
             config: AgentConfig | None = None) -> dict[str, Any]:
     authority = remote.owner_remote_authority(token, device_id=args.device)
+    # Read-only diagnostics and grant mutations must use the same device
+    # identity authority as the Connector. Never trust a cross-device Owner
+    # response merely because it contains a valid OAuth client identifier.
+    require_owner_mcp_device_identity(authority, device_id=args.device)
     if args.operation == "list":
         return {"device_id": args.device, "clients": authority["clients"], "grant_groups": authority["grant_groups"]}
-    client = select_client(authority, args.client)
+    client = select_consented_owner_mcp_client(
+        authority, device_id=args.device, requested_client_id=args.client,
+    )
     if args.operation == "central-targets":
         return remote.owner_central_session_targets(token, client_id=client)
     if args.operation == "central-selections":
