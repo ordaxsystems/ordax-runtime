@@ -72,9 +72,21 @@ assinatura falsa ou deploy de servico. **Este candidato nao esta autorizado
 para distribuicao publica** ate existir assinador Authenticode/Publisher
 aprovado e validacao E2E completa de onboarding/consentimento/dispositivo.
 
-A interface grafica minima propria para onboarding, conexao e politicas
-**ainda e pendencia**. O CLI ja existente nao e um substituto silencioso de
-UX final. O aplicativo do ChatGPT e um conector que acessa
+O candidato independente possui agora um atalho **Conectar dispositivo**
+no menu Iniciar. Ele abre uma interface Windows minima, executada pelo
+`pythonw.exe` privado do instalador, que pede confirmacao antes de chamar o
+**mesmo** fluxo Owner OAuth PKCE e o `device_setup` canonico do CLI.
+Nao usa Node.js, `npx`, `irm | iex`, shell interativo ou um segundo agente.
+O retorno do navegador identifica OrdaX MCP, sem expor credenciais no aviso.
+Cancelamento e erro nao concedem acesso nem iniciam Runtime alternativo.
+
+A interface completa de gerenciamento de conexao e politicas **ainda e
+pendencia**: o atalho apenas solicita cadastro da identidade e informa
+explicitamente que isso nao comprova prontidao nem emite grants. O Runtime
+permanece sob o ciclo de vida existente. Os testes Windows validam a existencia
+e o alvo exato do atalho, importacao do codigo de onboarding, casos de recusa e
+remocao do atalho na desinstalacao. Isso nao prova OAuth real em um dispositivo
+fisico, nem autoriza release publico antes de assinatura e gates E2E. O aplicativo do ChatGPT e um conector que acessa
 `https://mcp.ordax.com.br/mcp`; **nao** e um segundo Runtime e nao
 precisa de `npx` ou Node.js no Windows. A conexao remota requer
 autenticacao Owner, vinculacao do dispositivo e grants explicitos.
