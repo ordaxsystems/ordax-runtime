@@ -70,6 +70,73 @@ class OneClickOwnerConnectTests(unittest.TestCase):
                 self.assertNotIn("SECRET_ACCOUNT_TOKEN_SHOULD_NOT_LEAK",
                                  str(self.messages))
 
+    def test_diagnostics_are_explicit_and_do_not_open_oauth(self):
+        observed = []
+        def probe():
+            observed.append("probe")
+            return {
+                "schema": "ordax.product-mcp-https-observation/1",
+                "primary": {"transport": "unavailable", "httpStatus": None},
+                "restricted": {"transport": "https_responded", "httpStatus": 404},
+                "mcpReady": False, "authenticated": False,
+                "grantsAuthorized": False,
+            }
+        prompts = []
+        status = gui.diagnose_with_dialogs(
+            show=lambda message, flags: prompts.append((message, flags)) or 1,
+            inspect=probe,
+        )
+        self.assertEqual(status, 1)
+        self.assertEqual(observed, ["probe"])
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("Servidor principal: sem resposta HTTPS", prompts[0][0])
+        self.assertIn("HTTPS respondeu (HTTP 404)", prompts[0][0])
+        self.assertIn("nao comprova", prompts[0][0])
+        self.assertNotIn("Registro do dispositivo concluido", prompts[0][0])
+
+    def test_diagnostics_rejects_forged_readiness_and_error_leaks(self):
+        invalid = [
+            {"schema": "ordax.product-mcp-https-observation/1",
+             "primary": {"transport": "https_responded", "httpStatus": 200},
+             "restricted": {"transport": "unavailable", "httpStatus": None},
+             "mcpReady": True, "authenticated": False, "grantsAuthorized": False},
+            {"schema": "ordax.product-mcp-https-observation/1",
+             "primary": {"transport": "https_responded", "httpStatus": "200"},
+             "restricted": {"transport": "unavailable", "httpStatus": None},
+             "mcpReady": False, "authenticated": False, "grantsAuthorized": False},
+        ]
+        for payload in invalid:
+            messages = []
+            result = gui.diagnose_with_dialogs(
+                show=lambda msg, _flags: messages.append(msg) or 1,
+                inspect=lambda: payload,
+            )
+            self.assertEqual(result, 1)
+            self.assertEqual(len(messages), 1)
+            self.assertIn("Nao foi possivel", messages[0])
+            self.assertNotIn("grants", messages[0])
+        messages = []
+        result = gui.diagnose_with_dialogs(
+            show=lambda msg, _flags: messages.append(msg) or 1,
+            inspect=lambda: (_ for _ in ()).throw(
+                RuntimeError("SECRET_TOKEN_MUST_NOT_LEAK")),
+        )
+        self.assertEqual(result, 1)
+        self.assertNotIn("SECRET_TOKEN_MUST_NOT_LEAK", messages[0])
+
+    def test_diagnostic_cli_routes_separately_from_owner_enrollment(self):
+        with mock.patch.object(gui.sys, "platform", "win32"):
+            with mock.patch.object(gui, "connect_with_dialogs") as connect:
+                with mock.patch.object(gui, "diagnose_with_dialogs",
+                                       return_value=0) as diagnose:
+                    self.assertEqual(gui.main(["--verificar-rede"]), 0)
+                diagnose.assert_called_once()
+                connect.assert_not_called()
+            with mock.patch.object(gui, "connect_with_dialogs",
+                                   return_value=2) as connect:
+                self.assertEqual(gui.main([]), 2)
+                connect.assert_called_once()
+
     def test_untrusted_grant_claim_does_not_get_success_message(self):
         self.assertEqual(gui.connect_with_dialogs(
             show=self.dialog,
