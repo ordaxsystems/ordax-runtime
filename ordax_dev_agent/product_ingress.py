@@ -94,11 +94,16 @@ def _can_retry_on_restricted_ingress(
     must never cause a second Owner enrollment or an action delivery.
     """
     network_failure = isinstance(error, httpx.ConnectTimeout)
-    current: BaseException | None = error
+    pending: list[BaseException] = [error]
     seen: set[int] = set()
-    for _ in range(16):
-        if current is None or id(current) in seen:
-            break
+    while pending:
+        # Exception cause and context form a graph, not necessarily a chain.
+        # Unusually deep or cyclic graphs are ambiguous: fail closed.
+        if len(seen) >= 32:
+            return False
+        current = pending.pop()
+        if id(current) in seen:
+            return False
         seen.add(id(current))
         if isinstance(current, ssl.SSLError):
             return False
@@ -110,9 +115,13 @@ def _can_retry_on_restricted_ingress(
                 network_failure = True
             elif current.errno in _PRECONNECT_OS_CODES:
                 network_failure = True
-        current = current.__cause__ or current.__context__
+        cause = current.__cause__
+        context = current.__context__
+        if context is not None and context is not cause:
+            pending.append(context)
+        if cause is not None:
+            pending.append(cause)
     return network_failure
-
 
 class TrustedProductIngress:
     """Use only two pinned TLS origins, retaining the same request/fencing ID."""
