@@ -46,7 +46,13 @@ Name: "{group}\\Conectar dispositivo"; Filename: "{app}\\runtime\\pythonw.exe"; 
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OrdaX MCP"; ValueData: """{app}\{#RuntimeExe}"""; Flags: uninsdeletevalue
 
 [Run]
+; Keep the one supervised Runtime silent and installed once; never use a
+; second agent, shell bootstrap, or implicit remote permissions.
 Filename: "{app}\{#RuntimeExe}"; Flags: nowait runhidden
+; Normal wizard: the user chooses whether to open the existing PKCE device
+; enrollment UI from the Finish page. This does not auto-enroll or grant
+; computer access. It is not run by /SILENT or /VERYSILENT CI upgrades.
+Filename: "{app}\runtime\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui"; WorkingDir: "{app}"; Description: "Conectar este computador ao OrdaX MCP"; Flags: postinstall nowait skipifsilent
 
 [Code]
 // Legacy Studio still carries a separate Runtime executable and shares the
