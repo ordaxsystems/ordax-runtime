@@ -31,11 +31,11 @@ if args[0] == "rev-parse":
     print(sha)
     sys.exit(0)
 if args[0] == "merge-base":
-    if args[2] != "origin/main":
+    if args[3] != "origin/main":
         sys.exit(2)
-    if args[1] == merge:
+    if args[2] == merge:
         sys.exit(0 if os.getenv("MOCK_MERGE_IN_MAIN", "1") == "1" else 1)
-    if args[1] == sha:
+    if args[2] == sha:
         sys.exit(0 if os.getenv("MOCK_SOURCE_IN_MAIN", "0") == "1" else 1)
     sys.exit(1)
 if args[0] == "for-each-ref":
@@ -56,10 +56,8 @@ if args[0] == "ls-remote":
         sys.exit(0)
     sys.exit(2)
 if args[0] == "push":
-    if args[2].startswith("--delete"):
-        sys.exit(2)
-    if args[1] == "--delete":
-        (state / "deleted").write_text(args[2])
+    if args[2] == "--delete":
+        (state / "deleted").write_text(args[3])
         sys.exit(0)
     if args[2].endswith("refs/tags/archive/ordax-runtime/fix/test"):
         if os.getenv("MOCK_FAIL_ARCHIVE", "0") == "1":
