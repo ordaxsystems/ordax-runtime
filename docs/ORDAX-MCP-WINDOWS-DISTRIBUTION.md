@@ -91,6 +91,54 @@ fisico, nem autoriza release publico antes de assinatura e gates E2E. O aplicati
 precisa de `npx` ou Node.js no Windows. A conexao remota requer
 autenticacao Owner, vinculacao do dispositivo e grants explicitos.
 
+## Primeiro uso no Windows — fluxo explícito
+
+No instalador com assistente normal, a tela final oferece a opção
+**Conectar este computador ao OrdaX MCP**, executando o mesmo
+`owner_device_connect_gui` privado do atalho do menu Iniciar. O usuário
+pode desmarcar a opção. A janela informa antes do navegador que o
+registro **não** concede acesso automático a arquivos, terminal ou
+controle do computador. Só a aprovação Owner OAuth dá início ao cadastro;
+capabilities e grants são decisões separadas da Platform.
+
+Instalações `/SILENT` e `/VERYSILENT`, inclusive CI, nunca abrem a
+janela de autorização. O Runtime único continua supervisionado pelo
+mesmo launcher. Isso não substitui a aplicação completa de gerenciamento
+de conexões e revogação, que segue pendente.
+
+## Teste físico de entrada Windows — 2026-11-01
+
+O teste físico no Windows 10 x64 autorizado usou o **candidato privado
+de CI**, não uma release pública: workflow GitHub Actions
+`41302165556`, artefato `13081327874`, versão `0.4.8`.
+O ZIP passou no digest SHA-256
+`954963d913a4afa8005889a09ec7d7ae6d14c00f9aaabe9918cb967f92c40fbe`
+e o executável de setup no digest SHA-256
+`1629b814d7a5d6a73a7bba112d3d08390d4fb29280a77f5314be4058eda56f4b`.
+O Windows confirmou `Get-AuthenticodeSignature = NotSigned`.
+O instalador recebeu marca de origem Internet (ZoneId 3) e foi iniciado
+**sem argumentos silenciosos ou remoção da proteção de reputação**,
+mas o assistente não apresentou uma janela utilizável no desktop remoto.
+A tentativa foi encerrada sem concluir instalação, alterar grants,
+enrollment, arquivos do usuário ou estado do Runtime. Não houve listener
+local na porta 8765, logo não existe prova E2E de ação MCP.
+
+Observação de rede no mesmo Windows, independente da instalação:
+`mcp.ordax.com.br` resolveu DNS, mas **ambos os endereços IPv4**
+retornaram timeout ao conectar diretamente à porta 443; `github.com`
+e o domínio de contingência `ordax-mcp.ordaxsystems.workers.dev`
+aceitaram TCP/443. Um `GET /mcp` no domínio de contingência retornou
+HTTP 404, o que **não** demonstra autenticação, capacidade ou que uma
+requisição MCP válida funcionaria. Essas observações não autorizam
+alterar endpoints/pins nem improvisar fallback no cliente.
+
+**Gates remanescentes:** #49 (assinador Authenticode e bytes finais
+confiáveis), #61 (prontidão/roteamento canônico da Platform), e uma
+execução física completa com instalador final assinado, aceite explícito
+Owner OAuth, presença, `capability_digest`, grants e ações reais
+autorizadas. Não se declara conexão concluída ou release homologada
+enquanto esses gates permanecerem abertos.
+
 ## Proveniencia do Python privado — SSOT Windows
 
 Os dois empacotadores em `ordax-runtime` usam exclusivamente
