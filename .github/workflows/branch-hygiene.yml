@@ -1,0 +1,60 @@
+# Main-owned repository hygiene. No PR code is granted write access.
+name: OrdaX Runtime Branch Hygiene
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/branch-hygiene.yml"
+      - "scripts/branch-hygiene.sh"
+      - "tests/test_branch_hygiene_policy.py"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Optional exact transient branch; empty = sweep"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ordax-runtime-branch-hygiene
+  cancel-in-progress: false
+
+jobs:
+  policy-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prove fail-closed retirement with simulated remote API
+        run: |
+          python3 -m unittest tests.test_branch_hygiene_policy
+          bash -n scripts/branch-hygiene.sh
+
+  retire-merged:
+    if: github.event_name != 'pull_request'
+    needs: policy-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Archive exact squash source tips and retire merged branches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: ${{ inputs.branch || '' }}
+        run: |
+          if [[ -n "$TARGET_BRANCH" ]]; then
+            bash scripts/branch-hygiene.sh branch "$TARGET_BRANCH"
+          else
+            bash scripts/branch-hygiene.sh sweep
+          fi
