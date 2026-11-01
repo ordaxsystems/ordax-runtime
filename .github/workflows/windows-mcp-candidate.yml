@@ -139,7 +139,11 @@ jobs:
           if (-not (Test-Path -LiteralPath $privatePythonw)) {
             throw 'Installed private GUI host missing'
           }
-          & $privatePython -m unittest tests.test_owner_device_connect_gui
+          # Embedded CPython uses an isolated _pth and cannot import the
+          # checkout's tests package by module name. Execute the source test
+          # file directly while importing runtime dependencies from the
+          # installed, private site-packages.
+          & $privatePython (Join-Path $env:GITHUB_WORKSPACE 'tests\test_owner_device_connect_gui.py')
           if ($LASTEXITCODE -ne 0) { throw 'GUI Owner onboarding unit tests failed' }
           $shortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\OrdaX MCP\Conectar dispositivo.lnk'
           if (-not (Test-Path -LiteralPath $shortcutPath)) {
