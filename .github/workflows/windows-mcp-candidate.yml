@@ -10,6 +10,9 @@ on:
       - "scripts/windows/assert-runtime-package-capabilities.ps1"
       - "scripts/windows/ordax-upgrade-quiesce.ps1"
       - "tests/test_windows_mcp_distribution.py"
+      - "tests/test_owner_device_connect_gui.py"
+      - "ordax_dev_agent/owner_device_connect_gui.py"
+      - "ordax_core/owner_oauth.py"
       - "control-plane-source.lock.json"
       - "pyproject.toml"
   workflow_dispatch:
@@ -129,10 +132,29 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Installed Runtime capability proof failed' }
           & $privatePython -m ordax_dev_agent.owner_grants_cli --help | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Installed OAuth Owner CLI unavailable' }
+          # The clickable shortcut must target only the private packaged
+          # Python GUI that delegates to canonical Owner OAuth. Never run
+          # interactive OAuth against external services from a CI fixture.
+          $privatePythonw = Join-Path $root 'runtime\pythonw.exe'
+          if (-not (Test-Path -LiteralPath $privatePythonw)) {
+            throw 'Installed private GUI host missing'
+          }
+          & $privatePython -m unittest tests.test_owner_device_connect_gui
+          if ($LASTEXITCODE -ne 0) { throw 'GUI Owner onboarding unit tests failed' }
+          $shortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\OrdaX MCP\Conectar dispositivo.lnk'
+          if (-not (Test-Path -LiteralPath $shortcutPath)) {
+            throw 'One-click device enrollment shortcut missing'
+          }
+          $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
+          if ($shortcut.TargetPath -ine $privatePythonw -or
+              $shortcut.Arguments -cne '-m ordax_dev_agent.owner_device_connect_gui') {
+            throw 'One-click shortcut does not use the canonical private Owner onboarding'
+          }
           $uninstaller = Join-Path $root 'unins000.exe'
           if (-not (Test-Path $uninstaller)) { throw 'Standalone MCP uninstaller missing' }
           Invoke-Bounded $uninstaller '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
           if (Test-Path (Join-Path $root 'ORDAX Runtime.exe')) { throw 'Standalone MCP Runtime remained after uninstall' }
+          if (Test-Path -LiteralPath $shortcutPath) { throw 'MCP connect shortcut remained after uninstall' }
           Write-Host "ORDAX_MCP_STANDALONE_INSTALL_SMOKE=PASS SHA256=$hash"
       - name: Retain unsigned validation candidate (never publish public release)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
