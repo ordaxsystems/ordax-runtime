@@ -23,6 +23,7 @@ args = sys.argv[1:]
 state = pathlib.Path(os.environ["MOCK_STATE"])
 sha = os.environ["MOCK_SOURCE"]
 merge = os.environ["MOCK_MERGE"]
+branch = os.environ.get("MOCK_BRANCH", "fix/test")
 if args[0] == "fetch":
     sys.exit(0)
 if args[0] == "show-ref":
@@ -41,7 +42,7 @@ if args[0] == "merge-base":
 if args[0] == "for-each-ref":
     if args[-1] == "refs/remotes/origin/archive/":
         sys.exit(0)
-    print("origin/fix/test")
+    print("origin/" + branch)
     sys.exit(0)
 if args[0] == "ls-remote":
     ref = args[-1]
@@ -50,7 +51,7 @@ if args[0] == "ls-remote":
         if tag.exists():
             print(tag.read_text().strip() + "\t" + ref)
         sys.exit(0)
-    if ref == "refs/heads/fix/test":
+    if ref == "refs/heads/" + branch:
         live = os.getenv("MOCK_LIVE_SHA", sha)
         print(live + "\t" + ref)
         sys.exit(0)
@@ -59,7 +60,7 @@ if args[0] == "push":
     if args[2] == "--delete":
         (state / "deleted").write_text(args[3])
         sys.exit(0)
-    if args[2].endswith("refs/tags/archive/ordax-runtime/fix/test"):
+    if args[2].endswith("refs/tags/archive/ordax-runtime/" + branch):
         if os.getenv("MOCK_FAIL_ARCHIVE", "0") == "1":
             sys.exit(1)
         (state / "archive_sha").write_text(sha)
@@ -139,7 +140,7 @@ class BranchHygienePolicyTests(unittest.TestCase):
     def run_cleanup(self, **overrides):
         env = {**self.env, **overrides}
         return subprocess.run(
-            ["bash", str(SCRIPT), "branch", "fix/test"],
+            ["bash", str(getattr(self, "script_path", SCRIPT)), "branch", env.get("MOCK_BRANCH", "fix/test")],
             env=env, text=True, capture_output=True, timeout=10
         )
 
