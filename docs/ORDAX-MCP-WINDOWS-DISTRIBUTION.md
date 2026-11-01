@@ -72,6 +72,17 @@ assinatura falsa ou deploy de servico. **Este candidato nao esta autorizado
 para distribuicao publica** ate existir assinador Authenticode/Publisher
 aprovado e validacao E2E completa de onboarding/consentimento/dispositivo.
 
+O candidato independente passa pela mesma validação no PR e, **somente
+quando arquivos relevantes do MCP mudam**, é reconstruído a partir da
+`main` consolidada. Ambos os eventos compartilham uma lista única de
+caminhos e são serializados por ref, sem cancelar um build já em execução.
+Cada candidato da `main` contém `runtime_source_commit` igual ao SHA
+verificado pelo runner e expira após três dias; não se promove um
+candidato do SHA da PR (anterior ao squash merge) como se fosse de
+`main`. O acionamento manual permanece possível. Nenhum desses
+artefatos é uma release pública ou uma assinatura Authenticode.
+
+
 O candidato independente possui agora um atalho **Conectar dispositivo**
 no menu Iniciar. Ele abre uma interface Windows minima, executada pelo
 `pythonw.exe` privado do instalador, que pede confirmacao antes de chamar o
