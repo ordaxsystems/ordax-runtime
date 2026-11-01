@@ -59,7 +59,7 @@ begin
   if FileExists(ExpandConstant('{localappdata}\Programs\ORDAX\ORDAX Studio.exe')) or
      FileExists(ExpandConstant('{localappdata}\Programs\ORDAX\ORDAX Runtime.exe')) then
   begin
-    MsgBox('Esta versao independente do OrdaX MCP ainda nao pode ser instalada em paralelo ao ORDAX Studio legado. A migracao do Runtime compartilhado requer um atualizador verificado. Nenhum dado ou instalacao existente foi modificado.', mbError, MB_OK);
+    SuppressibleMsgBox('Esta versao independente do OrdaX MCP ainda nao pode ser instalada em paralelo ao ORDAX Studio legado. A migracao do Runtime compartilhado requer um atualizador verificado. Nenhum dado ou instalacao existente foi modificado.', mbError, MB_OK, IDOK);
     Result := False;
   end;
 end;
@@ -76,12 +76,15 @@ begin
     Result := not FileExists(AddBackslash(Root) + '{#RuntimeExe}');
     Exit;
   end;
+  Code := -1;
   Result := Exec(
     ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
       Script + '" -InstallRoot "' + Root + '"',
     '', SW_HIDE, ewWaitUntilTerminated, Code);
   Result := Result and (Code = 0);
+  if not Result then
+    Log('ORDAX_MCP_QUIESCE_FAILED exit=' + IntToStr(Code));
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -95,5 +98,5 @@ function InitializeUninstall(): Boolean;
 begin
   Result := QuiesceOwnedRuntime(ExpandConstant('{app}'));
   if not Result then
-    MsgBox('O Runtime nao foi encerrado. A desinstalacao foi bloqueada para preservar a instalacao.', mbError, MB_OK);
+    SuppressibleMsgBox('O Runtime nao foi encerrado. A desinstalacao foi bloqueada para preservar a instalacao.', mbError, MB_OK, IDOK);
 end;
