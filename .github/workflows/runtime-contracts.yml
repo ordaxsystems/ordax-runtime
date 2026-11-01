@@ -136,6 +136,7 @@ jobs:
           tests.test_product_central_session
           tests.test_product_device_control_plane
           tests.test_runtime_operational_status
+          tests.test_product_idle_poll_budget
           tests.test_product_update
           tests.test_product_update_apply
           tests.test_owner_dev_update_preflight

@@ -82,6 +82,20 @@ def product_idle_claim_delay_seconds(idle_misses: int, configured_ceiling: float
     return min(ceiling, 0.25 * (1.8 ** min(idle_misses - 1, 11)))
 
 
+def product_idle_wait_seconds(
+    *, now: float, next_claim_due: float, next_heartbeat: float,
+) -> float:
+    """Wake for the earliest deadline, without turning heartbeat into a claim.
+
+    The Product wake listener is optional and disabled by default. The idle
+    claim budget can be 30–60 seconds (or 300 with advisory wake), while the
+    independently required presence heartbeat is due every 20 seconds.
+    """
+    if not all(math.isfinite(value) for value in (now, next_claim_due, next_heartbeat)):
+        raise ValueError("Product idle deadlines must be finite")
+    return max(0.10, min(next_claim_due - now, next_heartbeat - now))
+
+
 def _mark_transport_delivery_error(runtime: dict, error: Exception) -> None:
     summary = str(error)
     runtime["state"] = "control-plane-error"
@@ -746,28 +760,27 @@ def run(
                     runtime.setdefault("startup_seconds", round(time.monotonic() - started_monotonic, 3))
                     next_heartbeat = now + 20.0
 
-                if wake_listener is not None:
-                    if wake_listener.wake.is_set():
-                        wake_listener.wake.clear()
-                        next_claim_due = 0.0
-                    if now < next_claim_due:
-                        # The wake listener replaces repetitive empty claims,
-                        # not device heartbeat, authorization or OS local policy.
-                        idle_wait = max(0.10, min(
-                            next_claim_due - time.monotonic(),
-                            next_heartbeat - time.monotonic(),
-                        ))
-                        _wait_for_native_access(
-                            idle_wait, stop_requested, native_access_enabled,
-                            wake_listener.wake,
-                        )
-                        continue
+                if wake_listener is not None and wake_listener.wake.is_set():
+                    wake_listener.wake.clear()
+                    next_claim_due = 0.0
 
-                claim_started = time.monotonic()
+                if now < next_claim_due:
+                    # Enforce the claim deadline even without advisory wake.
+                    # Sleep only until the earlier Product heartbeat deadline.
+                    _wait_for_native_access(
+                        product_idle_wait_seconds(
+                            now=time.monotonic(),
+                            next_claim_due=next_claim_due,
+                            next_heartbeat=next_heartbeat,
+                        ),
+                        stop_requested, native_access_enabled,
+                        wake_listener.wake if wake_listener is not None else None,
+                    )
+                    continue
+
                 job = control.claim_next_job()
                 transport_failures = 0
                 runtime.pop("transport_retry_seconds", None)
-                claim_seconds = time.monotonic() - claim_started
                 if job is None:
                     idle_claim_misses += 1
                     # Stay very responsive during interactive work, then ease
@@ -781,15 +794,13 @@ def run(
                     if wake_listener is not None and wake_listener.connected.is_set():
                         idle_delay = 300.0
                     next_claim_due = time.monotonic() + idle_delay
-                    idle_wait = (0.10 if getattr(control, "uses_long_poll", False)
-                                 and claim_seconds >= 1.0 else max(0.10, idle_delay))
-                    if wake_listener is not None:
-                        idle_wait = max(0.10, min(
-                            next_claim_due - time.monotonic(),
-                            next_heartbeat - time.monotonic(),
-                        ))
                     _wait_for_native_access(
-                        idle_wait, stop_requested, native_access_enabled,
+                        product_idle_wait_seconds(
+                            now=time.monotonic(),
+                            next_claim_due=next_claim_due,
+                            next_heartbeat=next_heartbeat,
+                        ),
+                        stop_requested, native_access_enabled,
                         wake_listener.wake if wake_listener is not None else None,
                     )
                     continue
