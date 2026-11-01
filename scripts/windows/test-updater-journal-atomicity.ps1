@@ -11,7 +11,7 @@ if ($source -match 'Move-Item -LiteralPath \$pending -Destination \$journalPath'
     throw 'Non-atomic journal replacement has returned'
 }
 foreach ($expected in @(
-    '[IO.File]::Replace($pending, $journalPath, $null)',
+    '[IO.File]::Replace($pending, $journalPath, [NullString]::Value)',
     '$handle.Flush($true)',
     '[IO.FileMode]::CreateNew',
     '[IO.FileOptions]::WriteThrough'
