@@ -1,0 +1,9 @@
+{
+  "schema": "ordax.windows-embedded-python-lock/1",
+  "version": "3.12.10",
+  "architecture": "amd64",
+  "filename": "python-3.12.10-embeddable-amd64.zip",
+  "url": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embeddable-amd64.zip",
+  "sha256": "156c7eea90d58cd7e91a23f28a0056616b13e9f4cf4901b7b99b837b7848c6da",
+  "source_manifest": "https://www.python.org/ftp/python/3.12.10/windows-3.12.10.json"
+}
