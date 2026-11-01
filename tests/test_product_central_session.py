@@ -160,6 +160,22 @@ class ProductCentralSessionClientTests(unittest.TestCase):
         self.assertNotIn("not-public", json.dumps(observed))
         self.assertNotIn("SECRET_PRIVATE_AUTHORITY_MESSAGE", json.dumps(observed))
 
+    def test_malformed_nonstring_revocation_error_fails_closed(self):
+        for bad_error in ([], {"private": "not-public"}):
+            with self.subTest(error=bad_error):
+                def handler(request: httpx.Request) -> httpx.Response:
+                    if request.method == "GET":
+                        return httpx.Response(200, json={
+                            "ok": True, "pending": True, "challenge_id": CHALLENGE_ID,
+                        })
+                    return httpx.Response(403, json={
+                        "ok": False, "error": bad_error,
+                    })
+                status = self.make_client(["a" * 64], handler).tick(now=10.0)
+                self.assertFalse(status.confirmed)
+                self.assertEqual(status.last_error, "product_central_session_unavailable")
+                self.assertIsNone(status.challenge_id)
+
     def test_cadence_reuses_existing_heartbeat_without_second_scheduler(self):
         token = ["a" * 64]
         calls = 0

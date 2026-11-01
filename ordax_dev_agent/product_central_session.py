@@ -177,7 +177,7 @@ class ProductCentralSessionClient:
             receipt = self._json(confirmed)
             if confirmed.status_code == 403:
                 code = receipt.get("error")
-                if code in {"central_device_grant_revoked", "central_session_revoked"}:
+                if isinstance(code, str) and code in {"central_device_grant_revoked", "central_session_revoked"}:
                     raise RuntimeError(code)
                 raise RuntimeError("product_central_session_unavailable")
             if confirmed.status_code not in {200, 202} or receipt.get("ok") is not True:
