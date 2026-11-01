@@ -90,6 +90,28 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertNotIn("product_access_token", run_section)
         self.assertNotIn("owner_grants_cli", run_section)
 
+    def test_candidate_is_proven_from_exact_main_without_rerunning_unrelated_changes(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("paths: &mcp_candidate_paths", workflow)
+        self.assertIn("  push:\n    branches:\n      - main\n    paths: *mcp_candidate_paths", workflow)
+        self.assertEqual(workflow.count("paths: &mcp_candidate_paths"), 1)
+        self.assertEqual(workflow.count("paths: *mcp_candidate_paths"), 1)
+        self.assertIn("  workflow_dispatch:", workflow)
+        self.assertIn("group: ordax-mcp-candidate-${{ github.ref }}", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn("permissions:\n  contents: read", workflow)
+        for owner in (
+            'ordax_dev_agent/owner_device_connect_cli.py',
+            'ordax_dev_agent/device_setup.py',
+            'ordax_dev_agent/config.py',
+            'ordax_dev_agent/desktop_host_main.py',
+        ):
+            self.assertIn('      - "' + owner + '"', workflow)
+        self.assertIn("runtime_source_commit -cne $env:GITHUB_SHA", workflow)
+        self.assertIn("signed_public_release -ne $false", workflow)
+        self.assertIn("retention-days: 3", workflow)
+        self.assertNotIn("gh release create", workflow)
+
     def test_candidate_build_proof_is_real_windows_and_never_public_release(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("  pull_request:", workflow)
