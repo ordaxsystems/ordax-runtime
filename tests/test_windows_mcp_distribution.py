@@ -49,6 +49,11 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn("ordax-upgrade-quiesce.ps1", installer)
         self.assertIn("PrepareToInstall(var NeedsRestart: Boolean)", installer)
         self.assertIn("InitializeUninstall()", installer)
+        # Inno MsgBox is not silenced by /SUPPRESSMSGBOXES. An error must
+        # block uninstall without hanging a headless runner or customer host.
+        self.assertIn("SuppressibleMsgBox(", installer)
+        self.assertNotIn("    MsgBox(", installer)
+        self.assertIn("ORDAX_MCP_QUIESCE_FAILED", installer)
         self.assertIn('ValueName: "OrdaX MCP"', installer)
         self.assertNotIn('ValueName: "ORDAX Runtime"', installer)
         self.assertIn('Filename: "{app}\\{#RuntimeExe}"; Flags: nowait runhidden', installer)
