@@ -81,17 +81,60 @@ def postgres_safe_result(value: Any) -> Any:
     return value
 
 
-def canonical_result(result: ActionResult) -> tuple[dict[str, Any], str]:
-    body = {
-        "ok": bool(result.ok),
-        "summary": str(result.summary),
-        "data": result.data if isinstance(result.data, dict) else {},
+# The local terminal outbox allows at most 1 MiB for its whole JSON envelope.
+# Leave ample space for base64 expansion, execution context, and recovery
+# metadata; never try to persist a multi-megabyte action result.
+_MAX_CANONICAL_RESULT_BYTES = 256 * 1024
+
+
+class _CanonicalResultOversized(ValueError):
+    pass
+
+
+def _bounded_result_bytes(body: dict[str, Any]) -> bytes:
+    # iterencode lets us stop before constructing the entire JSON document.
+    # JSON must reject NaN/Infinity rather than emit invalid protocol data.
+    encoder = json.JSONEncoder(
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        allow_nan=False,
+    )
+    chunks: list[bytes] = []
+    byte_count = 0
+    for fragment in encoder.iterencode(body):
+        part = fragment.encode("utf-8")
+        byte_count += len(part)
+        if byte_count > _MAX_CANONICAL_RESULT_BYTES:
+            raise _CanonicalResultOversized("terminal action result too large")
+        chunks.append(part)
+    return b"".join(chunks)
+
+
+def _unavailable_result(reason: str) -> dict[str, Any]:
+    # The side effect might already have happened. Do not invent an action
+    # failure, claim the output was delivered, or echo unknown sensitive data.
+    return {
+        "ok": False,
+        "summary": "Action result unavailable; execution outcome must not be inferred.",
+        "data": {"reason": reason, "execution_effect": "unknown"},
     }
-    body = postgres_safe_result(body)
-    encoded = json.dumps(
-        body,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
+
+
+def canonical_result(result: ActionResult) -> tuple[dict[str, Any], str]:
+    try:
+        body = {
+            "ok": bool(result.ok),
+            "summary": str(result.summary),
+            "data": result.data if isinstance(result.data, dict) else {},
+        }
+        body = postgres_safe_result(body)
+        encoded = _bounded_result_bytes(body)
+    except _CanonicalResultOversized:
+        body = _unavailable_result("result_too_large")
+        encoded = _bounded_result_bytes(body)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        # Non-JSON types, circular objects and invalid JSON floats must not
+        # strand a completed job without its terminal report. Never serialize
+        # or log any part of the offending result in this failure receipt.
+        body = _unavailable_result("result_invalid")
+        encoded = _bounded_result_bytes(body)
     return body, hashlib.sha256(encoded).hexdigest()
