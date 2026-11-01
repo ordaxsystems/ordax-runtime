@@ -16,12 +16,12 @@ on:
       # This installer pip-installs the exact Runtime project source, not a
       # hand-picked set of entrypoints. Keep these package roots byte-for-byte
       # aligned with tool.setuptools.packages.find.include in pyproject.toml.
-      - "mcp_blender_unity/**"
-      - "ordax_core/**"
-      - "ordax_studio/**"
-      - "ordax_connector/**"
-      - "ordax_dev_agent/**"
-      - "ordax_device_agent/**"
+      - "mcp_blender_unity*/**"
+      - "ordax_core*/**"
+      - "ordax_studio*/**"
+      - "ordax_connector*/**"
+      - "ordax_dev_agent*/**"
+      - "ordax_device_agent*/**"
       - "scripts/windows/resolve-control-plane-provenance.py"
       - "control-plane-source.lock.json"
       - "pyproject.toml"
