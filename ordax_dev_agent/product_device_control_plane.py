@@ -462,10 +462,13 @@ class ProductDeviceControlPlane:
         report = {
             **self._execution_context(job),
             "report_id": str(uuid.uuid4()),
-            "status": "succeeded" if result.ok else "failed",
+            # The bounded canonicalizer can downgrade an undeliverable result
+            # to a non-success receipt, even if the action originally returned
+            # ok=True. Never report a success while its output is unavailable.
+            "status": "succeeded" if body["ok"] else "failed",
             "result_canonical_b64": base64.b64encode(raw).decode("ascii"),
             "result_sha256": digest,
-            "error_code": None if result.ok else "device_agent_action_failed",
+            "error_code": None if body["ok"] else "device_agent_action_failed",
         }
         outbox_path = self._terminal_outbox.persist(report)
         for attempt in range(3):
