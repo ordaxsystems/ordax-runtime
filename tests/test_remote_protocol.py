@@ -53,6 +53,46 @@ class ProviderNeutralRemoteProtocolTests(unittest.TestCase):
         self.assertEqual(body["data"]["transport"], "provider-neutral")
         self.assertEqual(len(digest), 64)
 
+    def test_large_success_result_is_not_falsely_reported_as_success(self) -> None:
+        body, digest = canonical_result(
+            ActionResult(True, "execution had effects", {"output": "x" * 300_000})
+        )
+        self.assertIs(body["ok"], False)
+        self.assertEqual(body["data"], {
+            "reason": "result_too_large", "execution_effect": "unknown",
+        })
+        self.assertNotIn("execution had effects", json.dumps(body))
+        wire = json.dumps(body, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False).encode("utf-8")
+        self.assertLess(len(wire), 1024)
+        self.assertEqual(digest, hashlib.sha256(wire).hexdigest())
+
+    def test_invalid_json_result_emits_non_success_without_sensitive_values(self) -> None:
+        cyclic = {}
+        cyclic["self"] = cyclic
+        for value in ({"password": object()}, cyclic, {"n": float("nan")},
+                      {"n": float("inf")}):
+            with self.subTest(kind=type(value).__name__):
+                body, digest = canonical_result(
+                    ActionResult(True, "succeeded", value)
+                )
+                self.assertEqual(body["data"]["reason"], "result_invalid")
+                self.assertIs(body["ok"], False)
+                self.assertEqual(len(digest), 64)
+                self.assertNotIn("password", json.dumps(body))
+                self.assertNotIn("nan", json.dumps(body).lower())
+
+    def test_bounded_result_preserves_valid_utf8_nul_and_hash_identity(self) -> None:
+        body, digest = canonical_result(ActionResult(
+            True, "concluído\x00", {"descrição": "✅", "nested": ["x\x00", {"ok": True}]}
+        ))
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["summary"], r"concluído\u0000")
+        self.assertEqual(body["data"]["nested"][0], r"x\u0000")
+        wire = json.dumps(body, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False).encode("utf-8")
+        self.assertEqual(digest, hashlib.sha256(wire).hexdigest())
+
     def test_digest_mismatch_fails_before_dispatch(self) -> None:
         raw = b"{}"
         row = {

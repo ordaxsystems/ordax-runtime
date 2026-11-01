@@ -339,6 +339,43 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             self.assertEqual(report["agent_version"], DEVICE_AGENT_VERSION)
             plane.http.close()
 
+    def test_large_completed_action_reports_bounded_failure_and_no_duplicate_effect(self):
+        seen = []
+        def handler(request):
+            seen.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(200, json={"ok": True})
+        with tempfile.TemporaryDirectory() as raw_dir:
+            plane = self.plane(Path(raw_dir), handler)
+            from ordax_dev_agent.models import AgentJob
+            job = AgentJob(
+                id="33333333-3333-4333-8333-333333333333",
+                action=PRODUCT_REMOTE_CAPABILITY, payload={},
+                lease_token="66666666-6666-4666-8666-666666666666",
+                effect_id="44444444-4444-4444-8444-444444444444",
+                attempt_id="55555555-5555-4555-8555-555555555555",
+                execution_epoch=1, agent_instance_id=plane.agent_instance_id,
+                boot_id=plane.boot_id,
+            )
+            plane._jobs[job.id] = job
+            plane.complete(job, ActionResult(True, "effect may exist", {
+                "output": "SECRET_" + "x" * 300_000,
+            }))
+            self.assertEqual(len(seen), 1)
+            self.assertEqual(seen[0][0], "/v3/device/transport/report")
+            report = seen[0][1]
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["error_code"], "device_agent_action_failed")
+            raw = base64.b64decode(report["result_canonical_b64"], validate=True)
+            self.assertLess(len(raw), 1024)
+            self.assertNotIn(b"SECRET_", raw)
+            self.assertEqual(report["result_sha256"], hashlib.sha256(raw).hexdigest())
+            body = json.loads(raw)
+            self.assertFalse(body["ok"])
+            self.assertEqual(body["data"]["reason"], "result_too_large")
+            self.assertEqual(plane._terminal_outbox.pending(), [])
+            self.assertNotIn(job.id, plane._jobs)
+            plane.http.close()
+
     def test_recovery_replays_persisted_execution_version_not_current_process_version(self):
         seen = []
         def handler(request):

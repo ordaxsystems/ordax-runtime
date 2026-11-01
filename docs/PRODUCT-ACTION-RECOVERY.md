@@ -126,6 +126,39 @@ OrdaX OS defines `ordax.device-action-result/1` and `ordax.studio-runtime/3` in 
 
 The current Product MCP status tool accepts only `request_id`; its Platform response does not supply the full v3 binding envelope. Therefore this API is not itself a conforming v3 `getActionResult(request)` port. Do not synthesize the missing binding from caller JSON or treat a request ID as authorization. A future end-to-end adapter requires a canonical request-to-Product action mapping and authenticated scope contract across the respective owners.
 
+## Limite do resultado terminal do Device Agent (01/11/2026)
+
+O `canonical_result` do Runtime é a única fonte da serialização
+canônica de `ActionResult` para `ProductDeviceControlPlane.complete`.
+O outbox local conserva um limite físico de **1 MiB por envelope**
+(incluindo o resultado em Base64, proveniência e metadados). Um resultado
+JSON canônico agora fica limitado a **256 KiB UTF-8**, preservando
+margem segura para essa expansão e para os campos obrigatórios.
+
+Um resultado grande demais, circular, com tipo incompatível ou número
+não finito não é simplesmente descartado nem registrado como sucesso:
+gera um **único recibo de falha limitado**, com
+`data.reason=result_too_large|result_invalid` e
+`execution_effect=unknown`. A mensagem não repete conteúdo
+potencialmente confidencial, não promete que a ação original falhou ou
+que seus efeitos foram revertidos. O digest SHA-256 é calculado
+somente sobre os bytes realmente persistidos/transmitidos; a
+`status` terminal deriva do `ok` do recibo canonizado, não do
+`ok` original que talvez tenha tido efeitos sem saída entregável.
+
+Não há segunda execução automática, cópia truncada que pareça resultado
+completo, nova autorização, novo endpoint ou mudança de política Product.
+A recuperação reutiliza o recibo já persistido, a mesma ID de job e os
+fences existentes. O recebimento/autorização continua exclusivamente da
+Platform. A salvaguarda mantém a sanitização anterior de caracteres
+NUL incompatíveis com PostgreSQL JSONB.
+
+Os testes incluem saída maior que o limite, objetos circulares, floats
+inválidos, Unicode/NUL, integridade do SHA-256, ausência de vazamento
+de conteúdos e entrega de **um único POST** de relatório com
+`status=failed` quando a ação originalmente sinalizou sucesso, mas
+seu resultado não pôde ser entregue.
+
 ## Atomic terminal receipt under concurrent writers (01/11/2026)
 
 The Runtime persists terminal reports before contacting the Product Control
