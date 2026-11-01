@@ -78,6 +78,25 @@ If rollback itself cannot be proven healthy, the terminal state is:
 
 Pre-execution policy or integrity failures become `blocked`; a failed handoff becomes `handoff-failed`. None of those states are reported as update success.
 
+On Windows, the existing PowerShell executor now applies each journal phase
+transition by writing a new same-directory file, flushing it to stable storage,
+then using the Windows filesystem's atomic file-replacement operation.
+It never uses separate delete/move steps over `transaction.json`, accepts a
+pre-existing `.next` fragment as authority, or restarts a terminal phase.
+Only the canonical phase transitions listed above, plus explicit
+`installing-target -> rolling-back/recovery-required`, are permitted. The
+isolated Windows test `scripts/windows/test-updater-journal-atomicity.ps1`
+exercises success, rollback, recovery-required, invalid replay and stale
+fragment behavior without touching a real installation.
+
+This is a **journal durability and fail-closed interruption proof**, not an
+attestation of the original Owner/Dev installation, a restoration of the
+legacy 0.15.6 bytes, or a real on-device recovery test. Issue #149 remains
+blocked until those independent proofs exist. No development install is
+authorized by this change and the production Authenticode signer policy is
+unchanged.
+
+
 ## Current state — 2026-10-16 (historical record)
 
 - In-place installer upgrade: implemented and tested in CI and on the authorized Windows device.

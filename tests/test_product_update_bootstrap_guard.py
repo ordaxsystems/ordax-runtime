@@ -45,6 +45,18 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ORDAX_INSTALLER_COMPLETION_CONTRACT=PASS", result.stdout)
 
+    def test_windows_journal_replacement_is_atomic_and_non_replayable(self) -> None:
+        # Execute only the extracted canonical journal writer in isolated
+        # temporary storage; neither a real installer nor Owner state is used.
+        script = ROOT / "scripts" / "windows" / "test-updater-journal-atomicity.ps1"
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            capture_output=True, text=True, timeout=40, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("ORDAX_UPDATE_DURABLE_JOURNAL_CONTRACT=PASS", result.stdout)
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -196,7 +208,14 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
 
     def test_forged_local_owner_authority_is_refused(self):
         self.journal["authority"] = "model-generated-owner"
-        self.assertIn("handoff authority, journal identity or phase", self.invoke())
+        # A journal that already claims a forged authority must be retained
+        # verbatim as evidence, not rewritten as if owned by this updater.
+        self.assertEqual(self.invoke(expected_phase="handoff-launching"), "")
+        persisted = json.loads(
+            (self.txroot / "transaction.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(persisted["authority"], "model-generated-owner")
+        self.assertEqual(persisted["phase"], "handoff-launching")
 
     def test_wrong_rollback_checksum_is_refused_before_installer_execution(self):
         self.journal["rollback"]["installerSha256"] = "c" * 64

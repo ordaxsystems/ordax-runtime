@@ -32,6 +32,8 @@ jobs:
             'scripts/windows/get-locked-embedded-python.ps1',
             'scripts/windows/test-ordax-studio-install-smoke.ps1',
             'scripts/windows/assert-runtime-package-capabilities.ps1',
+            'scripts/windows/apply-ordax-production-update.ps1',
+            'scripts/windows/test-updater-journal-atomicity.ps1',
             'scripts/windows/sign-release-authenticode.ps1',
             'scripts/windows/assert-release-authenticode.ps1',
             'scripts/windows/assert-release-provenance.ps1',
