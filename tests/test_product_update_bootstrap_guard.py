@@ -208,7 +208,12 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
 
     def test_forged_local_owner_authority_is_refused(self):
         self.journal["authority"] = "model-generated-owner"
-        self.assertIn("handoff authority, journal identity or phase", self.invoke())
+        # A journal that already claims a forged authority must be retained
+        # verbatim as evidence, not rewritten as if owned by this updater.
+        self.assertIn(
+            "handoff authority, journal identity or phase",
+            self.invoke(expected_phase="handoff-launching"),
+        )
 
     def test_wrong_rollback_checksum_is_refused_before_installer_execution(self):
         self.journal["rollback"]["installerSha256"] = "c" * 64
