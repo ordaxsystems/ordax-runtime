@@ -105,3 +105,24 @@ O heartbeat bem-sucedido restaura `ready/connected` e a fase ociosa
 apenas quando apropriado; não sobrescreve `busy`, `stopping`,
 `local-disabled` nem `credential-recovery-required`. O recibo de
 heartbeat não substitui autorização Owner ou E2E MCP de ação.
+
+## Diagnóstico somente de leitura da sessão Central (01/11/2026)
+
+Em `/status`, `runtime.central_session` apresenta apenas
+`checked`, `last_confirmation_observed` e `last_error_code`,
+ou `null` antes da criação do Control Plane. São observações do cliente
+de sessão Central **já atualizado pelo heartbeat**; a consulta ao status
+não chama a rede, não cria desafio, não outorga grants nem atesta execução
+MCP. Uma confirmação observada é histórica e não prova vínculo vigente.
+
+Conforme o contrato proprietário da Platform, `401` significa falha
+de credencial do Device; `403` por `central_device_grant_revoked` ou
+`central_session_revoked` indica bloqueio de grant/sessão **sem exigir
+nova matrícula do dispositivo**. Erros inesperados são resumidos ao código
+seguro `product_central_session_unavailable`. Um HTTP 401 mantém essa
+classificação mesmo com corpo não JSON.
+
+O objeto público nunca contém challenge ID, marcador de sessão, cliente,
+UUID, credencial ou mensagem arbitrária da autoridade. O endpoint local
+permanece protegido pelas regras loopback e não substitui o fluxo OAuth
+Owner nem a verificação de ação MCP real.

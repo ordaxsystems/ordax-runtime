@@ -22,6 +22,17 @@ _UUID = re.compile(
     re.IGNORECASE,
 )
 _TOKEN = re.compile(r"[!-~]{32,512}\Z")
+_PUBLIC_CENTRAL_ERRORS = frozenset({
+    "product_identity_reenrollment_required",
+    "product_central_session_unavailable",
+    "product_central_session_response_invalid",
+    "product_central_session_response_oversized",
+    "product_central_session_receipt_mismatch",
+    "central_session_challenge_invalid",
+    "central_session_challenge_expired",
+    "central_device_grant_revoked",
+    "central_session_revoked",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +42,17 @@ class ProductCentralSessionStatus:
     challenge_id: str | None
     last_error: str | None
     last_success_at: float | None
+
+    def public_observation(self) -> dict[str, bool | str | None]:
+        """A bounded local diagnosis, not proof of a current remote grant."""
+        code = self.last_error
+        if code is not None and code not in _PUBLIC_CENTRAL_ERRORS:
+            code = "product_central_session_unavailable"
+        return {
+            "checked": self.checked is True,
+            "last_confirmation_observed": self.confirmed is True,
+            "last_error_code": code,
+        }
 
 
 class ProductCentralSessionClient:
@@ -121,9 +143,9 @@ class ProductCentralSessionClient:
                 "/v3/product/device/central-session",
                 lambda url: self._http.get(url, headers=self._headers(credential)),
             )
-            payload = self._json(polled)
-            if polled.status_code in {401, 403}:
+            if polled.status_code == 401:
                 raise RuntimeError("product_identity_reenrollment_required")
+            payload = self._json(polled)
             if polled.status_code != 200 or payload.get("ok") is not True:
                 raise RuntimeError("product_central_session_unavailable")
             if payload.get("pending") is False:
@@ -150,9 +172,14 @@ class ProductCentralSessionClient:
                     json={"challenge_id": challenge_id},
                 ),
             )
-            receipt = self._json(confirmed)
-            if confirmed.status_code in {401, 403}:
+            if confirmed.status_code == 401:
                 raise RuntimeError("product_identity_reenrollment_required")
+            receipt = self._json(confirmed)
+            if confirmed.status_code == 403:
+                code = receipt.get("error")
+                if isinstance(code, str) and code in {"central_device_grant_revoked", "central_session_revoked"}:
+                    raise RuntimeError(code)
+                raise RuntimeError("product_central_session_unavailable")
             if confirmed.status_code not in {200, 202} or receipt.get("ok") is not True:
                 code = receipt.get("error")
                 if code in {
@@ -169,12 +196,12 @@ class ProductCentralSessionClient:
             )
         except (httpx.HTTPError, RuntimeError, ValueError) as exc:
             code = str(exc)
-            if not code.startswith("product_") and not code.startswith("central_session_"):
+            if code not in _PUBLIC_CENTRAL_ERRORS:
                 code = "product_central_session_unavailable"
             self._status = ProductCentralSessionStatus(
                 True,
                 False,
-                self._status.challenge_id,
+                None,
                 code,
                 self._status.last_success_at,
             )

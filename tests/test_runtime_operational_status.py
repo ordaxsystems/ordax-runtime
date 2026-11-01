@@ -2,6 +2,7 @@
 
 import unittest
 
+from ordax_dev_agent.product_central_session import ProductCentralSessionStatus
 from ordax_dev_agent.main import (
     _mark_transport_healthy,
     _mark_transport_delivery_error,
@@ -49,6 +50,33 @@ class RuntimeOperationalStatusTests(unittest.TestCase):
         self.assertTrue(result["product_dispatch_ready"])
         self.assertEqual("ready", result["product_readiness_code"])
         self.assertNotIn("product_dispatch_ready", runtime)
+
+    def test_central_session_diagnostics_does_not_expose_challenge_or_grant(self):
+        session = ProductCentralSessionStatus(
+            checked=True, confirmed=False,
+            challenge_id="33333333-3333-4333-8333-333333333333",
+            last_error="central_device_grant_revoked", last_success_at=123.0,
+        )
+        runtime = self._ready_runtime()
+        snapshot = _runtime_status_snapshot(
+            runtime, action_registry_ready=True,
+            remote_control_configured=True, now=100.0,
+            central_session_status=session,
+        )
+        self.assertTrue(snapshot["product_dispatch_ready"])
+        self.assertEqual(snapshot["central_session"], {
+            "checked": True,
+            "last_confirmation_observed": False,
+            "last_error_code": "central_device_grant_revoked",
+        })
+        self.assertNotIn("challenge_id", snapshot["central_session"])
+        self.assertNotIn("last_success_at", snapshot["central_session"])
+        self.assertNotIn("central_session", runtime)
+        early = _runtime_status_snapshot(
+            runtime, action_registry_ready=False,
+            remote_control_configured=False, now=100.0,
+        )
+        self.assertIsNone(early["central_session"])
 
     def test_liveness_signals_do_not_substitute_for_product_readiness(self):
         cases = (

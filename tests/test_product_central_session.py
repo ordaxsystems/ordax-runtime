@@ -5,7 +5,9 @@ import unittest
 
 import httpx
 
-from ordax_dev_agent.product_central_session import ProductCentralSessionClient
+from ordax_dev_agent.product_central_session import (
+    ProductCentralSessionClient, ProductCentralSessionStatus,
+)
 
 
 DEVICE_ID = "22222222-2222-4222-8222-222222222222"
@@ -104,6 +106,75 @@ class ProductCentralSessionClientTests(unittest.TestCase):
         client = self.make_client(token, handler)
         status = client.tick(now=10.0)
         self.assertEqual(status.last_error, "product_identity_reenrollment_required")
+
+    def test_revoked_central_grant_does_not_require_device_reenrollment(self):
+        for error_code in ("central_device_grant_revoked", "central_session_revoked"):
+            with self.subTest(error_code=error_code):
+                calls = []
+                def handler(request: httpx.Request) -> httpx.Response:
+                    calls.append(request.method)
+                    if request.method == "GET":
+                        return httpx.Response(200, json={
+                            "ok": True, "pending": True, "challenge_id": CHALLENGE_ID,
+                        })
+                    return httpx.Response(403, json={"ok": False, "error": error_code})
+                status = self.make_client(["a" * 64], handler).tick(now=10.0)
+                self.assertEqual(calls, ["GET", "POST"])
+                self.assertEqual(status.last_error, error_code)
+                self.assertFalse(status.confirmed)
+                self.assertIsNone(status.challenge_id)
+                public = status.public_observation()
+                self.assertEqual(public["last_error_code"], error_code)
+                self.assertNotIn(CHALLENGE_ID, json.dumps(public))
+
+    def test_nonjson_401_is_device_auth_denial_before_body_parsing(self):
+        for failure_method in ("GET", "POST"):
+            with self.subTest(failure_method=failure_method):
+                def handler(request: httpx.Request) -> httpx.Response:
+                    if request.method == "GET" and failure_method == "POST":
+                        return httpx.Response(200, json={
+                            "ok": True, "pending": True, "challenge_id": CHALLENGE_ID,
+                        })
+                    return httpx.Response(401, content=b"not valid JSON")
+                status = self.make_client(["a" * 64], handler).tick(now=10.0)
+                self.assertEqual(status.last_error, "product_identity_reenrollment_required")
+                self.assertFalse(status.confirmed)
+                self.assertIsNone(status.challenge_id)
+
+    def test_unknown_remote_denials_and_challenge_are_not_exposed(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, json={
+                    "ok": True, "pending": True, "challenge_id": CHALLENGE_ID,
+                })
+            return httpx.Response(403, json={
+                "ok": False, "error": "SECRET_PRIVATE_AUTHORITY_MESSAGE",
+            })
+        status = self.make_client(["a" * 64], handler).tick(now=10.0)
+        self.assertEqual(status.last_error, "product_central_session_unavailable")
+        self.assertIsNone(status.challenge_id)
+        observed = ProductCentralSessionStatus(
+            True, False, "not-public", "SECRET_PRIVATE_AUTHORITY_MESSAGE", None,
+        ).public_observation()
+        self.assertEqual(observed["last_error_code"], "product_central_session_unavailable")
+        self.assertNotIn("not-public", json.dumps(observed))
+        self.assertNotIn("SECRET_PRIVATE_AUTHORITY_MESSAGE", json.dumps(observed))
+
+    def test_malformed_nonstring_revocation_error_fails_closed(self):
+        for bad_error in ([], {"private": "not-public"}):
+            with self.subTest(error=bad_error):
+                def handler(request: httpx.Request) -> httpx.Response:
+                    if request.method == "GET":
+                        return httpx.Response(200, json={
+                            "ok": True, "pending": True, "challenge_id": CHALLENGE_ID,
+                        })
+                    return httpx.Response(403, json={
+                        "ok": False, "error": bad_error,
+                    })
+                status = self.make_client(["a" * 64], handler).tick(now=10.0)
+                self.assertFalse(status.confirmed)
+                self.assertEqual(status.last_error, "product_central_session_unavailable")
+                self.assertIsNone(status.challenge_id)
 
     def test_cadence_reuses_existing_heartbeat_without_second_scheduler(self):
         token = ["a" * 64]
