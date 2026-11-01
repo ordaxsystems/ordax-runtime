@@ -137,7 +137,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         )
         packages = package_config["tool"]["setuptools"]["packages"]["find"]["include"]
         self.assertTrue(packages and all(p.endswith("*") for p in packages))
-        expected_roots = {f'      - "{p[:-1]}/**"' for p in packages}
+        expected_roots = {f'      - "{p}/**"' for p in packages}
         trigger_block = workflow.split(
             "paths: &mcp_candidate_paths", 1
         )[1].split("  # Only package-relevant changes", 1)[0]
@@ -153,7 +153,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             "ordax_dev_agent/models.py",
         ):
             root = changed_input.split("/", 1)[0]
-            self.assertIn(f'      - "{root}/**"', trigger_block)
+            self.assertIn(f'      - "{root}*/**"', trigger_block)
         self.assertIn(
             '      - "scripts/windows/resolve-control-plane-provenance.py"',
             trigger_block,
