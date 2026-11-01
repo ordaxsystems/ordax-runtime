@@ -25,6 +25,55 @@ _SESSION_PATH = "/v3/product/device/central-session"
 _T = TypeVar("_T")
 
 
+
+def inspect_pinned_https_ingress(
+    *, client: httpx.Client | None = None,
+) -> dict[str, object]:
+    """Observe HTTPS reachability only; NEVER claim MCP, session or grants.
+
+    Explicitly invoked by the Windows first-run diagnostic. Two safe GETs,
+    no Owner credential, no device registration or state mutation, and no
+    automatic retries. A 401/404/405 response means that HTTPS responded,
+    not that the Product service or its authentication is ready.
+    """
+    own_client = client is None
+    if own_client:
+        client = httpx.Client(
+            timeout=httpx.Timeout(5.0, connect=3.0),
+            follow_redirects=False,
+        )
+    if client is None:
+        raise RuntimeError("HTTPS inspection client was not initialized")
+    result: dict[str, object] = {
+        "schema": "ordax.product-mcp-https-observation/1",
+        "primary": {},
+        "restricted": {},
+        "mcpReady": False,
+        "authenticated": False,
+        "grantsAuthorized": False,
+    }
+    try:
+        for key, origin in (("primary", _PRIMARY), ("restricted", _RESTRICTED)):
+            try:
+                response = client.get(
+                    origin + "/v3/device/setup",
+                    headers={"Accept": "application/json"},
+                )
+                result[key] = {
+                    "transport": "https_responded",
+                    "httpStatus": response.status_code,
+                }
+            except (httpx.RequestError, ValueError):
+                result[key] = {
+                    "transport": "unavailable",
+                    "httpStatus": None,
+                }
+    finally:
+        if own_client:
+            client.close()
+    return result
+
+
 class TrustedProductIngress:
     """Use only two pinned TLS origins, retaining the same request/fencing ID."""
 

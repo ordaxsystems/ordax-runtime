@@ -6,6 +6,7 @@ The unsigned validation candidate must not be offered as a public release.
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from collections.abc import Callable
 from typing import Any
@@ -13,6 +14,7 @@ from typing import Any
 from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code
 from ordax_dev_agent.device_setup import SetupError
 from ordax_dev_agent.owner_device_connect_cli import enroll_owner_device
+from ordax_dev_agent.product_ingress import inspect_pinned_https_ingress
 
 _TITLE = "OrdaX MCP"
 _MB_YESNO = 0x0004
@@ -99,9 +101,69 @@ def connect_with_dialogs(
     return 0
 
 
-def main() -> int:
+def _format_ingress_observation(label: str, record: object) -> str:
+    if not isinstance(record, dict):
+        raise ValueError("Untrusted ingress diagnostic shape")
+    if set(record) != {"transport", "httpStatus"}:
+        raise ValueError("Untrusted ingress diagnostic keys")
+    transport, status = record["transport"], record["httpStatus"]
+    if transport == "https_responded" and type(status) is int and 100 <= status <= 599:
+        return f"{label}: HTTPS respondeu (HTTP {status})."
+    if transport == "unavailable" and status is None:
+        return f"{label}: sem resposta HTTPS."
+    raise ValueError("Untrusted ingress diagnostic result")
+
+
+def diagnose_with_dialogs(
+    *,
+    show: Callable[[str, int], int] = _show_message,
+    inspect: Callable[[], dict[str, object]] = inspect_pinned_https_ingress,
+) -> int:
+    """User-invoked diagnostics only; never mutate identity or suggest grants."""
+    try:
+        result = inspect()
+        if not isinstance(result, dict) or set(result) != {
+            "schema", "primary", "restricted",
+            "mcpReady", "authenticated", "grantsAuthorized",
+        } or result["schema"] != "ordax.product-mcp-https-observation/1" or any(
+            result[key] is not False
+            for key in ("mcpReady", "authenticated", "grantsAuthorized")
+        ):
+            raise ValueError("Untrusted ingress diagnostic authority")
+        primary = _format_ingress_observation("Servidor principal", result["primary"])
+        restricted = _format_ingress_observation("Acesso de contingencia", result["restricted"])
+    except Exception:
+        show(
+            "Nao foi possivel verificar a conectividade. Tente novamente."
+            "\nNenhum dispositivo ou permissao foi alterado.",
+            _MB_ICONERROR,
+        )
+        return 1
+
+    show(
+        "Diagnostico de rede do OrdaX MCP\n\n"
+        + primary + "\n" + restricted + "\n\n"
+        "Esta verificacao apenas observa respostas HTTPS. "
+        "Ela nao comprova cadastro, login, prontidao do MCP ou autorizacao "
+        "para controlar o computador.\n\n"
+        "Se o servidor principal falhar, consulte sua conexao de rede "
+        "antes de tentar conectar o dispositivo.",
+        _MB_ICONINFORMATION,
+    )
+    return 0 if result["primary"]["transport"] == "https_responded" else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="ordax-mcp-connect")
+    parser.add_argument(
+        "--verificar-rede", action="store_true",
+        help="verificar somente HTTPS sem autorizar ou conectar dispositivos",
+    )
+    args = parser.parse_args(argv)
     if sys.platform != "win32":
         return 1
+    if args.verificar_rede:
+        return diagnose_with_dialogs()
     return connect_with_dialogs()
 
 

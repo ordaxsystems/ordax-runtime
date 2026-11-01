@@ -23,6 +23,11 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn('Name: "{group}\\\\Conectar dispositivo"', installer)
         self.assertIn('Filename: "{app}\\\\runtime\\\\pythonw.exe"', installer)
         self.assertIn('Parameters: "-m ordax_dev_agent.owner_device_connect_gui"', installer)
+        self.assertIn('Name: "{group}\\\\Verificar conexão"', installer)
+        self.assertIn(
+            'Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"',
+            installer,
+        )
         self.assertIn("Private Windows GUI host missing", builder)
         self.assertIn("ordax_dev_agent.owner_device_connect_gui", builder)
         self.assertNotIn("irm ", installer)
