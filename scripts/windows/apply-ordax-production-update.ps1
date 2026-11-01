@@ -126,6 +126,7 @@ function Write-TransactionPhase {
         'transaction.' + [guid]::NewGuid().ToString('N') + '.next'
     )
     try {
+        $handle = $null
         $handle = [IO.FileStream]::new(
             $pending, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
             [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough
@@ -134,7 +135,7 @@ function Write-TransactionPhase {
             $handle.Write($payload, 0, $payload.Length)
             $handle.Flush($true)
         } finally {
-            $handle.Dispose()
+            if ($null -ne $handle) { $handle.Dispose() }
         }
         # File.Replace is atomic on the same Windows volume and retains a
         # complete journal on either side of the transition; no backup copy
