@@ -76,42 +76,51 @@ approved_supersession() {
   local branch="$1" branch_sha="$2"
   local policy_file
   policy_file="$(cd "$(dirname "$0")/.." && pwd -P)/docs/approved-branch-supersessions.json"
-  python3 - "$policy_file" "$repo" "$branch" "$branch_sha" <<'PY'
+  python3 -I - "$policy_file" "$repo" "$branch" "$branch_sha" <<'PY'
 import json
 import re
 import sys
 
 policy_file, repository, branch, source_sha = sys.argv[1:]
+
+def require(condition):
+    if not condition:
+        raise ValueError("Invalid approved supersession evidence")
+
 try:
     with open(policy_file, encoding="utf-8") as handle:
         policy = json.load(handle)
+    require(type(policy) is dict)
+    require(set(policy) == {"schema", "repository", "retirements"})
+    require(policy["schema"] == "ordax.branch-supersession/1")
+    require(policy["repository"] == repository == "ordaxsystems/ordax-runtime")
     entries = policy["retirements"]
-    assert type(policy) is dict
-    assert set(policy) == {"schema", "repository", "retirements"}
-    assert policy["schema"] == "ordax.branch-supersession/1"
-    assert policy["repository"] == repository == "ordaxsystems/ordax-runtime"
-    assert type(entries) is list and 0 < len(entries) <= 20
+    require(type(entries) is list and 0 < len(entries) <= 20)
     names = []
     for item in entries:
-        assert type(item) is dict
-        assert set(item) == {
+        require(type(item) is dict)
+        require(set(item) == {
             "branch", "source_sha", "canonical_commit", "proof_test", "reason"
-        }
-        assert type(item["branch"]) is str
-        assert re.fullmatch(
-            r"(feat|fix|refactor|ci|integration|codex|docs)/[A-Za-z0-9._/-]+",
-            item["branch"],
+        })
+        name = item["branch"]
+        require(type(name) is str)
+        require(re.fullmatch(
+            r"(feat|fix|refactor|ci|integration|codex|docs)/[A-Za-z0-9._/-]+", name
+        ) is not None)
+        require(".." not in name)
+        for key in ("source_sha", "canonical_commit"):
+            require(type(item[key]) is str)
+            require(re.fullmatch(r"[0-9a-f]{40}", item[key]) is not None)
+        require(type(item["proof_test"]) is str)
+        require(re.fullmatch(
+            r"tests\.test_[A-Za-z0-9_]+", item["proof_test"]
+        ) is not None)
+        require(
+            type(item["reason"]) is str
+            and 32 <= len(item["reason"]) <= 1000
         )
-        assert ".." not in item["branch"]
-        assert type(item["source_sha"]) is str
-        assert re.fullmatch("[0-9a-f]{40}", item["source_sha"])
-        assert type(item["canonical_commit"]) is str
-        assert re.fullmatch("[0-9a-f]{40}", item["canonical_commit"])
-        assert type(item["proof_test"]) is str
-        assert re.fullmatch(r"tests\.test_[A-Za-z0-9_]+", item["proof_test"])
-        assert type(item["reason"]) is str and 32 <= len(item["reason"]) <= 1000
-        names.append(item["branch"])
-    assert len(names) == len(set(names))
+        names.append(name)
+    require(len(names) == len(set(names)))
     hits = [
         item for item in entries
         if item["branch"] == branch and item["source_sha"] == source_sha
@@ -119,7 +128,7 @@ try:
     if len(hits) != 1:
         sys.exit(1)
     print(hits[0]["canonical_commit"])
-except (OSError, ValueError, KeyError, AssertionError, TypeError):
+except (OSError, ValueError, KeyError, TypeError):
     sys.exit(2)
 PY
 }
