@@ -184,7 +184,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
 
     def test_product_build_bundles_private_runtime_and_identical_legacy_alias(self) -> None:
         build = (ROOT / "scripts" / "windows" / "build-ordax-studio-product.ps1").read_text(encoding="utf-8")
-        self.assertIn("python-$PythonVersion-embed-amd64.zip", build)
+        self.assertIn("get-locked-embedded-python.ps1", build)
         self.assertIn("Lib\\site-packages", build)
         self.assertIn("pip install", build)
         self.assertIn("ORDAX_STUDIO_SETUP_SHA256", build)
