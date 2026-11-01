@@ -13,15 +13,16 @@ on:
       - "scripts/windows/assert-runtime-package-capabilities.ps1"
       - "scripts/windows/ordax-upgrade-quiesce.ps1"
       - "tests/test_windows_mcp_distribution.py"
-      - "tests/test_owner_device_connect_gui.py"
-      - "ordax_dev_agent/owner_device_connect_gui.py"
-      - "ordax_dev_agent/owner_device_connect_cli.py"
-      - "ordax_dev_agent/device_setup.py"
-      - "ordax_dev_agent/config.py"
-      - "ordax_dev_agent/desktop_host_main.py"
-      - "ordax_dev_agent/product_ingress.py"
-      - "tests/test_product_ingress_failover.py"
-      - "ordax_core/owner_oauth.py"
+      # This installer pip-installs the exact Runtime project source, not a
+      # hand-picked set of entrypoints. Keep these package roots byte-for-byte
+      # aligned with tool.setuptools.packages.find.include in pyproject.toml.
+      - "mcp_blender_unity/**"
+      - "ordax_core/**"
+      - "ordax_studio/**"
+      - "ordax_connector/**"
+      - "ordax_dev_agent/**"
+      - "ordax_device_agent/**"
+      - "scripts/windows/resolve-control-plane-provenance.py"
       - "control-plane-source.lock.json"
       - "pyproject.toml"
   # Only package-relevant changes in the canonical main get a fresh
