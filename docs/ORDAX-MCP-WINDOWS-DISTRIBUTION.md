@@ -139,6 +139,38 @@ Owner OAuth, presença, `capability_digest`, grants e ações reais
 autorizadas. Não se declara conexão concluída ou release homologada
 enquanto esses gates permanecerem abertos.
 
+### Diagnóstico HTTPS no menu Iniciar — sem autorização
+
+A pasta **OrdaX MCP** do menu Iniciar oferece duas ações separadas,
+construídas a partir do mesmo `pythonw.exe` privado e do mesmo módulo
+`owner_device_connect_gui`:
+
+- **Conectar dispositivo**: solicita consentimento do proprietário e usa
+  o fluxo canônico Owner OAuth, cadastro e grants independentes.
+- **Verificar conexão**: somente quando clicada, executa dois
+  `GET /v3/device/setup` sem token, cookie, dispositivo ou corpo, usando
+  HTTPS verificado nos hosts **fixos** já previstos no seletor canônico:
+  `mcp.ordax.com.br` e
+  `ordax-mcp.ordaxsystems.workers.dev`. Não usa uma nova origem nem
+  modifica a seleção de ingress do Runtime.
+
+O resultado informa individualmente se houve **resposta HTTPS**
+(incluindo HTTP 401, 404, 405 ou 503) ou falha de transporte. Uma
+resposta HTTP, inclusive 200, **nunca** implica confirmação da
+identidade, readiness, `capability_digest`, funcionamento do protocolo
+MCP ou grants. Essa opção não chama OAuth e não altera arquivos de
+estado, chaves, conexão ou permissões. Não há polling ou consulta
+repetida em background. Se ambos falharem, o diagnóstico não trata a
+situação como conexão bem-sucedida.
+
+Na verificação somente de leitura da conta Cloudflare OrdaX em
+01/11/2026, `mcp.ordax.com.br` estava associado ao Worker
+`ordax-mcp`, domínio habilitado, com um deployment atribuído a
+100% desde 30/10/2026. Isso comprova **configuração do Worker**,
+não acesso TCP, resposta autenticada ou readiness em todos os clientes.
+O timeout TCP/443 no Windows físico permanece uma falha real a
+investigar por rota/rede e Platform, sem override local do endpoint.
+
 ## Proveniencia do Python privado — SSOT Windows
 
 Os dois empacotadores em `ordax-runtime` usam exclusivamente
