@@ -12,6 +12,7 @@ from ordax_dev_agent.owner_dev_update_preflight import (
     MainCandidate, _run_gh, verify_owner_dev_preflight,
     stage_owner_dev_candidates,
     audit_legacy_rollback,
+    audit_legacy_installed_footprint,
 )
 
 REPO = "ordaxsystems/ordax-runtime"
@@ -151,6 +152,127 @@ class OwnerDevProvenanceTests(unittest.TestCase):
                 "version": "0.15.6", "installLocation": str(self.install),
             },
         )
+
+    def _footprint_fixture(self):
+        legacy_dir, _installer, _digest, source = self._legacy_fixture()
+        launcher = self.install / "ORDAX Runtime.exe"
+        launcher.write_bytes(b"sealed-runtime-launcher-fixture")
+        runtime = self.install / "runtime"
+        runtime.mkdir()
+        python_binary = runtime / "python.exe"
+        python_binary.write_bytes(b"private-python-fixture")
+        # A secret-looking file outside installed product must never be read.
+        user_state = self.base / "OrdaX" / "profiles"
+        user_state.mkdir(parents=True, exist_ok=True)
+        secret = user_state / "private-owner-token.txt"
+        secret.write_bytes(b"never-read-this-owner-secret")
+        return source, launcher, python_binary, secret
+
+    def _footprint(self, source):
+        return audit_legacy_installed_footprint(
+            expected_studio_source_commit=source,
+            installed_product=lambda: {
+                "version": "0.15.6", "installLocation": str(self.install),
+            },
+        )
+
+    def test_readonly_footprint_hashes_only_fixed_identity_files(self):
+        source, launcher, python_binary, secret = self._footprint_fixture()
+        manifest = self.install / "product-manifest.json"
+        before = {
+            "journal": self.journal_path.read_bytes(),
+            "manifest": manifest.read_bytes(),
+            "launcher": launcher.read_bytes(),
+            "private_python": python_binary.read_bytes(),
+            "owner_secret": secret.read_bytes(),
+        }
+        evidence = self._footprint(source)
+        self.assertEqual(evidence["state"], "installed-identity-bytes-observed")
+        self.assertEqual(evidence["scope"], "three-fixed-identity-files-only")
+        self.assertEqual(set(evidence["files"]), {
+            "productManifest", "runtimeLauncher", "privatePython",
+        })
+        for label, file in (
+            ("productManifest", manifest),
+            ("runtimeLauncher", launcher),
+            ("privatePython", python_binary),
+        ):
+            self.assertEqual(
+                evidence["files"][label]["sha256"],
+                hashlib.sha256(file.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(evidence["files"][label]["sizeBytes"], file.stat().st_size)
+        self.assertFalse(evidence["originalInstallationEquivalenceProven"])
+        self.assertFalse(evidence["rollbackReady"])
+        self.assertFalse(evidence["applyAllowed"])
+        self.assertTrue(evidence["journalUnchanged"])
+        output = json.dumps(evidence, sort_keys=True)
+        self.assertNotIn("never-read-this-owner-secret", output)
+        self.assertNotIn(str(self.base), output)
+        self.assertNotIn("private-owner-token", output)
+        self.assertEqual(before["journal"], self.journal_path.read_bytes())
+        self.assertEqual(before["manifest"], manifest.read_bytes())
+        self.assertEqual(before["launcher"], launcher.read_bytes())
+        self.assertEqual(before["private_python"], python_binary.read_bytes())
+        self.assertEqual(before["owner_secret"], secret.read_bytes())
+        self.assertEqual(self.gh.calls, [])
+
+    def test_readonly_footprint_rejects_missing_or_oversized_binaries(self):
+        source, launcher, python_binary, _secret = self._footprint_fixture()
+        launcher.unlink()
+        with self.assertRaisesRegex(ValueError, "runtimeLauncher.*missing or unsafe"):
+            self._footprint(source)
+        launcher.write_bytes(b"launcher")
+        python_binary.unlink()
+        with self.assertRaisesRegex(ValueError, "privatePython.*missing or unsafe"):
+            self._footprint(source)
+        with python_binary.open("wb") as handle:
+            handle.truncate(128 * 1024 * 1024 + 1)
+        with self.assertRaisesRegex(ValueError, "privatePython.*out of bounds"):
+            self._footprint(source)
+
+    def test_readonly_footprint_rejects_reparse_and_identity_mismatch(self):
+        source, launcher, python_binary, _secret = self._footprint_fixture()
+        with self.assertRaisesRegex(ValueError, "identity is inconsistent"):
+            self._footprint("b" * 40)
+        with self.assertRaisesRegex(ValueError, "source commit is invalid"):
+            self._footprint("not-a-commit")
+        with self.assertRaisesRegex(ValueError, "root is not canonical"):
+            audit_legacy_installed_footprint(
+                expected_studio_source_commit=source,
+                installed_product=lambda: {
+                    "version": "0.15.6",
+                    "installLocation": str(self.base / "other-root"),
+                },
+            )
+        launcher.unlink()
+        outside = self.base / "external-runtime.exe"
+        outside.write_bytes(b"foreign")
+        try:
+            launcher.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            self.skipTest("Windows symlink privilege is not available")
+        with self.assertRaisesRegex(ValueError, "runtimeLauncher.*missing or unsafe"):
+            self._footprint(source)
+
+    def test_readonly_footprint_cli_never_requests_apply_or_staging(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from ordax_dev_agent.owner_dev_update_preflight import main
+        source, _launcher, _python_binary, _secret = self._footprint_fixture()
+        out = StringIO()
+        with patch(
+            "ordax_dev_agent.owner_dev_update_preflight.audit_legacy_installed_footprint",
+            return_value={"state": "installed-identity-bytes-observed",
+                          "applyAllowed": False},
+        ) as audit, redirect_stdout(out):
+            self.assertEqual(
+                main(["--audit-installed-footprint",
+                      "--expected-studio-source-commit", source]), 0,
+            )
+        audit.assert_called_once_with(expected_studio_source_commit=source)
+        self.assertFalse(json.loads(out.getvalue())["applyAllowed"])
+        self.assertEqual(self.gh.calls, [])
 
     def test_legacy_audit_verifies_bytes_but_never_authorizes_rollback(self):
         root, installer, digest, source = self._legacy_fixture()
