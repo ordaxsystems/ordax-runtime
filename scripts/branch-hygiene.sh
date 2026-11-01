@@ -192,7 +192,13 @@ delete_branch_if_safe() {
     echo "skip $branch: open PR exists"
     return 0
   fi
-  if ! merged_commit="$(exact_merged_pr_proof "$branch" "$branch_sha")"; then
+  local merge_lookup_status=0
+  merged_commit="$(exact_merged_pr_proof "$branch" "$branch_sha")" || merge_lookup_status=$?
+  if (( merge_lookup_status == 2 )); then
+    echo "skip $branch: merged PR lookup failed; cannot authorize retirement"
+    return 0
+  fi
+  if (( merge_lookup_status != 0 )); then
     # Distinct, narrowly reviewed historical supersession authorization.
     # Source tips not represented exactly in the checked-in manifest stay put.
     local replacement_sha
