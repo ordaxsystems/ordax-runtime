@@ -15,6 +15,7 @@ from collections.abc import Mapping
 
 from . import __version__
 from .config import AgentConfig
+from .product_central_session import ProductCentralSessionStatus
 from .status_server import start_status_server
 
 
@@ -196,6 +197,7 @@ def _runtime_status_snapshot(
     action_registry_ready: bool,
     remote_control_configured: bool,
     now: float | None = None,
+    central_session_status: ProductCentralSessionStatus | None = None,
 ) -> dict:
     snapshot = dict(runtime)
     snapshot.update(product_dispatch_readiness(
@@ -205,6 +207,10 @@ def _runtime_status_snapshot(
         now=now,
     ))
     snapshot["action_registry_ready"] = bool(action_registry_ready)
+    snapshot["central_session"] = (
+        central_session_status.public_observation()
+        if central_session_status is not None else None
+    )
     return snapshot
 
 
@@ -563,12 +569,16 @@ def run(
     }
     registry = None
     remote_control_configured = False
+    control = None
 
     def runtime_status_snapshot() -> dict:
         return _runtime_status_snapshot(
             runtime,
             action_registry_ready=registry is not None,
             remote_control_configured=remote_control_configured,
+            central_session_status=(
+                control.product_central_session.status if control is not None else None
+            ),
         )
 
     def status_payload() -> dict:
