@@ -50,7 +50,9 @@ class ProductCentralSessionStatus:
             code = "product_central_session_unavailable"
         return {
             "checked": self.checked is True,
-            "last_confirmation_observed": self.confirmed is True,
+            # confirmed is the latest tick's result and resets on an empty
+            # poll. The public field explicitly describes session history.
+            "last_confirmation_observed": self.last_success_at is not None,
             "last_error_code": code,
         }
 

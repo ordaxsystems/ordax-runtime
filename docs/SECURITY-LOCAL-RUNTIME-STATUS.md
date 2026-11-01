@@ -114,6 +114,13 @@ ou `null` antes da criação do Control Plane. São observações do cliente
 de sessão Central **já atualizado pelo heartbeat**; a consulta ao status
 não chama a rede, não cria desafio, não outorga grants nem atesta execução
 MCP. Uma confirmação observada é histórica e não prova vínculo vigente.
+O indicador `last_confirmation_observed` deriva do último sucesso
+registrado internamente (`last_success_at`), **não** do resultado do
+último poll: uma fila vazia no heartbeat seguinte ou uma falha de rede
+não apaga a confirmação anterior. A marca só dura a vida deste
+processo Runtime, não sobrevive a reinício e não pode ser usada como
+prova de sessão ativa. Mesmo com `last_confirmation_observed=true`,
+um `last_error_code` de revogação prevalece como bloqueio de grant/sessão.
 
 Conforme o contrato proprietário da Platform, `401` significa falha
 de credencial do Device; `403` por `central_device_grant_revoked` ou

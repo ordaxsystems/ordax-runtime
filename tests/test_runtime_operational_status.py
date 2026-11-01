@@ -66,7 +66,7 @@ class RuntimeOperationalStatusTests(unittest.TestCase):
         self.assertTrue(snapshot["product_dispatch_ready"])
         self.assertEqual(snapshot["central_session"], {
             "checked": True,
-            "last_confirmation_observed": False,
+            "last_confirmation_observed": True,
             "last_error_code": "central_device_grant_revoked",
         })
         self.assertNotIn("challenge_id", snapshot["central_session"])

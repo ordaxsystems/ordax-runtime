@@ -124,6 +124,51 @@ class ProductCentralSessionClientTests(unittest.TestCase):
             ("POST", {"challenge_id": CHALLENGE_ID}),
         ])
 
+    def test_prior_confirmation_is_observed_after_empty_poll_and_outage(self):
+        # Central tickets are short-lived. The next heartbeat often polls an
+        # empty queue, which must not erase evidence of the prior confirmation.
+        requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request.method)
+            if request.method == "POST":
+                return httpx.Response(200, json={
+                    "ok": True, "status": "bound",
+                    "device_id": DEVICE_ID, "request_id": CHALLENGE_ID,
+                })
+            if len(requests) == 1:
+                return httpx.Response(200, json={
+                    "ok": True, "pending": True, "challenge_id": CHALLENGE_ID,
+                })
+            if len(requests) == 3:
+                return httpx.Response(200, json={"ok": True, "pending": False})
+            return httpx.Response(503, json={
+                "ok": False, "error": "central_session_unavailable",
+            })
+
+        client = self.make_client(["a" * 64], handler)
+        initial = client.status.public_observation()
+        self.assertEqual(initial, {
+            "checked": False, "last_confirmation_observed": False,
+            "last_error_code": None,
+        })
+        confirmed = client.tick(now=10.0)
+        self.assertTrue(confirmed.confirmed)
+        self.assertTrue(confirmed.public_observation()["last_confirmation_observed"])
+        self.assertIsNotNone(confirmed.last_success_at)
+
+        empty = client.tick(now=30.0)
+        self.assertFalse(empty.confirmed)
+        self.assertIsNone(empty.challenge_id)
+        self.assertTrue(empty.public_observation()["last_confirmation_observed"])
+        self.assertIsNone(empty.public_observation()["last_error_code"])
+
+        failed = client.tick(now=50.0)
+        self.assertFalse(failed.confirmed)
+        self.assertEqual(failed.last_error, "product_central_session_unavailable")
+        self.assertTrue(failed.public_observation()["last_confirmation_observed"])
+        self.assertEqual(requests, ["GET", "POST", "GET", "GET"])
+
     def test_receipt_for_another_device_fails_closed(self):
         token = ["a" * 64]
 
