@@ -89,6 +89,17 @@ O candidato independente passa pela mesma validação no PR e, **somente
 quando arquivos relevantes do MCP mudam**, é reconstruído a partir da
 `main` consolidada. Ambos os eventos compartilham uma lista única de
 caminhos e são serializados por ref, sem cancelar um build já em execução.
+A lista única de caminhos é derivada das raízes reais de pacotes Python
+instalados por `pip install` no candidato, conforme
+`pyproject.toml:[tool.setuptools.packages.find].include`. O trigger do
+Windows observa cada raiz inteira (`/**`), pois editar
+`remote_protocol.py`, `product_device_control_plane.py` ou
+`terminal_outbox.py` altera os bytes empacotados mesmo que o nome não
+conste da antiga lista de entrypoints. A CI compara todas as raízes
+exatamente com esse SSOT e protege também o script de proveniência
+do endpoint. Alterações apenas em documentação e testes de protocolos
+não alteram o pacote e não justificam uma compilação de instalador.
+
 Cada candidato da `main` contém `runtime_source_commit` igual ao SHA
 verificado pelo runner e expira após três dias; não se promove um
 candidato do SHA da PR (anterior ao squash merge) como se fosse de
