@@ -76,7 +76,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn('Parameters: "-m ordax_dev_agent.owner_device_connect_gui"', connect)
         self.assertIn('Description: "Conectar este computador ao OrdaX MCP"', connect)
         for flag in ("postinstall", "nowait", "skipifsilent"):
-            self.assertRegex(connect, r"\\b" + flag + r"\\b")
+            self.assertRegex(connect, r"\b" + flag + r"\b")
         self.assertNotIn("runhidden", connect)
         self.assertNotIn("shellexec", connect)
         self.assertNotIn("Unchecked", connect)
