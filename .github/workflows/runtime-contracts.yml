@@ -135,6 +135,7 @@ jobs:
           tests.test_product_action_recovery
           tests.test_product_central_session
           tests.test_product_device_control_plane
+          tests.test_terminal_outbox
           tests.test_runtime_operational_status
           tests.test_product_idle_poll_budget
           tests.test_product_update

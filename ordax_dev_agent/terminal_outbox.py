@@ -52,15 +52,22 @@ class TerminalOutbox:
             raise RuntimeError("terminal outbox report exceeds local safety limit")
 
         self.root.mkdir(parents=True, exist_ok=True)
-        if target.is_file():
-            current = self._read_path(target)
-            if current != report:
+        def confirm_existing() -> Path:
+            # The same report is idempotent; a different report for one job
+            # is an integrity conflict, including across concurrent processes.
+            if self._read_path(target) != report:
                 raise RuntimeError(
                     f"terminal outbox conflict for already-persisted job {report.get('job_id')}"
                 )
             return target
 
-        pending = target.with_name(f".{target.name}.{os.getpid()}.next")
+        if target.is_file():
+            return confirm_existing()
+
+        # Unique even for threads/processes sharing a state directory.
+        pending = target.with_name(
+            f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.next"
+        )
         try:
             with pending.open("xb") as handle:
                 handle.write(encoded)
@@ -70,7 +77,13 @@ class TerminalOutbox:
                 os.chmod(pending, 0o600)
             except OSError:
                 pass
-            os.replace(pending, target)
+            # os.replace silently overwrites a winner from another writer.
+            # Hard-link creation is atomic and never replaces an existing
+            # terminal receipt. Both paths share this same directory/volume.
+            try:
+                os.link(pending, target)
+            except FileExistsError:
+                return confirm_existing()
             return target
         finally:
             try:

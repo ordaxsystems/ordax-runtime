@@ -125,3 +125,25 @@ must be established by Platform and Runtime owners before activation.
 OrdaX OS defines `ordax.device-action-result/1` and `ordax.studio-runtime/3` in its [result contract](https://github.com/ordaxsystems/ordax-os/blob/main/system/contracts/device-action-result.mjs) and [Runtime port](https://github.com/ordaxsystems/ordax-os/blob/main/system/contracts/studio-runtime-v3.mjs). That contract binds the output to the original action request and current actor/Space/project/device/client context, bounds normalized JSON by UTF-8 bytes, and rejects output unless the receipt is `succeeded`. The Runtime Product MCP fix above enforces the succeeded-only part at its public receipt boundary while preserving its existing status API.
 
 The current Product MCP status tool accepts only `request_id`; its Platform response does not supply the full v3 binding envelope. Therefore this API is not itself a conforming v3 `getActionResult(request)` port. Do not synthesize the missing binding from caller JSON or treat a request ID as authorization. A future end-to-end adapter requires a canonical request-to-Product action mapping and authenticated scope contract across the respective owners.
+
+## Atomic terminal receipt under concurrent writers (01/11/2026)
+
+The Runtime persists terminal reports before contacting the Product Control
+Plane, so an acknowledged action can be recovered after a transport failure
+without redispatching effects. The canonical `TerminalOutbox` now uses a
+uniquely named, fsynced temporary file and an **atomic create-if-absent**
+hard link on the same volume. Unlike `os.replace`, this cannot overwrite a
+terminal receipt just published by another process for the same job.
+Only an **identical** report may reuse the existing file; conflicting reports
+fail closed. A filesystem that cannot guarantee atomic hard-link creation
+must fail explicitly rather than fall back to destructive replacement.
+Crash leftovers with the existing `.next` suffix are ignored by recovery
+and cleaned when the writer exits normally.
+
+`tests.test_terminal_outbox` forces two writers through the same
+publication boundary, covering identical and divergent reports, stable
+receipts, and cleanup. It runs on Linux and the existing Windows
+`runtime-contracts` job. This only strengthens local receipt durability:
+the Platform remains the authority for lease fencing, status, report
+acceptance and idempotent action execution. GitHub CI does not prove a
+physical Windows installation or MCP E2E.
