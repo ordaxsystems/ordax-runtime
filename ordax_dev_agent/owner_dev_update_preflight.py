@@ -144,6 +144,116 @@ def _canonical_transaction_root(root: Path) -> Path:
 
 
 
+
+def _is_reparse_point(path: Path) -> bool:
+    """Do not follow Windows junctions or file aliases into owner data."""
+    return (
+        path.is_symlink()
+        or getattr(path, "is_junction", lambda: False)()
+        or bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400)
+    )
+
+
+def _legacy_installed_identity(
+    *,
+    expected_studio_source_commit: str,
+    installed_product: Callable[[], dict[str, str]],
+) -> tuple[str, Path, Path]:
+    """One identity authority for legacy rollback and read-only footprint."""
+    if not _SHA.fullmatch(expected_studio_source_commit):
+        raise ValueError("expected Studio source commit is invalid")
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        raise RuntimeError("legacy installed audit requires a Windows user profile")
+    product = installed_product()
+    if not isinstance(product, dict):
+        raise ValueError("installed product identity is invalid")
+    version = product.get("version")
+    if not isinstance(version, str):
+        raise ValueError("installed product version is invalid")
+    parse_version(version)
+    install_root = Path(local) / "Programs" / "ORDAX"
+    if (
+        not install_root.is_dir()
+        or _is_reparse_point(install_root)
+        or _is_reparse_point(install_root.parent)
+    ):
+        raise ValueError("installed product root is missing or unsafe")
+    canonical_install = install_root.resolve(strict=True)
+    claimed_location = product.get("installLocation")
+    if not isinstance(claimed_location, str) or not claimed_location:
+        raise ValueError("installed product root is not canonical")
+    claimed_root = Path(claimed_location)
+    if (
+        not claimed_root.is_dir()
+        or _is_reparse_point(claimed_root)
+        or claimed_root.resolve(strict=True) != canonical_install
+    ):
+        raise ValueError("installed product root is not canonical")
+    manifest_file = canonical_install / "product-manifest.json"
+    if (
+        not manifest_file.is_file()
+        or _is_reparse_point(manifest_file)
+        or not 0 < manifest_file.stat().st_size <= 64 * 1024
+    ):
+        raise ValueError("installed product manifest is missing or unsafe")
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8-sig"))
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema") != "ordax.windows-product/1"
+        or manifest.get("product") != "ORDAX Studio"
+        or manifest.get("version") != version
+        or manifest.get("studio_source_commit") != expected_studio_source_commit
+    ):
+        raise ValueError("installed product identity is inconsistent with pinned legacy evidence")
+    return version, canonical_install, manifest_file
+
+
+def audit_legacy_installed_footprint(
+    *,
+    expected_studio_source_commit: str,
+    installed_product: Callable[[], dict[str, str]] = installed_windows_product,
+) -> dict[str, Any]:
+    """Hash ONLY three installed identity files, never user content or updates.
+
+    The resulting hashes are observations, not proof that the original
+    installer created these bytes or that a legacy rollback is safe.
+    """
+    version, root, manifest_file = _legacy_installed_identity(
+        expected_studio_source_commit=expected_studio_source_commit,
+        installed_product=installed_product,
+    )
+    # Fixed paths only: do not enumerate site-packages, accounts, project
+    # directories or the owner's LocalAppData state.
+    inputs = (
+        ("productManifest", manifest_file, 64 * 1024),
+        ("runtimeLauncher", root / "ORDAX Runtime.exe", 128 * 1024 * 1024),
+        ("privatePython", root / "runtime" / "python.exe", 128 * 1024 * 1024),
+    )
+    runtime_dir = root / "runtime"
+    if not runtime_dir.is_dir() or _is_reparse_point(runtime_dir):
+        raise ValueError("private Runtime directory is missing or unsafe")
+    files: dict[str, dict[str, str | int]] = {}
+    for label, file, maximum in inputs:
+        if not file.is_file() or _is_reparse_point(file):
+            raise ValueError(f"installed identity file {label} is missing or unsafe")
+        size = file.stat().st_size
+        if not 0 < size <= maximum:
+            raise ValueError(f"installed identity file {label} is out of bounds")
+        files[label] = {"sha256": _hash_file(file), "sizeBytes": size}
+    return {
+        "schema": "ordax.owner-legacy-installed-footprint/1",
+        "state": "installed-identity-bytes-observed",
+        "installedVersion": version,
+        "studioSourceCommit": expected_studio_source_commit,
+        "scope": "three-fixed-identity-files-only",
+        "files": files,
+        "originalInstallationEquivalenceProven": False,
+        "rollbackReady": False,
+        "applyAllowed": False,
+        "journalUnchanged": True,
+    }
+
 def audit_legacy_rollback(
     legacy_rollback_dir: str | Path,
     *,
@@ -177,25 +287,10 @@ def audit_legacy_rollback(
     ):
         raise ValueError("legacy rollback path is outside canonical private update storage")
 
-    product = installed_product()
-    version = str(product.get("version", ""))
-    parse_version(version)
-    canonical_install = (Path(local) / "Programs" / "ORDAX").resolve()
-    if Path(product.get("installLocation", "")).resolve() != canonical_install:
-        raise ValueError("installed product root is not canonical")
-    manifest_file = canonical_install / "product-manifest.json"
-    if (manifest_file.is_symlink() or not manifest_file.is_file()
-            or manifest_file.stat().st_size > 64 * 1024):
-        raise ValueError("installed product manifest is missing or unsafe")
-    manifest = json.loads(manifest_file.read_text(encoding="utf-8-sig"))
-    if (
-        not isinstance(manifest, dict)
-        or manifest.get("schema") != "ordax.windows-product/1"
-        or manifest.get("product") != "ORDAX Studio"
-        or manifest.get("version") != version
-        or manifest.get("studio_source_commit") != expected_studio_source_commit
-    ):
-        raise ValueError("installed product identity is inconsistent with pinned legacy evidence")
+    version, _canonical_install, _manifest_file = _legacy_installed_identity(
+        expected_studio_source_commit=expected_studio_source_commit,
+        installed_product=installed_product,
+    )
 
     installer_name, checksum_name = _required_asset_names(version)
     installer = role_dir / installer_name
@@ -394,6 +489,8 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--stage", action="store_true", help="download and verify CI artifacts only")
     mode.add_argument("--transaction-root", help="verify a previously staged transaction")
     mode.add_argument("--audit-legacy-rollback", help="inspect pre-attestation rollback without applying")
+    mode.add_argument("--audit-installed-footprint", action="store_true",
+                      help="hash three installed identity files without executing or reading user data")
     parser.add_argument("--target-version", help="required for staging, e.g. 0.15.9")
     parser.add_argument("--target-run")
     parser.add_argument("--target-commit")
@@ -403,7 +500,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-studio-source-commit")
     args = parser.parse_args(argv)
     try:
-        if args.audit_legacy_rollback:
+        if args.audit_installed_footprint:
+            if not args.expected_studio_source_commit:
+                parser.error("footprint audit requires --expected-studio-source-commit")
+            if any((args.expected_installer_sha256, args.target_run, args.target_commit,
+                    args.rollback_run, args.rollback_commit, args.target_version)):
+                parser.error("footprint audit does not accept staging or installer arguments")
+            result = audit_legacy_installed_footprint(
+                expected_studio_source_commit=args.expected_studio_source_commit,
+            )
+        elif args.audit_legacy_rollback:
             if not args.expected_installer_sha256 or not args.expected_studio_source_commit:
                 parser.error("legacy audit requires --expected-installer-sha256 and --expected-studio-source-commit")
             if any((args.target_run, args.target_commit, args.rollback_run,
