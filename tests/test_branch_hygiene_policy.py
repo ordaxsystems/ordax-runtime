@@ -23,6 +23,7 @@ args = sys.argv[1:]
 state = pathlib.Path(os.environ["MOCK_STATE"])
 sha = os.environ["MOCK_SOURCE"]
 merge = os.environ["MOCK_MERGE"]
+branch = os.environ.get("MOCK_BRANCH", "fix/test")
 if args[0] == "fetch":
     sys.exit(0)
 if args[0] == "show-ref":
@@ -41,7 +42,7 @@ if args[0] == "merge-base":
 if args[0] == "for-each-ref":
     if args[-1] == "refs/remotes/origin/archive/":
         sys.exit(0)
-    print("origin/fix/test")
+    print("origin/" + branch)
     sys.exit(0)
 if args[0] == "ls-remote":
     ref = args[-1]
@@ -50,7 +51,7 @@ if args[0] == "ls-remote":
         if tag.exists():
             print(tag.read_text().strip() + "\t" + ref)
         sys.exit(0)
-    if ref == "refs/heads/fix/test":
+    if ref == "refs/heads/" + branch:
         live = os.getenv("MOCK_LIVE_SHA", sha)
         print(live + "\t" + ref)
         sys.exit(0)
@@ -59,7 +60,7 @@ if args[0] == "push":
     if args[2] == "--delete":
         (state / "deleted").write_text(args[3])
         sys.exit(0)
-    if args[2].endswith("refs/tags/archive/ordax-runtime/fix/test"):
+    if args[2].endswith("refs/tags/archive/ordax-runtime/" + branch):
         if os.getenv("MOCK_FAIL_ARCHIVE", "0") == "1":
             sys.exit(1)
         (state / "archive_sha").write_text(sha)
@@ -139,7 +140,7 @@ class BranchHygienePolicyTests(unittest.TestCase):
     def run_cleanup(self, **overrides):
         env = {**self.env, **overrides}
         return subprocess.run(
-            ["bash", str(SCRIPT), "branch", "fix/test"],
+            ["bash", str(getattr(self, "script_path", SCRIPT)), "branch", env.get("MOCK_BRANCH", "fix/test")],
             env=env, text=True, capture_output=True, timeout=10
         )
 
@@ -187,6 +188,62 @@ class BranchHygienePolicyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.dir / "archive_sha").exists())
         self.assertEqual((self.dir / "deleted").read_text(), "fix/test")
+
+    def configure_superseded_owner_branch(self):
+        import shutil
+        origin_branch = "feat/owner-central-session-selection-cli-20261027"
+        original = "bd995234d3d4cd6f3aace5a1fa2bc287ea75e80d"
+        replacement = "8a444032b6917132ef285afaa4eb7d69b1bade7f"
+        (self.dir / "scripts").mkdir()
+        (self.dir / "docs").mkdir()
+        self.script_path = self.dir / "scripts" / "branch-hygiene.sh"
+        shutil.copy2(SCRIPT, self.script_path)
+        shutil.copy2(
+            ROOT / "docs" / "approved-branch-supersessions.json",
+            self.dir / "docs" / "approved-branch-supersessions.json",
+        )
+        self.env.update({
+            "MOCK_BRANCH": origin_branch,
+            "MOCK_SOURCE": original,
+            "MOCK_MERGE": replacement,
+            "MOCK_MERGED": "0",
+        })
+        return origin_branch, original, replacement
+
+    def test_reviewed_supersession_preserves_original_commit_before_retirement(self):
+        branch, original, _replacement = self.configure_superseded_owner_branch()
+        result = self.run_cleanup()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.dir / "archive_sha").read_text(), original)
+        self.assertEqual((self.dir / "deleted").read_text(), branch)
+        self.assertIn("superseded-by-", result.stdout)
+
+    def test_supersession_never_uses_failed_merged_pr_lookup_as_permission(self):
+        self.configure_superseded_owner_branch()
+        self.assert_no_delete(MOCK_FAIL_CLOSED="1")
+
+    def test_supersession_requires_exact_source_tip_and_trusted_main_replacement(self):
+        self.configure_superseded_owner_branch()
+        self.assert_no_delete(MOCK_SOURCE=OTHER)
+        self.assert_no_delete(MOCK_MERGE_IN_MAIN="0")
+        self.assert_no_delete(MOCK_OPEN="1")
+        self.assert_no_delete(MOCK_FAIL_OPEN="1")
+
+    def test_supersession_does_not_delete_after_archive_failure_or_race(self):
+        self.configure_superseded_owner_branch()
+        self.assert_no_delete(MOCK_FAIL_ARCHIVE="1")
+        self.assert_no_delete(MOCK_LIVE_SHA=OTHER)
+        (self.dir / "archive_sha").write_text(OTHER)
+        self.assert_no_delete()
+
+    def test_supersession_invalid_manifest_fails_closed(self):
+        branch, _original, _replacement = self.configure_superseded_owner_branch()
+        file = self.dir / "docs" / "approved-branch-supersessions.json"
+        import json
+        data = json.loads(file.read_text())
+        data["retirements"].append(dict(data["retirements"][0]))
+        file.write_text(json.dumps(data))
+        self.assert_no_delete()
 
     def test_wrong_repo_is_refused_before_any_remote_operation(self):
         result = self.run_cleanup(GITHUB_REPOSITORY="another/repo")

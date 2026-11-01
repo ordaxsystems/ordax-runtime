@@ -551,6 +551,16 @@ class ProductRemoteClient:
                     "product_remote_invalid_response", response.status_code,
                     "Owner selection ticket has unexpected fields",
                 )
+            if (
+                not isinstance(item["created_at"], str)
+                or not item["created_at"].strip()
+                or not isinstance(item["expires_at"], str)
+                or not item["expires_at"].strip()
+            ):
+                raise ProductRemoteError(
+                    "product_remote_invalid_response", response.status_code,
+                    "Owner selection ticket has invalid timestamps",
+                )
             try:
                 self._uuid(item["challenge_id"], "challenge_id")
             except ValueError as error:

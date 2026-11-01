@@ -68,6 +68,71 @@ exact_merged_pr_proof() {
   printf '%s\n' "$accepted_merge"
 }
 
+# Approved retirement is for a reviewed *superseded* source branch without
+# a matching merged PR. It is NOT a fallback for unknown branches: exact SHA,
+# a canonical replacement commit on main, and an audited static manifest are
+# all mandatory. Do not interpret a malformed manifest as permission.
+approved_supersession() {
+  local branch="$1" branch_sha="$2"
+  local policy_file
+  policy_file="$(cd "$(dirname "$0")/.." && pwd -P)/docs/approved-branch-supersessions.json"
+  python3 -I - "$policy_file" "$repo" "$branch" "$branch_sha" <<'PY'
+import json
+import re
+import sys
+
+policy_file, repository, branch, source_sha = sys.argv[1:]
+
+def require(condition):
+    if not condition:
+        raise ValueError("Invalid approved supersession evidence")
+
+try:
+    with open(policy_file, encoding="utf-8") as handle:
+        policy = json.load(handle)
+    require(type(policy) is dict)
+    require(set(policy) == {"schema", "repository", "retirements"})
+    require(policy["schema"] == "ordax.branch-supersession/1")
+    require(policy["repository"] == repository == "ordaxsystems/ordax-runtime")
+    entries = policy["retirements"]
+    require(type(entries) is list and 0 < len(entries) <= 20)
+    names = []
+    for item in entries:
+        require(type(item) is dict)
+        require(set(item) == {
+            "branch", "source_sha", "canonical_commit", "proof_test", "reason"
+        })
+        name = item["branch"]
+        require(type(name) is str)
+        require(re.fullmatch(
+            r"(feat|fix|refactor|ci|integration|codex|docs)/[A-Za-z0-9._/-]+", name
+        ) is not None)
+        require(".." not in name)
+        for key in ("source_sha", "canonical_commit"):
+            require(type(item[key]) is str)
+            require(re.fullmatch(r"[0-9a-f]{40}", item[key]) is not None)
+        require(type(item["proof_test"]) is str)
+        require(re.fullmatch(
+            r"tests\.test_[A-Za-z0-9_]+", item["proof_test"]
+        ) is not None)
+        require(
+            type(item["reason"]) is str
+            and 32 <= len(item["reason"]) <= 1000
+        )
+        names.append(name)
+    require(len(names) == len(set(names)))
+    hits = [
+        item for item in entries
+        if item["branch"] == branch and item["source_sha"] == source_sha
+    ]
+    if len(hits) != 1:
+        sys.exit(1)
+    print(hits[0]["canonical_commit"])
+except (OSError, ValueError, KeyError, TypeError):
+    sys.exit(2)
+PY
+}
+
 has_exact_archive_snapshot() {
   local branch_sha="$1"
   local archive_ref archive_sha
@@ -136,9 +201,25 @@ delete_branch_if_safe() {
     echo "skip $branch: open PR exists"
     return 0
   fi
-  if ! merged_commit="$(exact_merged_pr_proof "$branch" "$branch_sha")"; then
-    echo "skip $branch: no exact merged PR head with a merge ancestor in main"
+  local merge_lookup_status=0
+  merged_commit="$(exact_merged_pr_proof "$branch" "$branch_sha")" || merge_lookup_status=$?
+  if (( merge_lookup_status == 2 )); then
+    echo "skip $branch: merged PR lookup failed; cannot authorize retirement"
     return 0
+  fi
+  if (( merge_lookup_status != 0 )); then
+    # Distinct, narrowly reviewed historical supersession authorization.
+    # Source tips not represented exactly in the checked-in manifest stay put.
+    local replacement_sha
+    if ! replacement_sha="$(approved_supersession "$branch" "$branch_sha")"; then
+      echo "skip $branch: no exact merged PR or reviewed supersession"
+      return 0
+    fi
+    if ! git merge-base --is-ancestor "$replacement_sha" origin/main; then
+      echo "skip $branch: canonical supersession commit is not in main"
+      return 0
+    fi
+    merged_commit="superseded-by-$replacement_sha"
   fi
   if ! ensure_archived_if_divergent "$branch" "$branch_sha"; then
     echo "skip $branch: source history archive is unverified"

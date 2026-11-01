@@ -1,0 +1,13 @@
+{
+  "schema": "ordax.branch-supersession/1",
+  "repository": "ordaxsystems/ordax-runtime",
+  "retirements": [
+    {
+      "branch": "feat/owner-central-session-selection-cli-20261027",
+      "source_sha": "bd995234d3d4cd6f3aace5a1fa2bc287ea75e80d",
+      "canonical_commit": "8a444032b6917132ef285afaa4eb7d69b1bade7f",
+      "proof_test": "tests.test_owner_central_device_selection_client",
+      "reason": "The three Owner Central methods from this divergent historical branch are superseded by the canonical #270 client and explicit Owner CLI; pending timestamp validation is covered by the current PR. Preserve the exact original commit in an archive tag before retirement."
+    }
+  ]
+}
