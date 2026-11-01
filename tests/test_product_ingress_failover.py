@@ -169,6 +169,20 @@ class TrustedProductIngressTests(unittest.TestCase):
             ingress.request(PATH, send)
         self.assertEqual(attempted, [PRIMARY + PATH])
 
+    def test_explicit_tcp_refused_exception_without_errno_is_still_proven(self):
+        attempted = []
+        ingress = TrustedProductIngress(PRIMARY)
+        def send(url):
+            attempted.append(url)
+            if url.startswith(PRIMARY):
+                try:
+                    raise ConnectionRefusedError("primary TCP refused")
+                except ConnectionRefusedError as error:
+                    raise httpx.ConnectError("wake TCP connection failed") from error
+            return "restricted"
+        self.assertEqual(ingress.request(PATH, send), "restricted")
+        self.assertEqual(attempted, [PRIMARY + PATH, RESTRICTED + PATH])
+
     def test_connection_timeout_keeps_legitimate_physical_windows_fallback(self):
         attempted = []
         ingress = TrustedProductIngress(PRIMARY)
