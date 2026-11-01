@@ -80,9 +80,7 @@ function Assert-Rejected([string]$phase) {
     }
     if (-not $rejected) { throw "Unsafe transition to $phase was allowed" }
     $current = [IO.File]::ReadAllBytes($journalPath)
-    if (-not [Convert]::ToBase64String($old).Equals(
-        [Convert]::ToBase64String($current), [StringComparison]::Ordinal
-    )) {
+    if ([Convert]::ToBase64String($old) -cne [Convert]::ToBase64String($current)) {
         throw 'Rejected transition modified the durable journal'
     }
 }
@@ -126,7 +124,6 @@ try {
     Assert-Rejected 'bootstrap-verified'
 
     New-InitialJournal 'handoff-launching'
-    $before = [IO.File]::ReadAllBytes($journalPath)
     [IO.File]::WriteAllText($journalPath, (' ' * 65537))
     $oversized = $false
     try { Write-TransactionPhase -Phase 'bootstrap-verifying' } catch {
