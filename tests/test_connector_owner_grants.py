@@ -5,6 +5,7 @@ import unittest
 from ordax_connector.owner_grants import (
     OwnerMcpClientSelectionError,
     grant_consented_owner_device_profile,
+    require_owner_mcp_device_identity,
     select_consented_owner_mcp_client,
 )
 
@@ -55,6 +56,26 @@ class OwnerMcpClientSelectionTests(unittest.TestCase):
         with self.assertRaises(OwnerMcpClientSelectionError) as caught:
             self.select(value, requested)
         self.assertEqual(caught.exception.code, code)
+
+    def test_owner_authority_device_guard_is_shared_by_cli_and_connector(self):
+        self.assertEqual(
+            require_owner_mcp_device_identity(authority(), device_id=DEVICE),
+            DEVICE,
+        )
+        for response, requested in (
+            (authority(device=OTHER_DEVICE), DEVICE),
+            (authority(), OTHER_DEVICE),
+            ({}, DEVICE),
+            (None, DEVICE),
+            ({"device_id": "not-a-uuid"}, DEVICE),
+            ({"device_id": DEVICE.upper()}, DEVICE),
+        ):
+            with self.subTest(response=response, requested=requested):
+                with self.assertRaises(OwnerMcpClientSelectionError) as caught:
+                    require_owner_mcp_device_identity(
+                        response, device_id=requested,
+                    )
+                self.assertEqual(caught.exception.code, "owner_mcp_device_mismatch")
 
     def test_single_consented_client(self):
         self.assertEqual(self.select(authority(clients=(A,))), A)
