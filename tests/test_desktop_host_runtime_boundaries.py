@@ -92,9 +92,43 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         self.assertEqual(args[0].state_dir, self.state)
         self.assertEqual(args[0].agent_name, "OrdaX Desktop")
         self.assertEqual(args[0].workspace_root, self.root / "Files")
+        self.assertEqual(args[0].computer_access_source, "native-unbound")
         self.assertEqual(kwargs, {"computer_adapter": {},
                                   "allowed_action_names": frozenset({"agent.status", "computer.access_status"}),
                                   "status_port": 0})
+
+    def test_desktop_policy_cannot_inherit_windows_agent_grants_or_environment(self):
+        settings = self.state / "agent-settings.json"
+        import json
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        data["computer_access"] = {
+            "enabled": True, "full_access": True, "full_filesystem": True,
+            "allowed_roots": [str(self.root)], "allowed_applications": [],
+        }
+        settings.write_text(json.dumps(data), encoding="utf-8")
+        _, dispatch = self.run_host()
+        config = dispatch.call_args.args[0]
+        env = {
+            "ORDAX_COMPUTER_ACCESS_ENABLED": "1",
+            "ORDAX_COMPUTER_FULL_ACCESS": "1",
+            "ORDAX_COMPUTER_FULL_FILESYSTEM": "1",
+            "ORDAX_COMPUTER_ALLOWED_ROOTS": str(self.root),
+        }
+        with patch.dict(os.environ, env, clear=False):
+            registry = ActionRegistry(config, computer_adapter={},
+                                      allowed_action_names=DESKTOP_OS_ACTIONS)
+            status = registry.execute("computer.access_status", {})
+            self.assertTrue(status.ok)
+            self.assertFalse(status.data["enabled"])
+            self.assertFalse(status.data["full_access"])
+            self.assertFalse(status.data["full_filesystem"])
+            self.assertEqual(status.data["allowed_roots"], [])
+            self.assertEqual(status.data["relative_paths_base"], "")
+            self.assertEqual(status.data["runtime_capabilities"]["implemented_actions"], [])
+            from ordax_dev_agent.computer_filesystem_actions import update_computer_access_policy
+            with self.assertRaises(PermissionError):
+                update_computer_access_policy(config, {"enabled": True})
+        self.assertTrue(json.loads(settings.read_text(encoding="utf-8"))["computer_access"]["full_access"])
 
     def test_windows_auxiliary_device_path_cannot_be_reused(self):
         with self.assertRaisesRegex(RuntimeError, "another device identity"):

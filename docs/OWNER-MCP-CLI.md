@@ -199,3 +199,20 @@ auxiliar. A conclusão só existe com uma chamada MCP que retorne
 ferramenta, CI, presença, `pending`, `queued` ou atestação isolada não
 comprovam E2E. A issue de implementação e evidência física continua
 [ordax-os#1985](https://github.com/ordaxsystems/ordax-os/issues/1985).
+
+### Fronteira da política Desktop (01/11/2026)
+
+O perfil `ordax-desktop` recebe `computer_access_source=native-unbound` do
+host confiável, nunca das variáveis de ambiente ou de payload remoto. Enquanto
+não existir uma porta **Native Settings/Permissions verificada** no Desktop,
+`computer.access_status` retorna `enabled=false`, `full_access=false`,
+`full_filesystem=false`, sem `allowed_roots` do usuário Windows e sem anunciar
+capacidades de execução de computador. Um `computer_access` eventualmente
+presente no `agent-settings.json` ou `ORDAX_COMPUTER_*` herdado do processo
+não concede autoridade OS. O fluxo de leitura mantém o dispatcher e o Product
+Device canônicos; não cria agente, política ou serviço alternativos.
+
+O comportamento da instalação Windows auxiliar permanece inalterado. Liberar
+controle Native exige contrato/integração e provas do owner `ordax-os` na
+[issue #1985](https://github.com/ordaxsystems/ordax-os/issues/1985), grants
+Platform explícitos e E2E real, sem habilitação automática por pacote/CI.

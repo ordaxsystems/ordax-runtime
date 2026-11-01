@@ -55,6 +55,7 @@ class ComputerAccessPolicy:
     allowed_applications: tuple[str, ...]
     # Runtime-owned authority is independent of user folder/app allowlists.
     protected_roots: tuple[Path, ...] = ()
+    relative_paths_base: str | None = None
 
     def application_allowed(self, executable: Path) -> bool:
         if self.full_access:
@@ -69,7 +70,8 @@ class ComputerAccessPolicy:
             "full_filesystem": self.full_filesystem,
             "allowed_roots": [str(root) for root in self.allowed_roots],
             "allowed_applications": list(self.allowed_applications),
-            "relative_paths_base": str(Path.home().resolve()),
+            "relative_paths_base": (self.relative_paths_base if self.relative_paths_base is not None
+                                    else str(Path.home().resolve())),
             # Non-secret effective boundary flags, safe for authenticated status.
             "screen_content_redaction": False,
             "clipboard_content_redaction": False,
@@ -213,6 +215,24 @@ def _environment_management() -> dict[str, bool]:
 
 
 def load_computer_access_policy(config) -> ComputerAccessPolicy:
+    protected_roots = (
+        config.state_dir.resolve(),
+        config.agent_repo_path.resolve(),
+        Path(__file__).resolve().parents[1],
+        *(root.resolve() for root in getattr(config, "protected_roots", ())),
+    )
+    # The Desktop OS policy belongs to Native Settings/Permissions, NOT to
+    # the auxiliary Windows Runtime, its HOME defaults or inherited env vars.
+    # Until a verified Native policy port exists, report unavailable/denied.
+    source = getattr(config, "computer_access_source", "windows-local")
+    if source == "native-unbound":
+        return ComputerAccessPolicy(
+            enabled=False, full_access=False, full_filesystem=False,
+            allowed_roots=(), allowed_applications=(),
+            protected_roots=protected_roots, relative_paths_base="",
+        )
+    if source != "windows-local":
+        raise ValueError("Unknown computer access policy authority")
     settings_path = config.state_dir / "agent-settings.json"
     settings = _load_agent_settings(settings_path)
 
@@ -271,12 +291,7 @@ def load_computer_access_policy(config) -> ComputerAccessPolicy:
         full_filesystem=full_filesystem,
         allowed_roots=tuple(roots),
         allowed_applications=tuple(applications),
-        protected_roots=(
-            config.state_dir.resolve(),
-            config.agent_repo_path.resolve(),
-            Path(__file__).resolve().parents[1],
-            *(root.resolve() for root in getattr(config, "protected_roots", ())),
-        ),
+        protected_roots=protected_roots,
     )
 
 
@@ -293,6 +308,8 @@ def computer_access_management_status(config) -> dict[str, Any]:
 
 
 def update_computer_access_policy(config, payload: dict[str, Any]) -> dict[str, Any]:
+    if getattr(config, "computer_access_source", "windows-local") != "windows-local":
+        raise PermissionError("Computer access policy belongs to OS Native Settings/Permissions")
     settings_path = config.state_dir / "agent-settings.json"
     lock_fd, lock_path = _agent_settings_lock(settings_path)
     try:

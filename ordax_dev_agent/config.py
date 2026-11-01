@@ -5,6 +5,7 @@ import os
 import socket
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 
 DEFAULT_PRODUCT_MCP_URL = "https://mcp.ordax.com.br"
@@ -29,6 +30,8 @@ class AgentConfig:
     protected_roots: tuple[Path, ...] = ()
     # Off until the canonical MCP Worker wake DO rollout is validated.
     product_wake_enabled: bool = False
+    # Trusted host-only authority selection; never loaded from settings or environment.
+    computer_access_source: Literal["windows-local", "native-unbound"] = "windows-local"
 
     @classmethod
     def from_env(cls) -> "AgentConfig":

@@ -31,7 +31,8 @@ def self_test() -> dict:
             config = AgentConfig(agent_name="OrdaX Desktop", poll_seconds=60,
                                  state_dir=state, agent_repo_path=root,
                                  hordax_path=root / "Files", bridge_path=state,
-                                 workspace_root=root / "Files", projects={})
+                                 workspace_root=root / "Files", projects={},
+                                 computer_access_source="native-unbound")
             registry = ActionRegistry(config, computer_adapter={},
                                       allowed_action_names=DESKTOP_OS_ACTIONS)
             if registry.names != ["agent.status", "computer.access_status"]:
@@ -40,7 +41,11 @@ def self_test() -> dict:
             if not result.ok or result.data["actions"] != ["agent.status", "computer.access_status"]:
                 raise RuntimeError("Packaged canonical agent.status failed")
             policy = registry.execute("computer.access_status", {})
-            if not policy.ok or policy.data.get("full_access") is True:
+            if (not policy.ok or policy.data.get("enabled") is not False
+                    or policy.data.get("full_access") is not False
+                    or policy.data.get("full_filesystem") is not False
+                    or policy.data.get("allowed_roots") != []
+                    or policy.data.get("relative_paths_base") != ""):
                 raise RuntimeError("Packaged read-only Desktop policy status failed")
             if registry.execute("computer.access_status", {"enabled": True}).ok:
                 raise RuntimeError("Desktop policy status accepted mutation fields")
