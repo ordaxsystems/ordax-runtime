@@ -157,6 +157,16 @@ jobs:
           if (-not (Test-Path -LiteralPath $privatePythonw)) {
             throw 'Installed private GUI host missing'
           }
+          # The end-user first-run choice must not launch during CI's
+          # /VERYSILENT install: no unattended browser OAuth or grants.
+          $unexpectedGui = @(Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" |
+            Where-Object {
+              $_.ExecutablePath -and
+              ([IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $privatePythonw)
+            })
+          if ($unexpectedGui.Count -ne 0) {
+            throw 'Silent MCP install unexpectedly launched Owner onboarding'
+          }
           # Embedded CPython uses an isolated _pth and cannot import the
           # checkout's tests package by module name. Execute the source test
           # file directly while importing runtime dependencies from the
