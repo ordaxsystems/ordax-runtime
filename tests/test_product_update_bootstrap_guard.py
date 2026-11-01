@@ -210,10 +210,12 @@ class ProductUpdateBootstrapGuardTests(unittest.TestCase):
         self.journal["authority"] = "model-generated-owner"
         # A journal that already claims a forged authority must be retained
         # verbatim as evidence, not rewritten as if owned by this updater.
-        self.assertIn(
-            "handoff authority, journal identity or phase",
-            self.invoke(expected_phase="handoff-launching"),
+        self.assertEqual(self.invoke(expected_phase="handoff-launching"), "")
+        persisted = json.loads(
+            (self.txroot / "transaction.json").read_text(encoding="utf-8")
         )
+        self.assertEqual(persisted["authority"], "model-generated-owner")
+        self.assertEqual(persisted["phase"], "handoff-launching")
 
     def test_wrong_rollback_checksum_is_refused_before_installer_execution(self):
         self.journal["rollback"]["installerSha256"] = "c" * 64
