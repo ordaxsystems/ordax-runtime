@@ -67,7 +67,8 @@ def main() -> int:
     scoped = replace(config, agent_name="OrdaX Desktop",
                      workspace_root=user_data / "Files",
                      hordax_path=user_data / "Files",
-                     bridge_path=user_data / "native-state" / "product-runtime")
+                     bridge_path=user_data / "native-state" / "product-runtime",
+                     computer_access_source="native-unbound")
     # This is intentionally NOT native_main: its Linux/USB identity and
     # connector policy belong to the OS's native-disk/USB Supervisor.
     return run(scoped, computer_adapter={},
