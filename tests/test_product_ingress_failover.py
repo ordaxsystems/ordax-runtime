@@ -183,6 +183,47 @@ class TrustedProductIngressTests(unittest.TestCase):
         self.assertEqual(ingress.request(PATH, send), "restricted")
         self.assertEqual(attempted, [PRIMARY + PATH, RESTRICTED + PATH])
 
+    def test_tls_context_cannot_be_masked_by_a_separate_tcp_cause(self):
+        attempted = []
+        ingress = TrustedProductIngress(PRIMARY)
+        # Some transport adapters preserve both an explicit TCP cause and
+        # an implicit certificate-verification context. Both must be checked.
+        ambiguous = httpx.ConnectError("two independent transport failures")
+        ambiguous.__cause__ = ConnectionRefusedError(errno.ECONNREFUSED, "TCP")
+        ambiguous.__context__ = ssl.SSLCertVerificationError(
+            1, "certificate verification rejected",
+        )
+        def send(url):
+            attempted.append(url)
+            raise ambiguous
+        with self.assertRaises(httpx.ConnectError):
+            ingress.request(PATH, send)
+        self.assertEqual(attempted, [PRIMARY + PATH])
+
+    def test_cyclic_or_too_deep_exception_graph_never_allows_replay(self):
+        for kind in ("cycle", "deep"):
+            attempted = []
+            ingress = TrustedProductIngress(PRIMARY)
+            root = RuntimeError("untrusted context")
+            if kind == "cycle":
+                wrapper = RuntimeError("other context")
+                root.__cause__ = wrapper
+                wrapper.__cause__ = root
+            else:
+                for _ in range(36):
+                    wrapper = RuntimeError("another wrapping layer")
+                    wrapper.__cause__ = root
+                    root = wrapper
+            opaque = httpx.ConnectError("ambiguous cause graph")
+            opaque.__cause__ = ConnectionRefusedError(errno.ECONNREFUSED, "TCP")
+            opaque.__context__ = root
+            def send(url):
+                attempted.append(url)
+                raise opaque
+            with self.subTest(kind=kind), self.assertRaises(httpx.ConnectError):
+                ingress.request(PATH, send)
+            self.assertEqual(attempted, [PRIMARY + PATH])
+
     def test_connection_timeout_keeps_legitimate_physical_windows_fallback(self):
         attempted = []
         ingress = TrustedProductIngress(PRIMARY)
