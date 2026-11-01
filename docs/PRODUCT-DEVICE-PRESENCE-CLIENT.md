@@ -24,3 +24,21 @@ Artifacts e audit remoto permanecem fail-closed at? suas autoridades can?nicas P
 ## Prova
 
 A su?te `tests.test_product_device_control_plane` cobre heartbeat, claim/start cercado, relat?rio terminal can?nico, rejei??o de credencial e aus?ncia de fallback WebSocket/D1/operator.
+
+## Presença durante ociosidade (01/11/2026)
+
+O `product_wake_enabled` permanece desativado por padrão até a validação
+do protocolo de wake. A fila de ações é consultada no máximo no prazo
+`next_claim_due`, cuja espera conservadora aumenta para 30–60 segundos;
+com wake conectado, a reconciliação de jobs é de até 300 segundos.
+
+**Heartbeat não é claim.** O mesmo loop canônico agora espera sempre o
+menor prazo entre `next_claim_due` e `next_heartbeat`, **independente
+do wake**. Ao acordar para um heartbeat de 20 segundos, preserva
+`next_claim_due` e não consulta o banco desnecessariamente por uma nova
+ação. Uma notificação wake continua apenas antecipando um claim,
+sempre sob a autoridade Product; não concede execução ou permissões.
+
+O teste `tests.test_product_idle_poll_budget` cobre wake desligado por
+padrão, heartbeat de 20s durante claims a cada 60s/300s, prioridades dos
+prazos, tratamento de deadline vencido e limites de consultas PostgreSQL.

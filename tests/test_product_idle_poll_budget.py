@@ -7,7 +7,9 @@ from pathlib import Path
 from unittest import mock
 
 from ordax_dev_agent.config import AgentConfig
-from ordax_dev_agent.main import product_idle_claim_delay_seconds
+from ordax_dev_agent.main import (
+    product_idle_claim_delay_seconds, product_idle_wait_seconds,
+)
 
 
 class ProductIdlePollBudgetTests(unittest.TestCase):
@@ -42,6 +44,43 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
         self.assertEqual(product_idle_claim_delay_seconds(60, 60), 60.0)
         with self.assertRaises(ValueError):
             product_idle_claim_delay_seconds(0, 12)
+
+    def test_presence_heartbeat_is_independent_of_idle_claim_budget(self):
+        # Default Product wake is off; the long idle claim wait must not
+        # suppress the independently scheduled 20-second heartbeat.
+        self.assertFalse(AgentConfig().product_wake_enabled)
+        self.assertEqual(product_idle_wait_seconds(
+            now=100.0, next_claim_due=160.0, next_heartbeat=120.0,
+        ), 20.0)
+        # After the heartbeat at 120, the next SQL claim is still due at 160.
+        self.assertEqual(product_idle_wait_seconds(
+            now=120.0, next_claim_due=160.0, next_heartbeat=140.0,
+        ), 20.0)
+        self.assertEqual(product_idle_wait_seconds(
+            now=140.0, next_claim_due=160.0, next_heartbeat=160.0,
+        ), 20.0)
+        # No additional claims are needed merely to maintain presence.
+
+    def test_wake_connected_uses_same_heartbeat_gate_during_five_minute_idle(self):
+        self.assertEqual(product_idle_wait_seconds(
+            now=100.0, next_claim_due=400.0, next_heartbeat=120.0,
+        ), 20.0)
+        self.assertEqual(product_idle_wait_seconds(
+            now=120.0, next_claim_due=400.0, next_heartbeat=140.0,
+        ), 20.0)
+
+    def test_idle_wait_prefers_next_claim_when_earlier_and_bounds_overdue(self):
+        self.assertEqual(product_idle_wait_seconds(
+            now=100.0, next_claim_due=105.0, next_heartbeat=120.0,
+        ), 5.0)
+        self.assertEqual(product_idle_wait_seconds(
+            now=121.0, next_claim_due=160.0, next_heartbeat=120.0,
+        ), 0.10)
+        for invalid in (float("nan"), float("inf"), -float("inf")):
+            with self.subTest(deadline=invalid), self.assertRaises(ValueError):
+                product_idle_wait_seconds(
+                    now=100.0, next_claim_due=160.0, next_heartbeat=invalid,
+                )
 
     def test_one_idle_device_stays_far_below_100k_query_daily_quota(self):
         remaining_seconds = 86400.0
