@@ -103,7 +103,10 @@ def _can_retry_on_restricted_ingress(
         if isinstance(current, ssl.SSLError):
             return False
         if current is not error and isinstance(current, OSError):
-            if isinstance(current, socket.gaierror):
+            if isinstance(current, (
+                socket.gaierror, ConnectionRefusedError,
+                ConnectionResetError, ConnectionAbortedError, TimeoutError,
+            )):
                 network_failure = True
             elif current.errno in _PRECONNECT_OS_CODES:
                 network_failure = True
