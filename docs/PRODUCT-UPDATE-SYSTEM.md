@@ -216,3 +216,30 @@ Exemplo em um Runtime que já contenha o módulo atualizado:
 O resultado positivo `legacy-integrity-verified` **não** comprova que o instalador original é byte a byte equivalente à instalação histórica. As propriedades `originalInstallationEquivalenceProven`, `rollbackReady` e `applyAllowed` são sempre `false`, mesmo com todos os hashes corretos. Nenhum journal de atualização é modificado.
 
 Essa auditoria não concede uma exceção para instalador sem assinatura nem cria um segundo executor. O atualizador de produção continua exigindo Authenticode e rollback verificado. Uma futura política Owner/Dev exigirá aprovação, recuperação e testes de instalação independentes.
+
+## Inventário local do produto pré-atestado — somente leitura
+
+O mesmo CLI de preflight inclui `--audit-installed-footprint` para observar,
+sem escrever arquivos ou executar instaladores, os hashes SHA-256 dos três
+identificadores estáveis de uma instalação Windows existente:
+`product-manifest.json`, `ORDAX Runtime.exe` e
+`runtime/python.exe`. Exige instalação no caminho canônico,
+manifesto de Studio coerente com um commit independente fornecido pelo Owner,
+arquivos regulares e tamanhos limitados. Recusa symlinks e junctions.
+Não enumera `site-packages`, dados de conta, projetos, perfis,
+credenciais nem o diretório de estado da Platform.
+
+```powershell
+& '.\runtime\python.exe' -m ordax_dev_agent.owner_dev_update_preflight --audit-installed-footprint --expected-studio-source-commit '<COMMIT_STUDIO_INDEPENDENTE>'
+```
+
+A resposta contém somente hashes, tamanhos, versão, commit e estado;
+não contém caminhos locais nem arquivos do proprietário. Os hashes são uma
+observação **parcial** dos bytes instalados, não uma comprovação de que
+o instalador histórico produziu aquela árvore ou de que todos os componentes
+serão restaurados. `originalInstallationEquivalenceProven=false`,
+`rollbackReady=false` e `applyAllowed=false` permanecem
+obrigatórios. A issue #149 só poderá avançar para atualização real com prova
+independente de equivalência completa, preservação de dados e restauração
+física antes da autorização de execução.
+
