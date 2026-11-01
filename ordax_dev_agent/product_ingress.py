@@ -42,7 +42,8 @@ def inspect_pinned_https_ingress(
             timeout=httpx.Timeout(5.0, connect=3.0),
             follow_redirects=False,
         )
-    assert client is not None
+    if client is None:
+        raise RuntimeError("HTTPS inspection client was not initialized")
     result: dict[str, object] = {
         "schema": "ordax.product-mcp-https-observation/1",
         "primary": {},
