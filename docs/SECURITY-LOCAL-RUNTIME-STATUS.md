@@ -93,3 +93,15 @@ autoriza ações, não atesta sessão Central nem comprova execução MCP E2E.
 
 A correção reutiliza o único Product transport/dispatcher existente; nenhum
 serviço, perfil de permissões, protocolo ou fallback foi criado.
+
+## Recuperação de erro de transporte (01/11/2026)
+
+O retorno do temporizador de retry **não** altera `state` para
+`ready`. Após erro de entrega ou de claim do Control Plane o Runtime
+permanece `control-plane-error` e `transport_state=reconnecting`
+até receber um **novo heartbeat Product confirmado**. Isso evita
+prontidão positiva por passagem de tempo ou simples carregamento de token.
+O heartbeat bem-sucedido restaura `ready/connected` e a fase ociosa
+apenas quando apropriado; não sobrescreve `busy`, `stopping`,
+`local-disabled` nem `credential-recovery-required`. O recibo de
+heartbeat não substitui autorização Owner ou E2E MCP de ação.

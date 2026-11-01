@@ -4,6 +4,7 @@ import unittest
 
 from ordax_dev_agent.main import (
     _mark_transport_healthy,
+    _mark_transport_delivery_error,
     _mark_identity_loaded,
     _record_product_heartbeat,
     _mark_transport_unavailable,
@@ -90,6 +91,34 @@ class RuntimeOperationalStatusTests(unittest.TestCase):
         self.assertEqual(runtime["transport_state"], "connected")
         self.assertTrue(runtime["last_result"]["ok"])
         self.assertIsInstance(runtime["last_heartbeat_at"], float)
+
+    def test_transport_failure_stays_unready_until_confirmed_heartbeat(self):
+        runtime = self._ready_runtime()
+        runtime["job_phase"] = "idle"
+        _mark_transport_delivery_error(runtime, RuntimeError("transport unavailable"))
+        self.assertEqual(runtime["state"], "control-plane-error")
+        self.assertEqual(runtime["transport_state"], "reconnecting")
+        self.assertFalse(runtime["last_result"]["ok"])
+        self.assertEqual(runtime["job_phase"], "delivery-error")
+        self.assertEqual(
+            product_dispatch_readiness(
+                runtime, action_registry_ready=True, remote_control_configured=True, now=100.0,
+            )["product_readiness_code"],
+            "runtime_not_ready",
+        )
+        _record_product_heartbeat(runtime)
+        self.assertEqual(runtime["state"], "ready")
+        self.assertEqual(runtime["transport_state"], "connected")
+        self.assertEqual(runtime["job_phase"], "idle")
+        self.assertTrue(runtime["last_result"]["ok"])
+        self.assertIsNotNone(runtime["last_transport_recovered_at"])
+
+    def test_confirmed_heartbeat_cannot_override_denied_or_busy_states(self):
+        for state in ("busy", "credential-recovery-required", "local-disabled", "stopping"):
+            with self.subTest(state=state):
+                runtime = self._ready_runtime(state=state)
+                _record_product_heartbeat(runtime)
+                self.assertEqual(runtime["state"], state)
 
     def test_busy_heartbeat_failure_marks_transport_without_hiding_active_job(self):
         runtime = {

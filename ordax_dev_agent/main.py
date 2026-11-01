@@ -112,7 +112,7 @@ def _record_product_heartbeat(runtime: dict) -> None:
     """Only a successful transport heartbeat establishes remote pairing."""
     runtime["last_heartbeat_at"] = time.time()
     runtime["paired"] = True
-    if runtime.get("state") == "pairing":
+    if runtime.get("state") in {"pairing", "control-plane-error"}:
         runtime["state"] = "ready"
         runtime["last_result"] = {"ok": True, "summary": "Product heartbeat confirmed"}
     _mark_transport_healthy(runtime)
@@ -935,7 +935,10 @@ def run(
                 if transport_failures <= 2 or (transport_failures & (transport_failures - 1)) == 0:
                     print(f"control-plane error (retry in {retry_delay:.0f}s): {error}", file=sys.stderr)
                 _wait_for_native_access(retry_delay, stop_requested, native_access_enabled)
-                runtime["state"] = "stopping" if stop else "ready"
+                # A retry delay cannot prove transport recovery; remain in
+                # control-plane-error until a subsequent heartbeat is accepted.
+                if stop:
+                    runtime["state"] = "stopping"
     finally:
         runtime["state"] = "stopping"
         stop_requested.set()
