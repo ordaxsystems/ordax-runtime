@@ -140,7 +140,10 @@ function Write-TransactionPhase {
         # File.Replace is atomic on the same Windows volume and retains a
         # complete journal on either side of the transition; no backup copy
         # with owner's state is created or published to CI.
-        [IO.File]::Replace($pending, $journalPath, $null)
+        # Windows PowerShell 5.1 coerces $null to an empty [string], which
+        # File.Replace rejects as an invalid backup path. NullString passes
+        # the actual .NET null so no separate journal backup is produced.
+        [IO.File]::Replace($pending, $journalPath, [NullString]::Value)
     } finally {
         if (Test-Path -LiteralPath $pending) {
             Remove-Item -LiteralPath $pending -Force
