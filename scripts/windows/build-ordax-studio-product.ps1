@@ -301,11 +301,10 @@ $cacheRoot = Join-Path $buildRoot "cache"
 Remove-Item $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $runtimeRoot, $redistRoot, $cacheRoot, $OutputDirectory | Out-Null
 
-$pythonZip = Join-Path $cacheRoot "python-$PythonVersion-embed-amd64.zip"
-if (-not (Test-Path $pythonZip)) {
-    $pythonUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
-    Write-Host "Downloading private CPython runtime: $pythonUrl"
-    Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonZip
+# Reuse the single verified Windows Python source lock; no raw ZIP downloads.
+$pythonZip = & (Join-Path $PSScriptRoot 'get-locked-embedded-python.ps1') -CacheRoot $cacheRoot -PythonVersion $PythonVersion
+if (-not (Test-Path -LiteralPath $pythonZip -PathType Leaf)) {
+    throw 'ORDAX_EMBEDDED_PYTHON_VERIFIED_ARCHIVE_MISSING'
 }
 Expand-Archive -LiteralPath $pythonZip -DestinationPath $runtimeRoot -Force
 
