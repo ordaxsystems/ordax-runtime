@@ -2,7 +2,7 @@
 name: OrdaX MCP Windows Candidate
 on:
   pull_request:
-    paths:
+    paths: &mcp_candidate_paths
       - ".github/workflows/windows-mcp-candidate.yml"
       - "scripts/windows/build-ordax-mcp.ps1"
       - "scripts/windows/get-locked-embedded-python.ps1"
@@ -15,12 +15,28 @@ on:
       - "tests/test_windows_mcp_distribution.py"
       - "tests/test_owner_device_connect_gui.py"
       - "ordax_dev_agent/owner_device_connect_gui.py"
+      - "ordax_dev_agent/owner_device_connect_cli.py"
+      - "ordax_dev_agent/device_setup.py"
+      - "ordax_dev_agent/config.py"
+      - "ordax_dev_agent/desktop_host_main.py"
       - "ordax_dev_agent/product_ingress.py"
       - "tests/test_product_ingress_failover.py"
       - "ordax_core/owner_oauth.py"
       - "control-plane-source.lock.json"
       - "pyproject.toml"
+  # Only package-relevant changes in the canonical main get a fresh
+  # independently verified, short-retention MCP candidate. Same paths as PR.
+  push:
+    branches:
+      - main
+    paths: *mcp_candidate_paths
   workflow_dispatch:
+
+# Do not cancel an already running builder or waste the verified Python cache.
+# A manual main verification and a push to main remain serial.
+concurrency:
+  group: ordax-mcp-candidate-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
