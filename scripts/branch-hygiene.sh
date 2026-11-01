@@ -68,6 +68,62 @@ exact_merged_pr_proof() {
   printf '%s\n' "$accepted_merge"
 }
 
+# Approved retirement is for a reviewed *superseded* source branch without
+# a matching merged PR. It is NOT a fallback for unknown branches: exact SHA,
+# a canonical replacement commit on main, and an audited static manifest are
+# all mandatory. Do not interpret a malformed manifest as permission.
+approved_supersession() {
+  local branch="$1" branch_sha="$2"
+  local policy_file
+  policy_file="$(cd "$(dirname "$0")/.." && pwd -P)/docs/approved-branch-supersessions.json"
+  python3 - "$policy_file" "$repo" "$branch" "$branch_sha" <<'PY'
+import json
+import re
+import sys
+
+policy_file, repository, branch, source_sha = sys.argv[1:]
+try:
+    with open(policy_file, encoding="utf-8") as handle:
+        policy = json.load(handle)
+    entries = policy["retirements"]
+    assert type(policy) is dict
+    assert set(policy) == {"schema", "repository", "retirements"}
+    assert policy["schema"] == "ordax.branch-supersession/1"
+    assert policy["repository"] == repository == "ordaxsystems/ordax-runtime"
+    assert type(entries) is list and 0 < len(entries) <= 20
+    names = []
+    for item in entries:
+        assert type(item) is dict
+        assert set(item) == {
+            "branch", "source_sha", "canonical_commit", "proof_test", "reason"
+        }
+        assert type(item["branch"]) is str
+        assert re.fullmatch(
+            r"(feat|fix|refactor|ci|integration|codex|docs)/[A-Za-z0-9._/-]+",
+            item["branch"],
+        )
+        assert ".." not in item["branch"]
+        assert type(item["source_sha"]) is str
+        assert re.fullmatch("[0-9a-f]{40}", item["source_sha"])
+        assert type(item["canonical_commit"]) is str
+        assert re.fullmatch("[0-9a-f]{40}", item["canonical_commit"])
+        assert type(item["proof_test"]) is str
+        assert re.fullmatch(r"tests\.test_[A-Za-z0-9_]+", item["proof_test"])
+        assert type(item["reason"]) is str and 32 <= len(item["reason"]) <= 1000
+        names.append(item["branch"])
+    assert len(names) == len(set(names))
+    hits = [
+        item for item in entries
+        if item["branch"] == branch and item["source_sha"] == source_sha
+    ]
+    if len(hits) != 1:
+        sys.exit(1)
+    print(hits[0]["canonical_commit"])
+except (OSError, ValueError, KeyError, AssertionError, TypeError):
+    sys.exit(2)
+PY
+}
+
 has_exact_archive_snapshot() {
   local branch_sha="$1"
   local archive_ref archive_sha
@@ -137,8 +193,18 @@ delete_branch_if_safe() {
     return 0
   fi
   if ! merged_commit="$(exact_merged_pr_proof "$branch" "$branch_sha")"; then
-    echo "skip $branch: no exact merged PR head with a merge ancestor in main"
-    return 0
+    # Distinct, narrowly reviewed historical supersession authorization.
+    # Source tips not represented exactly in the checked-in manifest stay put.
+    local replacement_sha
+    if ! replacement_sha="$(approved_supersession "$branch" "$branch_sha")"; then
+      echo "skip $branch: no exact merged PR or reviewed supersession"
+      return 0
+    fi
+    if ! git merge-base --is-ancestor "$replacement_sha" origin/main; then
+      echo "skip $branch: canonical supersession commit is not in main"
+      return 0
+    fi
+    merged_commit="superseded-by-$replacement_sha"
   fi
   if ! ensure_archived_if_divergent "$branch" "$branch_sha"; then
     echo "skip $branch: source history archive is unverified"
