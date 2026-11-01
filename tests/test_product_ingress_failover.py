@@ -4,7 +4,7 @@ import uuid
 
 import httpx
 
-from ordax_dev_agent.product_ingress import TrustedProductIngress
+from ordax_dev_agent.product_ingress import TrustedProductIngress, inspect_pinned_https_ingress
 from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
 from ordax_dev_agent.product_central_session import ProductCentralSessionClient
 from ordax_dev_agent.remote_protocol import TransientDeliveryError
@@ -16,6 +16,71 @@ PATH = "/v3/device/transport/report"
 
 
 class TrustedProductIngressTests(unittest.TestCase):
+    def test_explicit_https_probe_is_get_only_and_never_claims_readiness(self):
+        calls = []
+        def send(request):
+            calls.append(request)
+            return httpx.Response(
+                200 if request.url.host == "mcp.ordax.com.br" else 404,
+                json={"ok": True, "grants_issued": True},
+            )
+        with httpx.Client(transport=httpx.MockTransport(send)) as client:
+            observation = inspect_pinned_https_ingress(client=client)
+        self.assertEqual(observation["schema"], "ordax.product-mcp-https-observation/1")
+        self.assertEqual(observation["primary"], {
+            "transport": "https_responded", "httpStatus": 200,
+        })
+        self.assertEqual(observation["restricted"], {
+            "transport": "https_responded", "httpStatus": 404,
+        })
+        self.assertIs(observation["authenticated"], False)
+        self.assertIs(observation["mcpReady"], False)
+        self.assertIs(observation["grantsAuthorized"], False)
+        self.assertEqual(
+            [str(req.url) for req in calls],
+            [PRIMARY + "/v3/device/setup", RESTRICTED + "/v3/device/setup"],
+        )
+        for req in calls:
+            self.assertEqual(req.method, "GET")
+            self.assertNotIn("authorization", req.headers)
+            self.assertNotIn("x-ordax-device-token", req.headers)
+            self.assertFalse(req.content)
+        self.assertEqual(len(calls), 2)
+
+    def test_https_probe_reports_failure_without_replaying_or_granting(self):
+        calls = []
+        def send(request):
+            calls.append(str(request.url))
+            if request.url.host == "mcp.ordax.com.br":
+                raise httpx.ConnectTimeout("tcp unavailable", request=request)
+            return httpx.Response(503)
+        with httpx.Client(transport=httpx.MockTransport(send)) as client:
+            observation = inspect_pinned_https_ingress(client=client)
+        self.assertEqual(observation["primary"], {
+            "transport": "unavailable", "httpStatus": None,
+        })
+        # A 503 still proves an HTTPS response; it does NOT prove MCP readiness.
+        self.assertEqual(observation["restricted"], {
+            "transport": "https_responded", "httpStatus": 503,
+        })
+        self.assertEqual(calls, [
+            PRIMARY + "/v3/device/setup",
+            RESTRICTED + "/v3/device/setup",
+        ])
+        self.assertIs(observation["mcpReady"], False)
+
+    def test_https_probe_has_no_fallback_on_tls_failure(self):
+        calls = []
+        def send(request):
+            calls.append(str(request.url))
+            raise httpx.ConnectError("TLS certificate rejected", request=request)
+        with httpx.Client(transport=httpx.MockTransport(send)) as client:
+            observation = inspect_pinned_https_ingress(client=client)
+        self.assertEqual(observation["primary"]["transport"], "unavailable")
+        self.assertEqual(observation["restricted"]["transport"], "unavailable")
+        self.assertEqual(len(calls), 2)
+        self.assertIs(observation["grantsAuthorized"], False)
+
     def test_preconnect_failure_uses_restricted_same_worker_and_reprobes_primary(self):
         now = [100.0]
         ingress = TrustedProductIngress(PRIMARY, monotonic=lambda: now[0], reprobe_seconds=120)
