@@ -1,5 +1,6 @@
 """Independent Windows OrdaX MCP distribution contracts (no Studio product authority)."""
 import re
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -128,13 +129,37 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn("group: ordax-mcp-candidate-${{ github.ref }}", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
-        for owner in (
-            'ordax_dev_agent/owner_device_connect_cli.py',
-            'ordax_dev_agent/device_setup.py',
-            'ordax_dev_agent/config.py',
-            'ordax_dev_agent/desktop_host_main.py',
+        # The MCP builder installs the entire package with pip, so the
+        # GitHub trigger must track ALL package roots from the packaging
+        # authority, not an incomplete list of selected Python entrypoints.
+        package_config = tomllib.loads(
+            (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        packages = package_config["tool"]["setuptools"]["packages"]["find"]["include"]
+        self.assertTrue(packages and all(p.endswith("*") for p in packages))
+        expected_roots = {f'      - "{p[:-1]}/**"' for p in packages}
+        trigger_block = workflow.split(
+            "paths: &mcp_candidate_paths", 1
+        )[1].split("  # Only package-relevant changes", 1)[0]
+        watched_roots = {
+            line for line in trigger_block.splitlines()
+            if line.strip().startswith("- ") and line.strip().endswith('/**"')
+        }
+        self.assertEqual(watched_roots, expected_roots)
+        for changed_input in (
+            "ordax_dev_agent/remote_protocol.py",
+            "ordax_dev_agent/product_device_control_plane.py",
+            "ordax_dev_agent/terminal_outbox.py",
+            "ordax_dev_agent/models.py",
         ):
-            self.assertIn('      - "' + owner + '"', workflow)
+            root = changed_input.split("/", 1)[0]
+            self.assertIn(f'      - "{root}/**"', trigger_block)
+        self.assertIn(
+            '      - "scripts/windows/resolve-control-plane-provenance.py"',
+            trigger_block,
+        )
+        self.assertNotIn('      - "docs/**"', trigger_block)
+        self.assertNotIn('      - "tests/test_product_ingress_failover.py"', trigger_block)
         self.assertIn("runtime_source_commit -cne $env:GITHUB_SHA", workflow)
         self.assertIn("signed_public_release -ne $false", workflow)
         self.assertIn("retention-days: 3", workflow)
