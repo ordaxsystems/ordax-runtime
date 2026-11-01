@@ -136,12 +136,7 @@ try {
     # The intentionally planted transaction.json.next fragment is expected
     # to remain untouched; only fresh GUID-named write artifacts are forbidden.
     $temps = @(Get-ChildItem -LiteralPath $transactionRootPath -Filter 'transaction.*.next' |
-        Where-Object { $_.Name -match '^transaction\\.[0-9a-f]{32}\\.next
-    Write-Output 'ORDAX_UPDATE_DURABLE_JOURNAL_CONTRACT=PASS'
-} finally {
-    Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
-}
- })
+        Where-Object { $_.Name -match '^transaction\.[0-9a-f]{32}\.next$' })
     if ($temps.Count -ne 0) { throw 'New journal writes left unverified temporary files' }
     Write-Output 'ORDAX_UPDATE_DURABLE_JOURNAL_CONTRACT=PASS'
 } finally {
