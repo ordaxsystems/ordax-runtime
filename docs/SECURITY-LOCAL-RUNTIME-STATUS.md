@@ -78,3 +78,18 @@ bind externo rejeitado **antes** de abrir socket. O teste roda na workflow
 Windows `Studio Canonical Presentation Handoff` junto com a prova
 canônica do pacote Electron. A alteração não publica release nem muda
 o installer bloqueado no source lock antigo.
+
+## Confirmação de presença remota (01/11/2026)
+
+No transporte Product canônico, `pair_if_needed()` **não** autentica uma
+sessão remota: o token foi matriculado anteriormente via Owner OAuth. Carregar
+identidade, iniciar o dispatcher e publicar `/health` não atribuem
+`paired=true`, `state=ready` ou `transport_state=connected`.
+
+O primeiro `POST /v3/device/transport/heartbeat` confirmado é o gate que
+define `paired=true`, `state=ready` e `last_heartbeat_at`. Erro HTTP,
+rede ou credencial não publica esse estado. A confirmação de presença não
+autoriza ações, não atesta sessão Central nem comprova execução MCP E2E.
+
+A correção reutiliza o único Product transport/dispatcher existente; nenhum
+serviço, perfil de permissões, protocolo ou fallback foi criado.

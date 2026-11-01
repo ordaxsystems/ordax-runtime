@@ -100,6 +100,24 @@ def _mark_transport_unavailable(runtime: dict, error: Exception) -> None:
     }
 
 
+def _mark_identity_loaded(runtime: dict) -> None:
+    """An enrolled token is not a remote heartbeat receipt."""
+    runtime["paired"] = False
+    runtime["state"] = "pairing"
+    runtime["transport_state"] = "connecting"
+    runtime["last_result"] = {"ok": False, "summary": "awaiting Product heartbeat"}
+
+
+def _record_product_heartbeat(runtime: dict) -> None:
+    """Only a successful transport heartbeat establishes remote pairing."""
+    runtime["last_heartbeat_at"] = time.time()
+    runtime["paired"] = True
+    if runtime.get("state") == "pairing":
+        runtime["state"] = "ready"
+        runtime["last_result"] = {"ok": True, "summary": "Product heartbeat confirmed"}
+    _mark_transport_healthy(runtime)
+
+
 def _mark_transport_healthy(runtime: dict) -> None:
     previous = runtime.get("transport_state")
     runtime["transport_state"] = "connected"
@@ -282,8 +300,7 @@ def _keep_job_alive_tick(
             control.heartbeat(
                 host_actions, agent_version=agent_version, status="busy",
             )
-            runtime["last_heartbeat_at"] = time.time()
-            _mark_transport_healthy(runtime)
+            _record_product_heartbeat(runtime)
         except Exception as error:
             _mark_transport_unavailable(runtime, error)
             print(f"busy heartbeat error: {error}", file=sys.stderr)
@@ -665,26 +682,19 @@ def run(
                 ):
                     continue
 
-    while not stop and not runtime["paired"]:
+    while not stop:
         if not _native_local_access_granted(native_access_enabled):
             runtime["state"] = "local-disabled"
             status_server.shutdown()
             return 0
         try:
-            paired_now = control.pair_if_needed(
+            control.pair_if_needed(
                 host_actions,
                 agent_version=__version__,
                 metadata=_agent_metadata(config),
             )
-            runtime["paired"] = True
-            runtime["state"] = "ready"
-            runtime["transport_state"] = "connected"
-            runtime["last_result"] = {
-                "ok": True,
-                "summary": "agent paired" if paired_now else "agent token loaded",
-            }
-            if paired_now:
-                print("OrdaX Dev Agent paired with remote control plane.")
+            _mark_identity_loaded(runtime)
+            break
         except Exception as error:
             runtime["state"] = "pairing-error"
             runtime["last_result"] = {"ok": False, "summary": str(error)}
@@ -732,8 +742,7 @@ def run(
                         agent_version=__version__,
                         metadata=_agent_metadata(config),
                     )
-                    runtime["last_heartbeat_at"] = time.time()
-                    _mark_transport_healthy(runtime)
+                    _record_product_heartbeat(runtime)
                     runtime.setdefault("startup_seconds", round(time.monotonic() - started_monotonic, 3))
                     next_heartbeat = now + 20.0
 

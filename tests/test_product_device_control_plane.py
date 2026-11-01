@@ -233,7 +233,11 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             return httpx.Response(200, json={"ok": True, "recorded": True})
         with tempfile.TemporaryDirectory() as raw:
             plane = self.plane(Path(raw), handler)
+            self.assertFalse(plane.is_paired)
+            self.assertFalse(plane.pair_if_needed(["agent.status"], agent_version="1.2.3"))
+            self.assertFalse(plane.is_paired)
             plane.heartbeat(["agent.status"], agent_version="1.2.3")
+            self.assertTrue(plane.is_paired)
             self.assertEqual(seen[0][0], "/v3/device/transport/heartbeat")
             expected = hashlib.sha256(b'["agent.status"]').hexdigest()
             self.assertEqual(seen[0][1]["capabilities_digest"], expected)
@@ -242,6 +246,16 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             self.assertEqual(plane.runtime_kind, "desktop-agent")
             self.assertEqual(plane.product_central_session.ticks, 1)
             self.assertNotIn("legacy-control.invalid", str(seen))
+            plane.http.close()
+
+    def test_offline_heartbeat_clears_remote_pairing_proof(self):
+        with tempfile.TemporaryDirectory() as raw:
+            plane = self.plane(Path(raw),
+                               lambda _: httpx.Response(200, json={"ok": True}))
+            plane.heartbeat(["agent.status"], agent_version="1")
+            self.assertTrue(plane.is_paired)
+            plane.heartbeat(["agent.status"], agent_version="1", status="offline")
+            self.assertFalse(plane.is_paired)
             plane.http.close()
 
     def test_heartbeat_digest_is_order_independent_and_cached(self):
@@ -362,8 +376,10 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             return httpx.Response(401, json={"ok": False, "error": "invalid_device_token"})
         with tempfile.TemporaryDirectory() as raw_dir:
             plane = self.plane(Path(raw_dir), handler)
+            self.assertFalse(plane.is_paired)
             with self.assertRaises(DeviceAuthorizationError):
                 plane.heartbeat(["agent.status"], agent_version="1")
+            self.assertFalse(plane.is_paired)
             plane.http.close()
 
     def test_artifacts_never_fall_back_to_legacy_authority(self):
