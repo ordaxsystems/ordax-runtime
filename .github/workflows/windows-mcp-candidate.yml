@@ -156,7 +156,15 @@ jobs:
           }
           $uninstaller = Join-Path $root 'unins000.exe'
           if (-not (Test-Path $uninstaller)) { throw 'Standalone MCP uninstaller missing' }
-          Invoke-Bounded $uninstaller '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+          $uninstallLog = Join-Path $env:RUNNER_TEMP 'ordax-mcp-uninstall.log'
+          try {
+            Invoke-Bounded $uninstaller ('/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="' + $uninstallLog + '"')
+          } catch {
+            if (Test-Path -LiteralPath $uninstallLog) {
+              Get-Content -LiteralPath $uninstallLog -Tail 50 | Write-Host
+            }
+            throw
+          }
           if (Test-Path (Join-Path $root 'ORDAX Runtime.exe')) { throw 'Standalone MCP Runtime remained after uninstall' }
           if (Test-Path -LiteralPath $shortcutPath) { throw 'MCP connect shortcut remained after uninstall' }
           Write-Host "ORDAX_MCP_STANDALONE_INSTALL_SMOKE=PASS SHA256=$hash"
