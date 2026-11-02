@@ -687,6 +687,54 @@ class OneClickOwnerConnectTests(unittest.TestCase):
                 )
                 self.assertEqual(remote.pending_calls, 0)
 
+    def test_central_session_supports_multiple_consented_clients_without_guessing_target(self):
+        from datetime import datetime, timezone
+        device = "33333333-3333-4333-8333-333333333333"
+        ticket = "22222222-2222-4222-8222-222222222222"
+        clients = [
+            f"11111111-1111-4111-8111-{idx:012x}" for idx in range(6)
+        ]
+        authority = {
+            "device_id": device,
+            "clients": [{"client_id": client} for client in clients],
+            "grant_groups": [],
+        }
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        events = []
+
+        class Remote:
+            def owner_central_session_targets(self, _token, *, client_id):
+                events.append(("targets", client_id))
+                return {
+                    "targets": [{
+                        "device_id": device,
+                        "reported_online": True,
+                        "runtime_ready": client_id == clients[-1],
+                    }],
+                }
+
+            def owner_central_session_selections(self, _token, *, client_id):
+                events.append(("pending", client_id))
+                return {"pending_selections": [{
+                    "challenge_id": ticket,
+                    "created_at": "2026-11-02T00:00:00Z",
+                    "expires_at": "2026-11-03T00:00:00Z",
+                }]}
+
+        result = gui._central_selection_tickets(
+            Remote(), "owner-token", device, authority, now,
+        )
+        self.assertEqual(
+            result, [(clients[-1], ticket, "2026-11-03T00:00:00Z")],
+        )
+        self.assertEqual(
+            [item for item in events if item[0] == "pending"],
+            [("pending", clients[-1])],
+        )
+        self.assertEqual(
+            len([item for item in events if item[0] == "targets"]), 6,
+        )
+
     def test_central_session_has_no_false_error_when_oauth_clients_are_empty(self):
         from datetime import datetime, timezone
         device = "33333333-3333-4333-8333-333333333333"
