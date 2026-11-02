@@ -11,6 +11,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 
 import httpx
@@ -193,24 +194,43 @@ class ProductCentralSessionClient:
                 }:
                     raise RuntimeError(str(code))
                 raise RuntimeError("product_central_session_unavailable")
-            if receipt.get("status") != "bound":
+            # The canonical Platform has exactly two successful response
+            # shapes. A newly bound conversation returns its device identity,
+            # binding request id and expiry; a repeated confirmation returns
+            # only the binding request id, after rechecking the authenticated
+            # device and the exact challenge. In either case the request id is
+            # a canonical UUID, but it need not equal the challenge id when
+            # an existing conversation binding was reused.
+            request_id = receipt.get("request_id")
+            if (
+                receipt.get("status") != "bound"
+                or not isinstance(request_id, str)
+                or _UUID.fullmatch(request_id) is None
+            ):
                 raise RuntimeError("product_central_session_receipt_mismatch")
-            if receipt.get("device_id") != self.device_id:
-                # The canonical Platform RPC has two successful shapes:
-                # new binding: device_id + request_id + expires_at;
-                # idempotent existing binding: ok/status/request_id only.
-                # In the latter case the RPC itself checked the authenticated
-                # device token AND challenge-to-device binding before replying.
-                # Accept only that exact already-confirmed receipt. Do not
-                # mistake a forged/missing device_id on any other payload for
-                # proof that the current device was selected.
-                already_bound = (
-                    set(receipt) == {"ok", "status", "request_id"}
-                    and isinstance(receipt.get("request_id"), str)
-                    and _UUID.fullmatch(receipt["request_id"]) is not None
-                )
-                if not already_bound:
+            if receipt.get("device_id") == self.device_id:
+                if set(receipt) != {
+                    "ok", "status", "device_id", "request_id", "expires_at",
+                }:
                     raise RuntimeError("product_central_session_receipt_mismatch")
+                expires_at = receipt["expires_at"]
+                if not isinstance(expires_at, str):
+                    raise RuntimeError("product_central_session_receipt_mismatch")
+                try:
+                    deadline = datetime.fromisoformat(
+                        expires_at.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    raise RuntimeError(
+                        "product_central_session_receipt_mismatch"
+                    ) from None
+                if deadline.tzinfo is None:
+                    raise RuntimeError("product_central_session_receipt_mismatch")
+            elif set(receipt) != {"ok", "status", "request_id"}:
+                # The idempotent response omits device_id by design. No
+                # other missing or mismatched device may be interpreted as
+                # a successful attestation.
+                raise RuntimeError("product_central_session_receipt_mismatch")
 
             self._status = ProductCentralSessionStatus(
                 True, True, challenge_id, None, time.time()
