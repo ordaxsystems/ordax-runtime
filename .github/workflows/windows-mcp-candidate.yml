@@ -213,6 +213,23 @@ jobs:
               $diagnosticShortcut.Arguments -cne '-m ordax_dev_agent.owner_device_connect_gui --verificar-rede') {
             throw 'MCP network diagnostic is not routed through the single canonical private GUI'
           }
+          # A visible manual activation shortcut must exist independently of
+          # HKCU Run. Clicking it uses the private GUI and the same native
+          # launcher/mutex, never a second agent, OAuth enrollment or shell.
+          $shortcutStart = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\OrdaX MCP\OrdaX MCP.lnk'
+          $shortcutDesktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'OrdaX MCP.lnk'
+          foreach ($entry in @($shortcutStart, $shortcutDesktop)) {
+            if (-not (Test-Path -LiteralPath $entry)) {
+              throw "MCP manual activation shortcut missing: $entry"
+            }
+            $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($entry)
+            if ($shortcut.TargetPath -ine $privatePythonw -or
+                $shortcut.Arguments -cne '-m ordax_dev_agent.owner_device_connect_gui --ativar' -or
+                $shortcut.WorkingDirectory -ine $root -or
+                $shortcut.IconLocation -notlike '*ORDAX Runtime.exe*') {
+              throw 'MCP activation shortcut does not target canonical installed Runtime GUI'
+            }
+          }
           $uninstaller = Join-Path $root 'unins000.exe'
           if (-not (Test-Path $uninstaller)) { throw 'Standalone MCP uninstaller missing' }
           $uninstallLog = Join-Path $env:RUNNER_TEMP 'ordax-mcp-uninstall.log'
@@ -227,6 +244,9 @@ jobs:
           if (Test-Path (Join-Path $root 'ORDAX Runtime.exe')) { throw 'Standalone MCP Runtime remained after uninstall' }
           if (Test-Path -LiteralPath $shortcutPath) { throw 'MCP connect shortcut remained after uninstall' }
           if (Test-Path -LiteralPath $diagnosticShortcutPath) { throw 'MCP network diagnostic shortcut remained after uninstall' }
+          if (Test-Path -LiteralPath $shortcutStart -or Test-Path -LiteralPath $shortcutDesktop) {
+            throw 'MCP manual activation shortcut remained after uninstall'
+          }
           Write-Host "ORDAX_MCP_STANDALONE_INSTALL_SMOKE=PASS SHA256=$hash"
       - name: Retain unsigned validation candidate (never publish public release)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
