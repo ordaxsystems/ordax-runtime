@@ -225,6 +225,18 @@ jobs:
               $centralShortcut.WorkingDirectory -ine $root) {
             throw 'Owner ChatGPT session shortcut bypasses canonical private GUI'
           }
+          # Renewal is independent from launch and OAuth enrollment. It
+          # must require the explicit Owner GUI after installation only.
+          $renewShortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\OrdaX MCP\Renovar acesso.lnk'
+          if (-not (Test-Path -LiteralPath $renewShortcutPath)) {
+            throw 'Owner grant renewal shortcut missing'
+          }
+          $renewShortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($renewShortcutPath)
+          if ($renewShortcut.TargetPath -ine $privatePythonw -or
+              $renewShortcut.Arguments -cne '-m ordax_dev_agent.owner_device_connect_gui --renovar-acesso' -or
+              $renewShortcut.WorkingDirectory -ine $root) {
+            throw 'Owner grant renewal shortcut bypasses canonical private GUI'
+          }
           # A visible manual activation shortcut must exist independently of
           # HKCU Run. Clicking it uses the private GUI and the same native
           # launcher/mutex, never a second agent, OAuth enrollment or shell.
@@ -257,6 +269,7 @@ jobs:
           if (Test-Path -LiteralPath $shortcutPath) { throw 'MCP connect shortcut remained after uninstall' }
           if (Test-Path -LiteralPath $diagnosticShortcutPath) { throw 'MCP network diagnostic shortcut remained after uninstall' }
           if (Test-Path -LiteralPath $centralShortcutPath) { throw 'MCP Owner selection shortcut remained after uninstall' }
+          if (Test-Path -LiteralPath $renewShortcutPath) { throw 'MCP Owner renewal shortcut remained after uninstall' }
           if (Test-Path -LiteralPath $shortcutStart -or Test-Path -LiteralPath $shortcutDesktop) {
             throw 'MCP manual activation shortcut remained after uninstall'
           }
