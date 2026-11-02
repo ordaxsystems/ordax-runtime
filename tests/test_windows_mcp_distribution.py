@@ -68,8 +68,8 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         ]), 1)
         self.assertEqual(len([
             line for line in lines
-            if 'Name: "{group}\\\\Renovar acesso"' in line
-            and 'Parameters: "-m ordax_dev_agent.owner_device_connect_gui --renovar-acesso"' in line
+            if 'Name: "{group}\\\\Manter acesso"' in line
+            and 'Parameters: "-m ordax_dev_agent.owner_device_connect_gui --manter-acesso"' in line
         ]), 1)
         self.assertEqual(installer.count("ValueName: \"OrdaX MCP\""), 1)
         self.assertIn(r'Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"', installer)
