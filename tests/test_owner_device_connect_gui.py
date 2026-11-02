@@ -278,6 +278,162 @@ class OneClickOwnerConnectTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 gui.main(["--ativar", "--verificar-rede"])
 
+    def test_chatgpt_owner_cancel_performs_no_login_or_remote_calls(self):
+        actions = []
+        self.assertEqual(gui.select_chatgpt_session_with_dialogs(
+            show=lambda _message, _flags: 7,
+            authorize=lambda: actions.append("oauth"),
+            exchange=lambda *_args: actions.append("exchange"),
+            client_factory=lambda *_args: actions.append("remote"),
+        ), 2)
+        self.assertEqual(actions, [])
+
+    def test_chatgpt_owner_selects_exact_existing_ticket_with_separate_attestation(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        ticket = "22222222-2222-4222-8222-222222222222"
+        calls = []
+        dialogs = []
+
+        class Remote:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                pass
+
+            def owner_remote_authority(self, token, *, device_id):
+                calls.append(("authority", token, device_id))
+                return {"device_id": device_id,
+                        "clients": [{"client_id": client}],
+                        "grant_groups": []}
+
+            def owner_central_session_targets(self, token, *, client_id):
+                calls.append(("targets", token, client_id))
+                return {"targets": [{"device_id": device}], "eligible_device_count": 1}
+
+            def owner_central_session_selections(self, token, *, client_id):
+                calls.append(("tickets", token, client_id))
+                return {"pending_selections": [{"challenge_id": ticket,
+                    "created_at": "2026-11-02T10:00:00Z",
+                    "expires_at": "2099-01-01T00:00:00Z"}]}
+
+            def owner_select_central_device(self, token, *, client_id, challenge_id, device_id):
+                calls.append(("select", token, client_id, challenge_id, device_id))
+                return {"ok": True, "status": "pending", "attested": False,
+                        "dispatch_authorized": False}
+
+        def dialog(message, flags):
+            dialogs.append((message, flags))
+            return 6 if len(dialogs) <= 2 else 1
+
+        result = gui.select_chatgpt_session_with_dialogs(
+            show=dialog,
+            authorize=lambda: ("one-time-code", "verifier"),
+            exchange=lambda code, verifier: (
+                calls.append(("exchange", code, verifier)) or "owner-token"
+            ),
+            load_config=lambda: SimpleNamespace(device_id=device,
+                                                product_mcp_url="https://mcp.ordax.com.br"),
+            client_factory=lambda url: (calls.append(("url", url)) or Remote()),
+            clock=lambda: datetime(2026, 11, 2, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result, 0)
+        self.assertEqual(calls[-1], ("select", "owner-token", client, ticket, device))
+        self.assertEqual([call[0] for call in calls].count("select"), 1)
+        self.assertIn(device, dialogs[1][0])
+        self.assertIn(client, dialogs[1][0])
+        self.assertIn(ticket, dialogs[1][0])
+        self.assertIn("ainda nao esta atestada", dialogs[-1][0])
+        self.assertNotIn("owner-token", str(dialogs))
+        self.assertNotIn("one-time-code", str(dialogs))
+
+    def test_chatgpt_owner_decline_or_no_tickets_does_not_select(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        ticket = "22222222-2222-4222-8222-222222222222"
+        calls = []
+
+        class Remote:
+            def __init__(self, tickets):
+                self.tickets = tickets
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                pass
+            def owner_remote_authority(self, token, *, device_id):
+                return {"device_id": device_id,
+                        "clients": [{"client_id": client}], "grant_groups": []}
+            def owner_central_session_targets(self, token, *, client_id):
+                return {"targets": [{"device_id": device}]}
+            def owner_central_session_selections(self, token, *, client_id):
+                return {"pending_selections": self.tickets}
+            def owner_select_central_device(self, *_args, **_kwargs):
+                calls.append("MUST_NOT_SELECT")
+                raise AssertionError("Unexpected selection")
+
+        ticket_data = [{"challenge_id": ticket,
+                       "created_at": "2026-11-02T10:00:00Z",
+                       "expires_at": "2099-01-01T00:00:00Z"}]
+        config = lambda: SimpleNamespace(device_id=device,
+                                          product_mcp_url="https://mcp.ordax.com.br")
+        common = dict(authorize=lambda: ("code", "verifier"),
+                      exchange=lambda *_args: "owner-token", load_config=config,
+                      clock=lambda: datetime(2026, 11, 2, tzinfo=timezone.utc))
+        decisions = iter([6, 7])
+        self.assertEqual(gui.select_chatgpt_session_with_dialogs(
+            show=lambda *_args: next(decisions),
+            client_factory=lambda *_args: Remote(ticket_data), **common,
+        ), 2)
+        dialogs = []
+        self.assertEqual(gui.select_chatgpt_session_with_dialogs(
+            show=lambda message, *_args: dialogs.append(message) or 6,
+            client_factory=lambda *_args: Remote([]), **common,
+        ), 2)
+        self.assertIn("Nenhum pedido pendente", dialogs[-1])
+        self.assertEqual(calls, [])
+
+    def test_chatgpt_tickets_reject_unrelated_device_and_expired_challenge(self):
+        from datetime import datetime, timezone
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+
+        class Remote:
+            def owner_central_session_targets(self, *_args, **_kwargs):
+                return {"targets": [{"device_id": device}]}
+            def owner_central_session_selections(self, *_args, **_kwargs):
+                return {"pending_selections": [{"challenge_id": "22222222-2222-4222-8222-222222222222",
+                    "created_at": "2026-11-01T00:00:00Z",
+                    "expires_at": "2026-11-01T00:01:00Z"}]}
+        authority = {"device_id": device, "clients": [{"client_id": client}],
+                     "grant_groups": []}
+        self.assertEqual(gui._central_selection_tickets(Remote(), "owner-token",
+                                                        device, authority, now), [])
+        with self.assertRaises(ValueError):
+            gui._central_selection_tickets(Remote(), "owner-token", device,
+                {**authority, "device_id": "44444444-4444-4444-8444-444444444444"}, now)
+        with self.assertRaises(ValueError):
+            gui._central_selection_tickets(Remote(), "owner-token", device,
+                {**authority, "clients": [{"client_id": "not-uuid"}]}, now)
+
+    def test_chatgpt_owner_gui_routes_only_explicit_selection(self):
+        with mock.patch.object(gui.sys, "platform", "win32"):
+            with mock.patch.object(gui, "connect_with_dialogs") as connect:
+                with mock.patch.object(gui, "activate_with_dialogs") as activate:
+                    with mock.patch.object(gui, "select_chatgpt_session_with_dialogs",
+                                           return_value=2) as choose:
+                        self.assertEqual(gui.main(["--selecionar-chatgpt"]), 2)
+                    choose.assert_called_once()
+                activate.assert_not_called()
+            connect.assert_not_called()
+            with self.assertRaises(SystemExit):
+                gui.main(["--selecionar-chatgpt", "--ativar"])
+
     def test_untrusted_grant_claim_does_not_get_success_message(self):
         self.assertEqual(gui.connect_with_dialogs(
             show=self.dialog,
