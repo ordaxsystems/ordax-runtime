@@ -21,7 +21,7 @@ from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code, 
 from ordax_connector.owner_grants import require_owner_mcp_device_identity, select_consented_owner_mcp_client
 from ordax_dev_agent.device_setup import SetupError
 from ordax_dev_agent.config import AgentConfig
-from ordax_dev_agent.owner_grants_cli import finite_full_control_grants, retain_existing_full_control_grant
+from ordax_dev_agent.owner_grants_cli import eligible_full_control_grants, retain_existing_full_control_grant
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 from ordax_dev_agent.owner_device_connect_cli import enroll_owner_device
 from ordax_dev_agent.product_ingress import inspect_pinned_https_ingress
@@ -412,10 +412,21 @@ def retain_full_control_with_dialogs(
         with client_factory(config.product_mcp_url) as remote:
             authority = remote.owner_remote_authority(token, device_id=device_id)
             current_time = clock()
-            candidates = finite_full_control_grants(
+            existing = eligible_full_control_grants(
                 authority, device_id=device_id, now=current_time,
             )
+            candidates = [grant for grant in existing if grant[2] is not None]
             if not candidates:
+                if any(grant[2] is None for grant in existing):
+                    show(
+                        "Este computador ja possui acesso completo sem "
+                        "vencimento para um cliente OAuth autorizado.\n\n"
+                        "Ele permanecera valido ate revogacao pelo "
+                        "proprietario, sujeito a identidade e politica local. "
+                        "Nenhuma alteracao foi realizada.",
+                        _MB_ICONINFORMATION,
+                    )
+                    return 0
                 show(
                     "Nenhum acesso completo ativo com prazo para manter.\n\n"
                     "Uma autorizacao expirada, revogada ou ausente deve "
