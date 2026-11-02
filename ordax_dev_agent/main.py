@@ -480,6 +480,39 @@ def _native_local_access_granted(provider: Callable[[], bool] | None) -> bool:
         return False
 
 
+def _windows_enrollment_restart_ready(config: AgentConfig) -> bool:
+    """Detect a committed first Owner enrollment, not an OAuth/grant proof.
+
+    The standalone Windows supervisor starts before the optional Owner PKCE
+    wizard. Its AgentConfig is immutable, so the local-ready process otherwise
+    never discovers a later completed enrollment. Ask the *existing* launcher
+    to restart only after both canonical setup files are committed; the next
+    process must still authenticate and publish a real Product heartbeat.
+    Native/OS hosts and already enrolled agents never use this transition.
+    """
+    if sys.platform != "win32" or config.device_id:
+        return False
+    try:
+        from .device_credentials import resolve_token_path
+
+        refreshed = AgentConfig.from_env()
+        if (refreshed.state_dir != config.state_dir
+                or not refreshed.device_id
+                or not refreshed.product_mcp_url
+                or refreshed.control_plane_protocol != "cloudflare-v3"):
+            return False
+        token = resolve_token_path(refreshed.state_dir)
+        # This only detects the committed private credential. Size cannot
+        # attest its authenticity: the canonical Product transport verifies it.
+        return (not token.is_symlink()
+                and token.is_file()
+                and token.stat().st_size == 64)
+    except (OSError, ValueError, TypeError):
+        # Atomic enrollment may be in progress. Preserve the local agent,
+        # grant nothing and inspect again on the existing bounded loop.
+        return False
+
+
 def _wait_for_native_access(
     delay: float,
     stop_requested: threading.Event,
@@ -655,7 +688,16 @@ def run(
         )
         try:
             while not stop:
-                time.sleep(1)
+                if (device_credential_provider is None
+                        and allowed_action_names is None
+                        and _windows_enrollment_restart_ready(config)):
+                    # The canonical Windows launcher supervises this process
+                    # and starts the same Runtime with freshly loaded settings.
+                    # No new daemon, device identity or grant is created.
+                    runtime["state"] = "restarting"
+                    _startup_log(config, "OWNER_ENROLLMENT_OBSERVED_SUPERVISOR_RESTART")
+                    return 42
+                stop_requested.wait(2.0)
         finally:
             runtime["state"] = "stopping"
             status_server.shutdown()
