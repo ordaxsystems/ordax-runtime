@@ -233,13 +233,92 @@ def eligible_full_control_grants(
     return sorted(results, key=lambda item: (item[2] is None, item[2] or now, item[0]))
 
 
+def recoverable_discovery_clients(
+    authority: dict[str, Any], *, device_id: str, now: datetime,
+) -> list[tuple[str, str]]:
+    """Find only previously authorized discovery clients for explicit recovery.
+
+    The Platform does not return expired grants. A current mcp-discovery
+    grant proves a pre-existing device/client relationship, not permission
+    for computer control. Owner OAuth and a separate explicit Yes remain
+    mandatory before any full-control grant can be issued.
+    """
+    require_owner_mcp_device_identity(authority, device_id=device_id)
+    if now.tzinfo is None:
+        raise ValueError("owner_discovery_clock_invalid")
+    groups = authority.get("grant_groups")
+    clients = authority.get("clients")
+    if (not isinstance(groups, list) or len(groups) > 500
+            or not isinstance(clients, list) or len(clients) > 25):
+        raise ValueError("owner_discovery_catalog_invalid")
+    existing_full = {
+        row[0] for row in eligible_full_control_grants(
+            authority, device_id=device_id, now=now,
+        )
+    }
+    choices: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for group in groups:
+        if not isinstance(group, dict):
+            raise ValueError("owner_discovery_catalog_invalid")
+        if (group.get("profile_key") != "mcp-discovery"
+                or group.get("client_consent_active") is not True
+                or group.get("scope_kind") != "device"
+                or str(group.get("device_id", "")).lower() != device_id.lower()
+                or group.get("space_id") is not None
+                or group.get("project_id") is not None
+                or "valid_until" not in group):
+            continue
+        until = group["valid_until"]
+        if until is not None:
+            if not isinstance(until, str):
+                continue
+            try:
+                expires = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if expires.tzinfo is None or expires <= now:
+                continue
+        client_id = select_consented_owner_mcp_client(
+            authority, device_id=device_id,
+            requested_client_id=group.get("client_id"),
+        )
+        if client_id in existing_full:
+            continue  # Never replace an active full-control grant implicitly.
+        if client_id in seen:
+            raise ValueError("owner_discovery_duplicate_client")
+        seen.add(client_id)
+        client = next(
+            (item for item in clients
+             if isinstance(item, dict)
+             and str(item.get("client_id", "")).lower() == client_id),
+            None,
+        )
+        if client is None:
+            raise ValueError("owner_discovery_client_invalid")
+        name = client.get("client_name")
+        # Names are presentation only; a stable UUID is the real identity.
+        if not isinstance(name, str) or not name.strip():
+            name = "Cliente OAuth"
+        else:
+            name = "".join(
+                ch for ch in name.strip()[:80]
+                if ch.isprintable() and ch not in "\\r\\n\\t"
+            ) or "Cliente OAuth"
+        choices.append((client_id, name))
+        if len(choices) > 5:
+            raise ValueError("owner_discovery_recovery_catalog_too_large")
+    return choices
+
+
 def retain_existing_full_control_grant(
     authority: dict[str, Any], *, device_id: str, client_id: str,
     token: str, remote: ProductRemoteClient, config: AgentConfig,
     now: datetime,
     policy_checker=computer_access_management_status,
+    restore_from_discovery: bool = False,
 ) -> dict[str, Any]:
-    """Explicit Owner operation: retain only an existing consented client grant.
+    """Explicit Owner operation: retain or restore a consented client grant.
 
     Caller must have authenticated the Owner and collected a separate explicit
     user confirmation for the exact client and indefinite scope. Never modify local
@@ -251,8 +330,20 @@ def retain_existing_full_control_grant(
         authority, device_id=device_id, now=now,
     )
     matched = [row for row in candidates if row[0] == client_id and row[2] is not None]
-    if len(matched) != 1:
-        raise ValueError("owner_retention_existing_grant_required")
+    if restore_from_discovery is True:
+        # A missing full-control grant is not itself evidence of consent.
+        # Recovery requires this exact OAuth client to retain a separate
+        # pre-existing discovery grant for this installed device.
+        recovery = recoverable_discovery_clients(
+            authority, device_id=device_id, now=now,
+        )
+        if client_id not in [row[0] for row in recovery]:
+            raise ValueError("owner_recovery_discovery_grant_required")
+    elif restore_from_discovery is False:
+        if len(matched) != 1:
+            raise ValueError("owner_retention_existing_grant_required")
+    else:
+        raise ValueError("owner_recovery_explicit_mode_invalid")
     local = policy_checker(config)
     if not isinstance(local, dict) or any(
         local.get(field) is not True
