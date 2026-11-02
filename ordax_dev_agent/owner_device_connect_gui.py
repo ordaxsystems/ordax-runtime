@@ -500,6 +500,129 @@ def retain_full_control_with_dialogs(
     return 1
 
 
+def revoke_full_control_with_dialogs(
+    *,
+    show: Callable[[str, int], int] = _show_message,
+    authorize: Callable[[], tuple[str, str]] = _browser_authorization,
+    exchange: Callable[[str, str], str] = exchange_owner_code,
+    load_config: Callable[[], AgentConfig] = AgentConfig.from_env,
+    client_factory: Callable[..., ProductRemoteClient] = ProductRemoteClient,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> int:
+    """Explicit Owner revocation of ONE installed device/client access grant.
+
+    A successful HTTP deletion is not sufficient proof: confirm in the same
+    canonical Owner inventory that the specific grant group is absent.
+    """
+    if show(
+        "Gerenciar revogacao de controle do computador?\n\n"
+        "O navegador autenticara o proprietario. Nenhum grant sera "
+        "revogado sem confirmar separadamente o cliente e a permissao.",
+        _MB_YESNO | _MB_ICONQUESTION,
+    ) != _IDYES:
+        return 2
+    try:
+        config = load_config()
+        device_id = str(config.device_id or "")
+        if not device_id:
+            raise ValueError("Device is not enrolled")
+        code, verifier = authorize()
+        token = exchange(code, verifier)
+        if not isinstance(token, str) or not token:
+            raise ValueError("Owner token unavailable")
+        with client_factory(config.product_mcp_url) as remote:
+            authority = remote.owner_remote_authority(
+                token, device_id=device_id,
+            )
+            grants = eligible_full_control_grants(
+                authority, device_id=device_id, now=clock(),
+            )
+            if not grants:
+                show(
+                    "Nenhum grant ativo full-computer-control para revogar "
+                    "neste dispositivo. Nenhuma alteracao foi realizada.",
+                    _MB_ICONINFORMATION,
+                )
+                return 2
+            for client_id, group_id, expires in grants:
+                # Never mutate a group whose server-side id was omitted or
+                # which belongs to a different device or OAuth client.
+                if not group_id:
+                    raise ValueError("Owner grant group identity missing")
+                expiry = (
+                    "sem vencimento" if expires is None
+                    else expires.isoformat()
+                )
+                approved = show(
+                    "REVOGAR CONTROLE DO COMPUTADOR\n\n"
+                    f"Dispositivo: {device_id}\n"
+                    f"Cliente OAuth: {client_id}\n"
+                    f"Grant: {group_id}\n"
+                    f"Validade atual: {expiry}\n\n"
+                    "Deseja REVOGAR o acesso completo deste cliente? "
+                    "O Runtime podera continuar online, mas mouse, teclado, "
+                    "terminal e arquivos perderao esta autorizacao. "
+                    "Outros clientes e grants de descoberta nao mudam.",
+                    _MB_YESNO | _MB_ICONQUESTION,
+                )
+                if approved != _IDYES:
+                    continue
+                receipt = remote.revoke_owner_remote_grant_group(
+                    token, client_id=client_id, grant_group_id=group_id,
+                )
+                if (
+                    not isinstance(receipt, dict)
+                    or receipt.get("ok") is not True
+                    or receipt.get("revoked") is not True
+                ):
+                    raise ValueError("Owner revocation receipt not confirmed")
+                observed = remote.owner_remote_authority(
+                    token, device_id=device_id,
+                )
+                require_owner_mcp_device_identity(
+                    observed, device_id=device_id,
+                )
+                rows = observed.get("grant_groups")
+                if not isinstance(rows, list) or any(
+                    not isinstance(item, dict) for item in rows
+                ):
+                    raise ValueError("Owner revocation readback invalid")
+                if any(
+                    str(item.get("grant_group_id", "")).lower() == group_id.lower()
+                    for item in rows
+                ):
+                    raise ValueError("Owner revocation not persisted")
+                show(
+                    "Revogacao confirmada pela Platform OrdaX.\n"
+                    f"Cliente: {client_id}\n\n"
+                    "Nenhum outro cliente ou dispositivo foi alterado. "
+                    "Esta confirmacao nao significa que a sessao do "
+                    "ChatGPT esteja ativa.",
+                    _MB_ICONINFORMATION,
+                )
+                return 0
+        return 2
+    except OwnerOAuthError:
+        show(
+            "Autenticacao do proprietario nao concluida. "
+            "Nenhuma revogacao foi confirmada.",
+            _MB_ICONERROR,
+        )
+    except ProductRemoteError:
+        show(
+            "Nao foi possivel confirmar a revogacao na Platform. "
+            "Verifique as autorizacoes antes de repetir.",
+            _MB_ICONERROR,
+        )
+    except Exception:
+        show(
+            "Revogacao nao confirmada. Consulte as autorizacoes na "
+            "Platform antes de tentar novamente.",
+            _MB_ICONERROR,
+        )
+    return 1
+
+
 def _format_ingress_observation(label: str, record: object) -> str:
     if not isinstance(record, dict):
         raise ValueError("Untrusted ingress diagnostic shape")
@@ -571,6 +694,10 @@ def main(argv: list[str] | None = None) -> int:
         "--manter-acesso", action="store_true",
         help="manter explicitamente um grant full-computer-control ate revogar",
     )
+    mode.add_argument(
+        "--revogar-acesso", action="store_true",
+        help="revogar explicitamente o grant de controle de um cliente OAuth",
+    )
     args = parser.parse_args(argv)
     if sys.platform != "win32":
         return 1
@@ -580,6 +707,8 @@ def main(argv: list[str] | None = None) -> int:
         return select_chatgpt_session_with_dialogs()
     if args.manter_acesso:
         return retain_full_control_with_dialogs()
+    if args.revogar_acesso:
+        return revoke_full_control_with_dialogs()
     if args.verificar_rede:
         return diagnose_with_dialogs()
     return connect_with_dialogs()
