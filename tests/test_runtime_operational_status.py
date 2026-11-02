@@ -189,9 +189,9 @@ class WindowsFirstEnrollmentLifecycleTests(unittest.TestCase):
             state = Path(temp) / "owner-device"
             with mock.patch.dict(os.environ, {
                 "ORDAX_AGENT_STATE_DIR": str(state),
-                "ORDAX_DEVICE_ID": "",
                 "ORDAX_PRODUCT_MCP_URL": "https://mcp.ordax.com.br",
             }):
+                os.environ.pop("ORDAX_DEVICE_ID", None)
                 config = AgentConfig.from_env()
                 with mock.patch("ordax_dev_agent.main.sys.platform", "win32"):
                     self.assertFalse(_windows_enrollment_restart_ready(config))
@@ -225,8 +225,9 @@ class WindowsFirstEnrollmentLifecycleTests(unittest.TestCase):
             state = Path(temp) / "original"
             different = Path(temp) / "other"
             with mock.patch.dict(os.environ, {
-                "ORDAX_AGENT_STATE_DIR": str(state), "ORDAX_DEVICE_ID": "",
+                "ORDAX_AGENT_STATE_DIR": str(state),
             }):
+                os.environ.pop("ORDAX_DEVICE_ID", None)
                 config = AgentConfig.from_env()
                 different.mkdir()
                 (different / "agent-settings.json").write_text(
@@ -242,9 +243,9 @@ class WindowsFirstEnrollmentLifecycleTests(unittest.TestCase):
             state = Path(temp) / "owner-device"
             with mock.patch.dict(os.environ, {
                 "ORDAX_AGENT_STATE_DIR": str(state),
-                "ORDAX_DEVICE_ID": "",
                 "ORDAX_PRODUCT_MCP_URL": "https://mcp.ordax.com.br",
             }):
+                os.environ.pop("ORDAX_DEVICE_ID", None)
                 config = AgentConfig.from_env()
                 (state / "agent-settings.json").write_text(json.dumps({
                     "device_id": self.DEVICE_ID,
