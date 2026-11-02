@@ -21,7 +21,7 @@ from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code, 
 from ordax_connector.owner_grants import require_owner_mcp_device_identity, select_consented_owner_mcp_client
 from ordax_dev_agent.device_setup import SetupError
 from ordax_dev_agent.config import AgentConfig
-from ordax_dev_agent.owner_grants_cli import expiring_full_control_grants, renew_existing_full_control_grant
+from ordax_dev_agent.owner_grants_cli import finite_full_control_grants, retain_existing_full_control_grant
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 from ordax_dev_agent.owner_device_connect_cli import enroll_owner_device
 from ordax_dev_agent.product_ingress import inspect_pinned_https_ingress
@@ -353,7 +353,7 @@ def select_chatgpt_session_with_dialogs(
     return 1
 
 
-def renew_full_control_with_dialogs(
+def retain_full_control_with_dialogs(
     *,
     show: Callable[[str, int], int] = _show_message,
     authorize: Callable[[], tuple[str, str]] = browser_authorization_code,
@@ -361,15 +361,15 @@ def renew_full_control_with_dialogs(
     load_config: Callable[[], AgentConfig] = AgentConfig.from_env,
     client_factory: Callable[..., ProductRemoteClient] = ProductRemoteClient,
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-    renew: Callable[..., dict[str, Any]] = renew_existing_full_control_grant,
+    retain: Callable[..., dict[str, Any]] = retain_existing_full_control_grant,
 ) -> int:
-    """Allow the Owner to renew, never silently create or expand access."""
+    """Allow the Owner to retain access until revoked, never silently grant it."""
     if show(
         "Verificar autorizacoes existentes do OrdaX MCP?\n\n"
         "O navegador sera aberto para autenticar o proprietario. "
-        "Sera possivel renovar por 7 dias SOMENTE um acesso completo "
-        "ja concedido, com vencimento nos proximos 7 dias.\n\n"
-        "Nada sera renovado sem outra confirmacao explicita.",
+        "O acesso completo ja autorizado podera ficar sem data de vencimento, "
+        "ate que o proprietario o revogue.\n\n"
+        "Nada sera alterado sem outra confirmacao explicita.",
         _MB_YESNO | _MB_ICONQUESTION,
     ) != _IDYES:
         return 2
@@ -385,12 +385,12 @@ def renew_full_control_with_dialogs(
         with client_factory(config.product_mcp_url) as remote:
             authority = remote.owner_remote_authority(token, device_id=device_id)
             current_time = clock()
-            candidates = expiring_full_control_grants(
+            candidates = finite_full_control_grants(
                 authority, device_id=device_id, now=current_time,
             )
             if not candidates:
                 show(
-                    "Nenhum acesso completo elegivel para renovacao.\n\n"
+                    "Nenhum acesso completo ativo com prazo para manter.\n\n"
                     "Uma autorizacao expirada, revogada ou ausente deve "
                     "ser concedida novamente pelo fluxo oficial do Owner.",
                     _MB_ICONINFORMATION,
@@ -398,32 +398,32 @@ def renew_full_control_with_dialogs(
                 return 2
             for client_id, _group_id, expires in candidates:
                 approved = show(
-                    "RENOVAR ACESSO AO COMPUTADOR\n\n"
+                    "MANTER ACESSO AO COMPUTADOR ATE REVOGAR\n\n"
                     f"Dispositivo: {device_id}\n"
                     f"Cliente OAuth: {client_id}\n"
                     f"Autorizacao atual vence em: {expires.isoformat()}\n\n"
-                    "Deseja renovar por 7 dias este mesmo perfil "
-                    "full-computer-control? Acesso a mouse, teclado, "
-                    "terminal e arquivos continuara sujeito ao Owner.",
+                    "Deseja manter este perfil full-computer-control SEM "
+                    "VENCIMENTO ate revogar? O cliente tera acesso a mouse, "
+                    "teclado, terminal e arquivos enquanto autorizado.",
                     _MB_YESNO | _MB_ICONQUESTION,
                 )
                 if approved != _IDYES:
                     continue
-                result = renew(
+                result = retain(
                     authority, device_id=device_id, client_id=client_id,
                     token=token, remote=remote, config=config,
-                    now=current_time, days=7,
+                    now=current_time,
                 )
                 if (
                     result.get("ok") is not True
                     or result.get("grantMutationPerformed") is not True
                     or result.get("endToEndProven") is not False
                 ):
-                    raise ValueError("Owner renewal result invalid")
+                    raise ValueError("Owner retention result invalid")
                 show(
-                    "Renovacao confirmada pela Platform OrdaX.\n"
-                    f"Novo vencimento: {result['valid_until']}\n\n"
-                    "A renovacao nao atesta uma sessao ChatGPT. "
+                    "Acesso sem vencimento confirmado pela Platform OrdaX.\n"
+                    "Permanece ate revogacao pelo proprietario.\n\n"
+                    "Isto nao atesta uma sessao ChatGPT. "
                     "Se necessario, utilize Autorizar ChatGPT no menu Iniciar.",
                     _MB_ICONINFORMATION,
                 )
@@ -432,12 +432,12 @@ def renew_full_control_with_dialogs(
     except OwnerOAuthError:
         show("Autenticacao do proprietario nao concluida.", _MB_ICONERROR)
     except ProductRemoteError:
-        show("Nao foi possivel consultar ou renovar o acesso na Platform.", _MB_ICONERROR)
+        show("Nao foi possivel consultar ou manter o acesso na Platform.", _MB_ICONERROR)
     except Exception:
         # Preserve fail-closed semantics without leaking untrusted server
         # details, credentials, tokens or private installation paths.
         show(
-            "Renovacao nao concluida. Confira a instalacao e as "
+            "Alteracao nao concluida. Confira a instalacao e as "
             "permissoes locais antes de tentar novamente.",
             _MB_ICONERROR,
         )
@@ -512,8 +512,8 @@ def main(argv: list[str] | None = None) -> int:
         help="confirmar explicitamente um pedido de sessao ChatGPT ja autorizado",
     )
     mode.add_argument(
-        "--renovar-acesso", action="store_true",
-        help="renovar explicitamente um grant full-computer-control ja existente",
+        "--manter-acesso", action="store_true",
+        help="manter explicitamente um grant full-computer-control ate revogar",
     )
     args = parser.parse_args(argv)
     if sys.platform != "win32":
@@ -522,8 +522,8 @@ def main(argv: list[str] | None = None) -> int:
         return activate_with_dialogs()
     if args.selecionar_chatgpt:
         return select_chatgpt_session_with_dialogs()
-    if args.renovar_acesso:
-        return renew_full_control_with_dialogs()
+    if args.manter_acesso:
+        return retain_full_control_with_dialogs()
     if args.verificar_rede:
         return diagnose_with_dialogs()
     return connect_with_dialogs()
