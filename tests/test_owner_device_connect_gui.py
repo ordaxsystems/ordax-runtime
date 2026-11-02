@@ -623,6 +623,58 @@ class OneClickOwnerConnectTests(unittest.TestCase):
         self.assertNotIn("owner-token", str(dialogs))
         self.assertNotIn("code", str(dialogs))
 
+    def test_retain_gui_existing_permanent_grant_requires_no_second_write(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        seen = []
+
+        class Owner:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def owner_remote_authority(self, _token, *, device_id):
+                seen.append("authority")
+                return {
+                    "device_id": device_id,
+                    "clients": [{"client_id": client}],
+                    "grant_groups": [{
+                        "grant_group_id": device,
+                        "device_id": device,
+                        "client_id": client,
+                        "client_consent_active": True,
+                        "scope_kind": "device",
+                        "space_id": None,
+                        "project_id": None,
+                        "profile_key": "full-computer-control",
+                        "valid_until": None,
+                    }],
+                }
+
+        messages = []
+        result = gui.retain_full_control_with_dialogs(
+            show=lambda msg, _flags: messages.append(msg) or 6,
+            authorize=lambda: ("code", "verifier"),
+            exchange=lambda *_args: "opaque-owner-token",
+            load_config=lambda: SimpleNamespace(
+                device_id=device, product_mcp_url="https://mcp.ordax.com.br",
+            ),
+            client_factory=lambda *_args: Owner(),
+            clock=lambda: datetime(2026, 11, 2, tzinfo=timezone.utc),
+            retain=lambda *_args, **_kwargs: self.fail("Must not rewrite permanent access"),
+        )
+        self.assertEqual(result, 0)
+        self.assertEqual(seen, ["authority"])
+        self.assertEqual(len(messages), 2)
+        self.assertIn("ja possui acesso completo sem vencimento", messages[1])
+        self.assertIn("Nenhuma alteracao foi realizada", messages[1])
+        self.assertNotIn("opaque-owner-token", str(messages))
+
     def test_retain_grant_gui_owner_decline_never_changes_authority(self):
         from datetime import datetime, timedelta, timezone
         from types import SimpleNamespace
