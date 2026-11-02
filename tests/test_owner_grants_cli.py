@@ -12,7 +12,7 @@ import httpx
 from ordax_core.owner_oauth import (
     OwnerOAuthError, browser_authorization_code, exchange_owner_code,
 )
-from ordax_dev_agent.owner_grants_cli import parse_args, perform, diagnose_owner_mcp_readiness, finite_full_control_grants, retain_existing_full_control_grant, _DIAGNOSTIC_ACTIONS
+from ordax_dev_agent.owner_grants_cli import parse_args, perform, diagnose_owner_mcp_readiness, eligible_full_control_grants, retain_existing_full_control_grant, _DIAGNOSTIC_ACTIONS
 from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 
 DEVICE = "24630b00-e9c0-4d93-b38a-2367048cd9d1"
@@ -337,7 +337,7 @@ class OwnerGrantsCliTests(unittest.TestCase):
             "device_id": DEVICE, "clients": [{"client_id": CLIENT}],
             "grant_groups": [base_group],
         }
-        entries = finite_full_control_grants(authority, device_id=DEVICE, now=now)
+        entries = eligible_full_control_grants(authority, device_id=DEVICE, now=now)
         self.assertEqual(entries, [(CLIENT, DEVICE, now + timedelta(days=1))])
         for invalid in (
             {"client_consent_active": False},
@@ -346,27 +346,42 @@ class OwnerGrantsCliTests(unittest.TestCase):
             {"scope_kind": "project"},
             {"project_id": DEVICE},
             {"valid_until": (now - timedelta(minutes=1)).isoformat()},
-            {"valid_until": None},
             {"valid_until": "not-a-date"},
         ):
             with self.subTest(invalid=invalid):
-                filtered = finite_full_control_grants(
+                filtered = eligible_full_control_grants(
                     {**authority, "grant_groups": [{**base_group, **invalid}]},
                     device_id=DEVICE, now=now,
                 )
                 self.assertEqual(filtered, [])
+        permanent = {**base_group, "valid_until": None}
+        self.assertEqual(
+            eligible_full_control_grants(
+                {**authority, "grant_groups": [permanent]},
+                device_id=DEVICE, now=now,
+            ),
+            [(CLIENT, DEVICE, None)],
+        )
+        missing_expiry = dict(base_group)
+        del missing_expiry["valid_until"]
+        self.assertEqual(
+            eligible_full_control_grants(
+                {**authority, "grant_groups": [missing_expiry]},
+                device_id=DEVICE, now=now,
+            ), [],
+        )
         # A real, finite grant remains eligible even if it does not
         # expire within seven days; no periodic renewal schedule is needed.
         long_lived = {**base_group,
                       "valid_until": (now + timedelta(days=30)).isoformat()}
         self.assertEqual(
-            len(finite_full_control_grants(
+            len(eligible_full_control_grants(
                 {**authority, "grant_groups": [long_lived]},
                 device_id=DEVICE, now=now,
             )), 1,
         )
         with self.assertRaises(ValueError):
-            finite_full_control_grants(
+            eligible_full_control_grants(
                 {**authority, "device_id": CLIENT}, device_id=DEVICE, now=now,
             )
 
@@ -523,7 +538,7 @@ class OwnerGrantsCliTests(unittest.TestCase):
         auth = {"device_id": DEVICE, "clients": [{"client_id": CLIENT}],
                 "grant_groups": [group, group]}
         with self.assertRaisesRegex(ValueError, "duplicate"):
-            finite_full_control_grants(auth, device_id=DEVICE, now=now)
+            eligible_full_control_grants(auth, device_id=DEVICE, now=now)
         remote = FakeOwner()
         for grants in ([], [{**group, "client_consent_active": False}]):
             before = len(remote.calls)
