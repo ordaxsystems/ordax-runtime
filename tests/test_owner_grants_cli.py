@@ -346,7 +346,6 @@ class OwnerGrantsCliTests(unittest.TestCase):
             {"scope_kind": "project"},
             {"project_id": DEVICE},
             {"valid_until": (now - timedelta(minutes=1)).isoformat()},
-            {"valid_until": (now + timedelta(days=10)).isoformat()},
             {"valid_until": None},
             {"valid_until": "not-a-date"},
         ):
@@ -356,6 +355,16 @@ class OwnerGrantsCliTests(unittest.TestCase):
                     device_id=DEVICE, now=now,
                 )
                 self.assertEqual(filtered, [])
+        # A real, finite grant remains eligible even if it does not
+        # expire within seven days; no periodic renewal schedule is needed.
+        long_lived = {**base_group,
+                      "valid_until": (now + timedelta(days=30)).isoformat()}
+        self.assertEqual(
+            len(finite_full_control_grants(
+                {**authority, "grant_groups": [long_lived]},
+                device_id=DEVICE, now=now,
+            )), 1,
+        )
         with self.assertRaises(ValueError):
             finite_full_control_grants(
                 {**authority, "device_id": CLIENT}, device_id=DEVICE, now=now,
