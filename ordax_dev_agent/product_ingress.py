@@ -8,6 +8,7 @@ server must never be repeated merely because its response was lost.
 from __future__ import annotations
 
 import errno
+import re
 import socket
 import ssl
 import time
@@ -22,6 +23,21 @@ _TRANSPORT_OPS = frozenset({
     "report", "recover-report", "wake",
 })
 _SESSION_PATH = "/v3/product/device/central-session"
+# Canonical Owner API routes already used by ProductRemoteClient. The strict
+# allowlist permits the same-Worker restricted ingress ONLY after a proven
+# preconnect TCP/DNS failure; it never changes the OAuth/grant authority.
+_OWNER_PATHS = frozenset({
+    "/v3/owner/remote-authority",
+    "/v3/owner/project-scope",
+    "/v3/owner/workspace-resources/approvals",
+    "/v3/owner/central-session-targets",
+    "/v3/owner/central-session-selections",
+    "/v3/owner/remote-grant-groups",
+})
+_OWNER_GRANT_REVOKE = re.compile(
+    r"/v3/owner/remote-grant-groups/[0-9a-f]{8}-[0-9a-f]{4}-"
+    r"[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\Z"
+)
 _T = TypeVar("_T")
 
 
@@ -142,7 +158,9 @@ class TrustedProductIngress:
 
     @staticmethod
     def _allowed(path: str) -> bool:
-        if path in {_SESSION_PATH, "/v3/device/setup"}:
+        if path in {_SESSION_PATH, "/v3/device/setup"} or path in _OWNER_PATHS:
+            return True
+        if _OWNER_GRANT_REVOKE.fullmatch(path) is not None:
             return True
         prefix = "/v3/device/transport/"
         return path.startswith(prefix) and path[len(prefix):] in _TRANSPORT_OPS
