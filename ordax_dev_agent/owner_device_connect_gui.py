@@ -171,6 +171,7 @@ def activate_with_dialogs(
     show: Callable[[str, int], int] = _show_message,
     observe: Callable[[], str] = _observe_local_runtime,
     launch: Callable[[], None] = _launch_canonical_runtime,
+    select_session: Callable[[], int] | None = None,
 ) -> int:
     """Desktop/Start shortcut: idempotent Runtime activation with visible status.
 
@@ -182,12 +183,25 @@ def activate_with_dialogs(
         if before not in {"connected", "running", "unavailable"}:
             raise ValueError("Invalid local Runtime status")
         if before == "connected":
-            show(
+            choice = show(
                 "OrdaX MCP ja esta ativo e conectado.\n\n"
-                "Permissoes de controle continuam sujeitas aos grants do Owner.",
-                _MB_ICONINFORMATION,
+                "Esta conexao NAO significa que o ChatGPT tenha acesso. "
+                "Se houver um pedido de sessao pendente, deseja abrir a "
+                "confirmacao oficial do proprietario agora?\n\n"
+                "Escolha Nao para apenas verificar o status. "
+                "Nenhuma permissao sera criada automaticamente.",
+                _MB_YESNO | _MB_ICONQUESTION,
             )
-            return 0
+            if choice != _IDYES:
+                return 0
+            # No Owner authentication or remote permission is attempted
+            # without the second, explicit approval on this first-party GUI.
+            # Resolve the existing GUI function at call-time, never import or
+            # start a competing control process.
+            return (
+                select_session() if select_session is not None
+                else select_chatgpt_session_with_dialogs()
+            )
         if before == "running":
             show(
                 "OrdaX MCP ja esta em execucao, mas a conexao ainda nao foi "
