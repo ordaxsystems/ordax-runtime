@@ -54,6 +54,9 @@ Name: "{group}\\Autorizar ChatGPT"; Filename: "{app}\\runtime\\pythonw.exe"; Par
 ; Owner-only, separately confirmed retention of an existing expiring grant.
 ; Never runs during installation/boot and never changes local access policy.
 Name: "{group}\\Manter acesso"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --manter-acesso"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
+; Revoke one exact Owner grant only after OAuth plus a separate confirmation.
+; This never starts a Runtime or changes other clients' access.
+Name: "{group}\\Revogar acesso"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --revogar-acesso"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 ; A read-only network check. Never launches OAuth or issues grants.
 Name: "{group}\\Verificar conexão"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 
