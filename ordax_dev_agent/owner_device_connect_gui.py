@@ -191,13 +191,9 @@ def _format_local_runtime_diagnosis(runtime: object) -> str:
     dispatch = runtime.get("product_dispatch_ready")
     readiness = runtime.get("product_readiness_code")
     if (
-        not isinstance(state, str) or state not in {
-            "ready", "busy", "starting", "initializing", "pairing",
-            "credential-recovery-required", "local-disabled", "stopped",
-            "error", "offline", "idle",
-        }
+        not isinstance(state, str) or len(state) > 64
         or type(paired) is not bool
-        or not isinstance(transport, str)
+        or not isinstance(transport, str) or len(transport) > 64
         or type(dispatch) is not bool
         or (readiness != "ready" and readiness not in _LOCAL_READINESS)
     ):
@@ -215,15 +211,20 @@ def _format_local_runtime_diagnosis(runtime: object) -> str:
     central = runtime.get("central_session")
     if central is None:
         session = "Sessao central: verificacao ainda nao iniciada."
-    elif isinstance(central, dict) and set(central) == {
-        "checked", "last_confirmation_observed", "last_error_code",
-    } and type(central["checked"]) is bool and type(
-        central["last_confirmation_observed"]
-    ) is bool and (
-        central["last_error_code"] is None
-        or central["last_error_code"] in _CENTRAL_ERRORS
-        if isinstance(central["last_error_code"], str)
-        else central["last_error_code"] is None
+    elif (
+        isinstance(central, dict)
+        and set(central) == {
+            "checked", "last_confirmation_observed", "last_error_code",
+        }
+        and type(central["checked"]) is bool
+        and type(central["last_confirmation_observed"]) is bool
+        and (
+            central["last_error_code"] is None
+            or (
+                isinstance(central["last_error_code"], str)
+                and central["last_error_code"] in _CENTRAL_ERRORS
+            )
+        )
     ):
         error_code = central["last_error_code"]
         if error_code is not None:
