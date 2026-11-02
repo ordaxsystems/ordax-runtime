@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 import unittest
 
 import httpx
@@ -239,6 +240,122 @@ class ProductRemoteClientTests(unittest.TestCase):
             client.wait_action("jwt", "req", poll_interval_seconds=0.01)
         with self.assertRaises(ValueError):
             client.owner_remote_authority("jwt", device_id="not-a-uuid")
+
+
+    def test_owner_grants_use_canonical_same_worker_only_on_preconnect(self):
+        calls = []
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            self.assertEqual(request.headers["authorization"], "Bearer owner-jwt")
+            if request.url.host == "mcp.ordax.com.br":
+                raise httpx.ConnectTimeout("TCP timed out before request", request=request)
+            self.assertEqual(request.url.host, "ordax-mcp.ordaxsystems.workers.dev")
+            if request.method == "GET":
+                self.assertEqual(request.url.path, "/v3/owner/remote-authority")
+                return httpx.Response(200, json={
+                    "ok": True, "device_id": DEVICE_ID,
+                    "clients": [{"client_id": CLIENT_ID}], "grant_groups": [],
+                })
+            if request.method == "POST":
+                self.assertEqual(request.url.path, "/v3/owner/remote-grant-groups")
+                self.assertEqual(json.loads(request.content)["profile_key"], "computer-observe")
+                return httpx.Response(200, json={"ok": True, "grant_group_id": GROUP_ID})
+            self.assertEqual(request.method, "DELETE")
+            self.assertEqual(request.url.path, "/v3/owner/remote-grant-groups/" + GROUP_ID)
+            return httpx.Response(200, json={"ok": True, "revoked": True})
+
+        with httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True) as http:
+            with ProductRemoteClient("https://mcp.ordax.com.br", http=http) as client:
+                authority = client.owner_remote_authority("owner-jwt", device_id=DEVICE_ID)
+                self.assertEqual(authority["device_id"], DEVICE_ID)
+                created = client.replace_owner_remote_grant_group(
+                    "owner-jwt", client_id=CLIENT_ID, device_id=DEVICE_ID,
+                    profile_key="computer-observe",
+                )
+                self.assertEqual(created["grant_group_id"], GROUP_ID)
+                revoked = client.revoke_owner_remote_grant_group(
+                    "owner-jwt", client_id=CLIENT_ID, grant_group_id=GROUP_ID,
+                )
+                self.assertTrue(revoked["revoked"])
+        self.assertEqual([r.url.host for r in calls],
+                         ["mcp.ordax.com.br"] + ["ordax-mcp.ordaxsystems.workers.dev"] * 3)
+        self.assertEqual([r.method for r in calls], ["GET", "GET", "POST", "DELETE"])
+
+    def test_owner_central_selection_preserves_exact_payload_on_preconnect(self):
+        challenge = "44444444-4444-4444-8444-444444444444"
+        observed = []
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed.append(request)
+            self.assertEqual(request.method, "POST")
+            self.assertEqual(request.url.path, "/v3/owner/central-session-selections")
+            self.assertEqual(request.headers["authorization"], "Bearer owner-jwt")
+            self.assertEqual(json.loads(request.content), {
+                "client_id": CLIENT_ID, "challenge_id": challenge, "device_id": DEVICE_ID,
+            })
+            if request.url.host == "mcp.ordax.com.br":
+                raise httpx.ConnectTimeout("TCP", request=request)
+            return httpx.Response(200, json={
+                "status": "pending", "challenge_id": challenge, "device_id": DEVICE_ID,
+                "attested": False, "dispatch_authorized": False,
+            })
+        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+            with ProductRemoteClient("https://mcp.ordax.com.br", http=http) as client:
+                result = client.owner_select_central_device(
+                    "owner-jwt", client_id=CLIENT_ID,
+                    device_id=DEVICE_ID, challenge_id=challenge,
+                )
+                self.assertEqual(result["status"], "pending")
+        self.assertEqual([r.url.host for r in observed],
+                         ["mcp.ordax.com.br", "ordax-mcp.ordaxsystems.workers.dev"])
+
+    def test_owner_fail_closed_for_http_tls_lost_response_and_redirect(self):
+        for failure in ("http401", "http403", "http503", "read-timeout", "tls", "redirect"):
+            with self.subTest(failure=failure):
+                seen = []
+                def handler(request: httpx.Request) -> httpx.Response:
+                    seen.append(request)
+                    self.assertEqual(request.url.host, "mcp.ordax.com.br")
+                    if failure.startswith("http"):
+                        status = int(failure.removeprefix("http"))
+                        return httpx.Response(status, json={
+                            "ok": False, "error": "product_authorization_denied",
+                        })
+                    if failure == "read-timeout":
+                        raise httpx.ReadTimeout("reply was lost", request=request)
+                    if failure == "tls":
+                        try:
+                            raise ssl.SSLCertVerificationError("certificate verify failed")
+                        except ssl.SSLError as exc:
+                            raise httpx.ConnectError("TLS rejected", request=request) from exc
+                    return httpx.Response(307, headers={
+                        "location": "https://ordax-mcp.ordaxsystems.workers.dev/v3/owner/remote-authority",
+                    })
+                with httpx.Client(
+                    transport=httpx.MockTransport(handler), follow_redirects=True,
+                ) as http:
+                    with ProductRemoteClient("https://mcp.ordax.com.br", http=http) as client:
+                        with self.assertRaises(ProductRemoteError):
+                            client.owner_remote_authority("owner-jwt", device_id=DEVICE_ID)
+                self.assertEqual(len(seen), 1, failure)
+
+    def test_unknown_owner_route_and_unapproved_origin_never_fail_over(self):
+        for origin, path in (
+            ("https://mcp.ordax.com.br", "/v3/owner/unapproved"),
+            ("https://mcp.ordax.com.br", "/v3/owner/remote-grant-groups/not-a-uuid"),
+            ("https://other.example.test", "/v3/owner/remote-authority"),
+        ):
+            with self.subTest(origin=origin, path=path):
+                seen = []
+                def handler(request: httpx.Request) -> httpx.Response:
+                    seen.append(request.url.host)
+                    raise httpx.ConnectTimeout("connection did not start", request=request)
+                with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+                    with ProductRemoteClient(origin, http=http) as client:
+                        with self.assertRaises(ProductRemoteError):
+                            client._request("GET", origin + path, headers={
+                                "authorization": "Bearer owner-jwt",
+                            })
+                self.assertEqual(seen, [httpx.URL(origin).host])
 
 
 if __name__ == "__main__":
