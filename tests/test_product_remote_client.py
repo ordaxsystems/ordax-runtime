@@ -295,7 +295,8 @@ class ProductRemoteClientTests(unittest.TestCase):
             if request.url.host == "mcp.ordax.com.br":
                 raise httpx.ConnectTimeout("TCP", request=request)
             return httpx.Response(200, json={
-                "status": "pending", "challenge_id": challenge, "device_id": DEVICE_ID,
+                "ok": True, "status": "pending",
+                "challenge_id": challenge, "device_id": DEVICE_ID,
                 "attested": False, "dispatch_authorized": False,
             })
         with httpx.Client(transport=httpx.MockTransport(handler)) as http:
