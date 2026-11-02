@@ -434,6 +434,115 @@ class OneClickOwnerConnectTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 gui.main(["--selecionar-chatgpt", "--ativar"])
 
+    def test_renew_grant_gui_cancel_never_authenticates_or_updates(self):
+        called = []
+        self.assertEqual(gui.renew_full_control_with_dialogs(
+            show=lambda *_: 7,
+            authorize=lambda: called.append("oauth"),
+            client_factory=lambda *_: called.append("remote"),
+        ), 2)
+        self.assertEqual(called, [])
+
+    def test_renew_grant_gui_requires_two_explicit_owner_confirmations(self):
+        from datetime import datetime, timedelta, timezone
+        from types import SimpleNamespace
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        calls = []
+        dialogs = []
+
+        class Owner:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def owner_remote_authority(self, _token, *, device_id):
+                calls.append(("authority", device_id))
+                return {
+                    "device_id": device_id, "clients": [{"client_id": client}],
+                    "grant_groups": [{
+                        "grant_group_id": device, "device_id": device,
+                        "client_id": client, "client_consent_active": True,
+                        "scope_kind": "device", "space_id": None, "project_id": None,
+                        "profile_key": "full-computer-control",
+                        "valid_until": (now + timedelta(days=1)).isoformat(),
+                    }],
+                }
+
+        def display(message, _flags):
+            dialogs.append(message)
+            return 6 if len(dialogs) <= 2 else 1
+
+        def renewal(authority, *, device_id, client_id, token, remote,
+                    config, now, days):
+            calls.append(("renew", device_id, client_id, token, days))
+            self.assertEqual(config.device_id, device)
+            self.assertEqual(days, 7)
+            self.assertIsInstance(authority, dict)
+            return {
+                "ok": True, "grantMutationPerformed": True,
+                "endToEndProven": False,
+                "valid_until": (now + timedelta(days=7)).isoformat(),
+            }
+
+        outcome = gui.renew_full_control_with_dialogs(
+            show=display, authorize=lambda: ("code", "verifier"),
+            exchange=lambda *_: "owner-token",
+            load_config=lambda: SimpleNamespace(
+                device_id=device, product_mcp_url="https://mcp.ordax.com.br",
+            ),
+            client_factory=lambda *_: Owner(),
+            clock=lambda: now, renew=renewal,
+        )
+        self.assertEqual(outcome, 0)
+        self.assertEqual(calls[-1], ("renew", device, client, "owner-token", 7))
+        self.assertEqual(len(dialogs), 3)
+        self.assertIn("RENOVAR ACESSO AO COMPUTADOR", dialogs[1])
+        self.assertIn(client, dialogs[1])
+        self.assertIn("Renovacao confirmada", dialogs[2])
+        self.assertNotIn("owner-token", str(dialogs))
+        self.assertNotIn("code", str(dialogs))
+
+    def test_renew_grant_gui_owner_decline_never_changes_authority(self):
+        from datetime import datetime, timedelta, timezone
+        from types import SimpleNamespace
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        class Owner:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def owner_remote_authority(self, _token, *, device_id):
+                return {"device_id": device_id,
+                        "clients": [{"client_id": client}],
+                        "grant_groups": [{
+                            "grant_group_id": device, "device_id": device,
+                            "client_id": client, "client_consent_active": True,
+                            "scope_kind": "device", "space_id": None, "project_id": None,
+                            "profile_key": "full-computer-control",
+                            "valid_until": (now + timedelta(days=1)).isoformat(),
+                        }]}
+        replies = iter([6, 7])
+        self.assertEqual(gui.renew_full_control_with_dialogs(
+            show=lambda *_: next(replies),
+            authorize=lambda: ("code", "verifier"),
+            exchange=lambda *_: "token",
+            load_config=lambda: SimpleNamespace(
+                device_id=device, product_mcp_url="https://mcp.ordax.com.br"),
+            client_factory=lambda *_: Owner(),
+            clock=lambda: now,
+            renew=lambda *_args, **_kwargs: self.fail("Must not renew"),
+        ), 2)
+
+    def test_renew_grant_gui_only_routes_explicit_option(self):
+        with mock.patch.object(gui.sys, "platform", "win32"):
+            with mock.patch.object(gui, "renew_full_control_with_dialogs", return_value=2) as renew:
+                with mock.patch.object(gui, "connect_with_dialogs") as connect:
+                    self.assertEqual(gui.main(["--renovar-acesso"]), 2)
+                    connect.assert_not_called()
+                renew.assert_called_once()
+            with self.assertRaises(SystemExit):
+                gui.main(["--renovar-acesso", "--selecionar-chatgpt"])
+
     def test_untrusted_grant_claim_does_not_get_success_message(self):
         self.assertEqual(gui.connect_with_dialogs(
             show=self.dialog,
