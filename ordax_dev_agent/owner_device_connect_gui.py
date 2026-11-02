@@ -777,7 +777,12 @@ def diagnose_with_dialogs(
             raise ValueError("Untrusted ingress diagnostic authority")
         primary = _format_ingress_observation("Servidor principal", result["primary"])
         restricted = _format_ingress_observation("Acesso de contingencia", result["restricted"])
-        local = _format_local_runtime_diagnosis(observe_runtime())
+        observed_runtime = observe_runtime()
+        local = _format_local_runtime_diagnosis(observed_runtime)
+        local_ready = (
+            isinstance(observed_runtime, dict)
+            and observed_runtime.get("product_dispatch_ready") is True
+        )
     except Exception:
         show(
             "Nao foi possivel verificar a conectividade. Tente novamente."
@@ -794,7 +799,11 @@ def diagnose_with_dialogs(
         "Este teste nao abre o navegador nem altera permissoes.",
         _MB_ICONINFORMATION,
     )
-    return 0 if result["primary"]["transport"] == "https_responded" else 1
+    # HTTPS reachability alone is insufficient for a healthy installed MCP.
+    # A connected local Runtime still does not attest the current ChatGPT.
+    return 0 if (
+        local_ready and result["primary"]["transport"] == "https_responded"
+    ) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
