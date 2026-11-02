@@ -78,7 +78,7 @@ def _native_request(
 
 
 def desktop_surface_status(payload: dict) -> ActionResult:
-    if payload:
+    if type(payload) is not dict or payload:
         return ActionResult(False, "Surface status accepts no arguments")
     endpoint = _native_endpoint()
     if endpoint is None:

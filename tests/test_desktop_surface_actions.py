@@ -138,6 +138,10 @@ class DesktopSurfaceActionsTests(unittest.TestCase):
         self.assertFalse(self.invoke(
             ORDAX_DESKTOP_SURFACE_BRIDGE_TOKEN="bad-token").ok)
 
+    def test_native_surface_status_rejects_nonobject_empty_payloads(self):
+        for invalid in (None, [], (), False, 0, ""):
+            with patch.dict(os.environ, self.environment):
+                self.assertFalse(desktop_surface_status(invalid).ok, "Status accepts only {}")
     def test_native_surface_stale_and_malformed_reports_fail_closed(self):
         original = _NativeHost.response_payload
         try:
