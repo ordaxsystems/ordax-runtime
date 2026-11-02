@@ -37,11 +37,20 @@ def device_capability_snapshot(action_names: Iterable[str]) -> dict[str, Any]:
         )
 
     capabilities.sort(key=lambda item: item["id"])
-    if len(capabilities) > MAX_DEVICE_CAPABILITIES:
-        raise RuntimeError("Device Agent capability snapshot exceeds contract bound")
+    # The v1 OS reader accepts at most 64 entries. Preserve the complete
+    # computer-control subset first when the Product catalog is larger,
+    # and mark the snapshot degraded rather than failing HTTP or claiming
+    # complete discovery. This grants no additional remote capabilities.
+    overflow = len(capabilities) > MAX_DEVICE_CAPABILITIES
+    if overflow:
+        capabilities = sorted(
+            capabilities,
+            key=lambda item: (not item["id"].startswith("computer."), item["id"]),
+        )[:MAX_DEVICE_CAPABILITIES]
+        capabilities.sort(key=lambda item: item["id"])
 
     return {
         "schema": DEVICE_AGENT_CAPABILITIES_SCHEMA,
-        "state": "ready" if capabilities else "degraded",
+        "state": "degraded" if overflow or not capabilities else "ready",
         "capabilities": capabilities,
     }
