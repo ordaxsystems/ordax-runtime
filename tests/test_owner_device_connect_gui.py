@@ -231,6 +231,41 @@ class OneClickOwnerConnectTests(unittest.TestCase):
         self.assertEqual(observe({"state": "pairing"}), "running")
         self.assertEqual(observe({}), "unavailable")
 
+    def test_activation_launcher_uses_only_pinned_install_and_private_host(self):
+        import os
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as local_data:
+            root = Path(local_data) / "Programs" / "OrdaX MCP"
+            private_gui = root / "runtime" / "pythonw.exe"
+            launcher = root / "ORDAX Runtime.exe"
+            private_gui.parent.mkdir(parents=True)
+            private_gui.touch()
+            launcher.touch()
+            with mock.patch.dict(gui.os.environ, {"LOCALAPPDATA": local_data}):
+                with mock.patch.object(gui.sys, "platform", "win32"):
+                    with mock.patch.object(gui.sys, "executable", str(private_gui)):
+                        with mock.patch.object(gui.subprocess, "Popen") as spawn:
+                            gui._launch_canonical_runtime()
+                        spawn.assert_called_once()
+                        args, options = spawn.call_args
+                        self.assertEqual(args, ([str(launcher)],))
+                        self.assertEqual(options["cwd"], str(root))
+                        self.assertIs(options["shell"], False)
+                        self.assertIs(options["close_fds"], True)
+                    with mock.patch.object(gui.sys, "executable", str(root / "unauthorized.exe")):
+                        with mock.patch.object(gui.subprocess, "Popen") as spawn:
+                            with self.assertRaises(RuntimeError):
+                                gui._launch_canonical_runtime()
+                        spawn.assert_not_called()
+                    private_gui.unlink()
+                    with mock.patch.object(gui.sys, "executable", str(private_gui)):
+                        with mock.patch.object(gui.subprocess, "Popen") as spawn:
+                            with self.assertRaises(RuntimeError):
+                                gui._launch_canonical_runtime()
+                        spawn.assert_not_called()
+
     def test_activation_cli_is_distinct_from_oauth_and_network_diagnostics(self):
         with mock.patch.object(gui.sys, "platform", "win32"):
             with mock.patch.object(gui, "connect_with_dialogs") as connect:
