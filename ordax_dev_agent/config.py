@@ -35,8 +35,13 @@ class AgentConfig:
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
-        local_app_data = Path(
-            os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
+        # Python evaluates default arguments eagerly. A Windows supervisor
+        # can inherit LOCALAPPDATA without USERPROFILE/HOME, so never invoke
+        # Path.home() unless it is actually needed.
+        local_app_data = (
+            Path(os.environ["LOCALAPPDATA"])
+            if "LOCALAPPDATA" in os.environ
+            else Path.home() / "AppData" / "Local"
         )
         state_dir = Path(
             os.environ.get(
@@ -86,6 +91,28 @@ class AgentConfig:
         if str(protocol).strip().lower() != "cloudflare-v3":
             raise ValueError(f"Unsupported control-plane protocol: {protocol}")
 
+        # Use the existing local workspace hint, avoiding an eager
+        # Path.home() evaluation even when the user has supplied a path.
+        hordax_setting = os.environ.get("ORDAX_HORDAX_PATH")
+        if hordax_setting is None:
+            hordax_setting = settings.get("hordax_path")
+        if hordax_setting is None:
+            try:
+                home = Path.home()
+            except RuntimeError:
+                # A sanitized Windows service/profile may expose only the
+                # authenticated user's LOCALAPPDATA. Keep the workspace local
+                # and do not infer another user's home directory.
+                home = local_app_data
+            hordax_setting = str(home / "Documents" / "github" / "HORDAX-game")
+        hordax_path = Path(hordax_setting)
+
+        workspace_setting = os.environ.get("ORDAX_WORKSPACE_ROOT")
+        if workspace_setting is None:
+            workspace_setting = settings.get("workspace_root")
+        if workspace_setting is None:
+            workspace_setting = str(hordax_path.expanduser().resolve().parent)
+
         return cls(
             projects=projects,
             default_project=default_project,
@@ -124,15 +151,7 @@ class AgentConfig:
                     settings.get("agent_repo_path", state_dir / "src"),
                 )
             ),
-            hordax_path=Path(
-                os.environ.get(
-                    "ORDAX_HORDAX_PATH",
-                    settings.get(
-                        "hordax_path",
-                        str(Path.home() / "Documents" / "github" / "HORDAX-game"),
-                    ),
-                )
-            ),
+            hordax_path=hordax_path,
             bridge_path=Path(
                 os.environ.get(
                     "ORDAX_BRIDGE_PATH",
@@ -142,25 +161,7 @@ class AgentConfig:
                     ),
                 )
             ),
-            workspace_root=Path(
-                os.environ.get(
-                    "ORDAX_WORKSPACE_ROOT",
-                    settings.get(
-                        "workspace_root",
-                        str(
-                            Path(
-                                os.environ.get(
-                                    "ORDAX_HORDAX_PATH",
-                                    settings.get(
-                                        "hordax_path",
-                                        str(Path.home() / "Documents" / "github" / "HORDAX-game"),
-                                    ),
-                                )
-                            ).expanduser().resolve().parent
-                        ),
-                    ),
-                )
-            ).expanduser().resolve(),
+            workspace_root=Path(workspace_setting).expanduser().resolve(),
         )
 
     def public_status(self) -> dict:
