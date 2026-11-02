@@ -179,18 +179,18 @@ def diagnose_owner_mcp_readiness(
     }
 
 
-def expiring_full_control_grants(
+def finite_full_control_grants(
     authority: dict[str, Any], *, device_id: str,
-    now: datetime, within: timedelta = timedelta(days=7),
+    now: datetime,
 ) -> list[tuple[str, str, datetime]]:
-    """List only existing consented, expiring device-scoped full-control grants.
+    """List only existing consented, finite device-scoped full-control grants.
 
     The Product Owner authority is the only source of these grants. This
     read-only helper never manufactures access or infers consent from liveness.
-    Expired grants must use normal explicit authorization, not silent renewal.
+    Expired grants must use normal explicit authorization, not silent retention.
     """
     require_owner_mcp_device_identity(authority, device_id=device_id)
-    if now.tzinfo is None or within <= timedelta(0):
+    if now.tzinfo is None:
         raise ValueError("owner_grant_expiry_clock_invalid")
     groups = authority.get("grant_groups")
     if not isinstance(groups, list) or len(groups) > 500:
@@ -217,61 +217,57 @@ def expiring_full_control_grants(
             expires = datetime.fromisoformat(until.replace("Z", "+00:00"))
         except ValueError:
             continue
-        if (expires.tzinfo is None or expires <= now
-                or expires > now + within):
+        if expires.tzinfo is None or expires <= now:
             continue
         if client_id in seen_clients:
             raise ValueError("owner_grant_duplicate_full_control_client")
         seen_clients.add(client_id)
         results.append((client_id, str(group.get("grant_group_id") or ""), expires))
         if len(results) > 5:
-            raise ValueError("owner_grant_renewal_catalog_too_large")
+            raise ValueError("owner_grant_retention_catalog_too_large")
     return sorted(results, key=lambda item: (item[2], item[0]))
 
 
-def renew_existing_full_control_grant(
+def retain_existing_full_control_grant(
     authority: dict[str, Any], *, device_id: str, client_id: str,
     token: str, remote: ProductRemoteClient, config: AgentConfig,
-    now: datetime, days: int = 7,
+    now: datetime,
     policy_checker=computer_access_management_status,
 ) -> dict[str, Any]:
-    """Explicit Owner operation: renew only the SAME already-consented grant.
+    """Explicit Owner operation: retain only an existing consented client grant.
 
     Caller must have authenticated the Owner and collected a separate explicit
-    user confirmation for the exact client and deadline. Never modify local
+    user confirmation for the exact client and indefinite scope. Never modify local
     policy, expand capability profiles, or assume E2E attestation.
     """
-    if type(days) is not int or not 1 <= days <= 7:
-        raise ValueError("owner_renewal_days_invalid")
     if str(config.device_id or "").lower() != device_id.lower():
-        raise ValueError("owner_renewal_must_run_on_target_device")
-    candidates = expiring_full_control_grants(
+        raise ValueError("owner_retention_must_run_on_target_device")
+    candidates = finite_full_control_grants(
         authority, device_id=device_id, now=now,
     )
     matched = [row for row in candidates if row[0] == client_id]
     if len(matched) != 1:
-        raise ValueError("owner_renewal_existing_grant_required")
+        raise ValueError("owner_retention_existing_grant_required")
     local = policy_checker(config)
     if not isinstance(local, dict) or any(
         local.get(field) is not True
         for field in ("enabled", "full_access", "full_filesystem")
     ):
-        raise ValueError("owner_renewal_local_full_access_required")
-    new_expiration = now + timedelta(days=days)
+        raise ValueError("owner_retention_local_full_access_required")
     result = remote.replace_owner_remote_grant_group(
         token, client_id=client_id, device_id=device_id,
         profile_key="full-computer-control",
         space_id=None, project_id=None,
-        valid_until=new_expiration.isoformat(),
+        valid_until=None,  # Canonical Platform supports no expiry until revoke.
     )
     if not isinstance(result, dict) or result.get("ok") is not True:
-        raise ValueError("owner_renewal_not_confirmed")
+        raise ValueError("owner_retention_not_confirmed")
     return {
         "ok": True,
         "device_id": device_id,
         "client_id": client_id,
         "profile_key": "full-computer-control",
-        "valid_until": new_expiration.isoformat(),
+        "valid_until": None,
         "grantMutationPerformed": True,
         "endToEndProven": False,
     }
