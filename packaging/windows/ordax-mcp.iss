@@ -51,9 +51,9 @@ Name: "{group}\\Conectar dispositivo"; Filename: "{app}\\runtime\\pythonw.exe"; 
 ; existing private GUI requires a pending central challenge and a human click:
 ; neither OAuth identity, device grants nor session attestation are inferred.
 Name: "{group}\\Autorizar ChatGPT"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --selecionar-chatgpt"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
-; Owner-only, separately confirmed renewal of an existing expiring grant.
+; Owner-only, separately confirmed retention of an existing expiring grant.
 ; Never runs during installation/boot and never changes local access policy.
-Name: "{group}\\Renovar acesso"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --renovar-acesso"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
+Name: "{group}\\Manter acesso"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --manter-acesso"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 ; A read-only network check. Never launches OAuth or issues grants.
 Name: "{group}\\Verificar conexão"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 
