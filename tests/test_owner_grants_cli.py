@@ -12,7 +12,7 @@ import httpx
 from ordax_core.owner_oauth import (
     OwnerOAuthError, browser_authorization_code, exchange_owner_code,
 )
-from ordax_dev_agent.owner_grants_cli import parse_args, perform, diagnose_owner_mcp_readiness, eligible_full_control_grants, retain_existing_full_control_grant, _DIAGNOSTIC_ACTIONS
+from ordax_dev_agent.owner_grants_cli import parse_args, perform, diagnose_owner_mcp_readiness, eligible_full_control_grants, recoverable_discovery_clients, retain_existing_full_control_grant, _DIAGNOSTIC_ACTIONS
 from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 
 DEVICE = "24630b00-e9c0-4d93-b38a-2367048cd9d1"
@@ -552,6 +552,159 @@ class OwnerGrantsCliTests(unittest.TestCase):
                     },
                 )
             self.assertEqual(len(remote.calls), before)
+
+    def test_expired_owner_access_recovers_only_from_preexisting_mcp_discovery(self):
+        from types import SimpleNamespace
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        discovery = {
+            "grant_group_id": DEVICE, "device_id": DEVICE,
+            "client_id": CLIENT, "client_consent_active": True,
+            "scope_kind": "device", "space_id": None, "project_id": None,
+            "profile_key": "mcp-discovery", "valid_until": None,
+        }
+        authority = {
+            "device_id": DEVICE,
+            "clients": [{"client_id": CLIENT, "client_name": "ChatGPT OrdaX"}],
+            # Expired full-control groups are absent from canonical inventory.
+            "grant_groups": [discovery],
+        }
+        self.assertEqual(
+            recoverable_discovery_clients(authority, device_id=DEVICE, now=now),
+            [(CLIENT, "ChatGPT OrdaX")],
+        )
+
+        class RecoveringOwner(FakeOwner):
+            def __init__(self):
+                super().__init__()
+                self.authority = authority
+
+            def replace_owner_remote_grant_group(self, token, **kwargs):
+                self.calls.append(("grant", token, kwargs))
+                self.authority = {
+                    **authority,
+                    "grant_groups": [
+                        discovery, {
+                            **discovery,
+                            "grant_group_id": CLIENT,
+                            "profile_key": "full-computer-control",
+                        },
+                    ],
+                }
+                return {"ok": True, "grant_group_id": CLIENT}
+
+        remote = RecoveringOwner()
+        result = retain_existing_full_control_grant(
+            authority, device_id=DEVICE, client_id=CLIENT, token="owner-token",
+            remote=remote, config=SimpleNamespace(device_id=DEVICE),
+            now=now, restore_from_discovery=True,
+            policy_checker=lambda _: {
+                "enabled": True, "full_access": True, "full_filesystem": True,
+            },
+        )
+        self.assertTrue(result["ok"])
+        self.assertIsNone(result["valid_until"])
+        self.assertEqual([call[0] for call in remote.calls], ["grant", "authority"])
+        self.assertEqual(remote.calls[0][2], {
+            "client_id": CLIENT, "device_id": DEVICE,
+            "profile_key": "full-computer-control",
+            "space_id": None, "project_id": None, "valid_until": None,
+        })
+
+    def test_recovery_never_converts_oauth_consent_alone_into_computer_access(self):
+        from types import SimpleNamespace
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        discovery = {
+            "grant_group_id": DEVICE, "device_id": DEVICE,
+            "client_id": CLIENT, "client_consent_active": True,
+            "scope_kind": "device", "space_id": None, "project_id": None,
+            "profile_key": "mcp-discovery", "valid_until": None,
+        }
+        authority = {
+            "device_id": DEVICE,
+            "clients": [{"client_id": CLIENT, "client_name": "ChatGPT"}],
+            "grant_groups": [discovery],
+        }
+        denied_catalogs = [
+            {**authority, "grant_groups": []},
+            {**authority, "grant_groups": [{**discovery,
+                                            "client_consent_active": False}]},
+            {**authority, "grant_groups": [{**discovery,
+                                            "profile_key": "computer-observe"}]},
+            {**authority, "grant_groups": [{**discovery,
+                                            "scope_kind": "project"}]},
+            {**authority, "grant_groups": [{**discovery,
+                                            "device_id": CLIENT}]},
+            {**authority, "grant_groups": [{**discovery,
+                                            "valid_until": (now - timedelta(seconds=1)).isoformat()}]},
+            {**authority, "grant_groups": [{k: v for k, v in discovery.items()
+                                              if k != "valid_until"}]},
+            {**authority, "clients": []},
+        ]
+        for denied in denied_catalogs:
+            with self.subTest(denied=denied):
+                remote = FakeOwner()
+                with self.assertRaises(ValueError):
+                    retain_existing_full_control_grant(
+                        denied, device_id=DEVICE, client_id=CLIENT,
+                        token="owner-token", remote=remote,
+                        config=SimpleNamespace(device_id=DEVICE),
+                        now=now, restore_from_discovery=True,
+                        policy_checker=lambda _: {
+                            "enabled": True, "full_access": True,
+                            "full_filesystem": True,
+                        },
+                    )
+                self.assertFalse(any(event[0] == "grant" for event in remote.calls))
+        remote = FakeOwner()
+        with self.assertRaises(ValueError):
+            retain_existing_full_control_grant(
+                authority, device_id=DEVICE, client_id=CLIENT,
+                token="owner-token", remote=remote,
+                config=SimpleNamespace(device_id=DEVICE),
+                now=now, restore_from_discovery="yes",
+                policy_checker=lambda _: {"enabled": True,
+                                          "full_access": True,
+                                          "full_filesystem": True},
+            )
+        self.assertEqual(remote.calls, [])
+
+    def test_recovery_excludes_existing_full_access_even_with_discovery(self):
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        group = {
+            "grant_group_id": DEVICE, "device_id": DEVICE,
+            "client_id": CLIENT, "client_consent_active": True,
+            "scope_kind": "device", "space_id": None, "project_id": None,
+            "valid_until": None,
+        }
+        authority = {
+            "device_id": DEVICE,
+            "clients": [{"client_id": CLIENT, "client_name": "ChatGPT"}],
+            "grant_groups": [
+                {**group, "profile_key": "mcp-discovery"},
+                {**group, "profile_key": "full-computer-control"},
+            ],
+        }
+        self.assertEqual(
+            recoverable_discovery_clients(authority, device_id=DEVICE, now=now),
+            [],
+        )
+
+    def test_discovery_client_name_keeps_normal_letters_and_removes_controls(self):
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        authority = {
+            "device_id": DEVICE,
+            "clients": [{"client_id": CLIENT, "client_name": "OrdaX Runtime\nChatGPT"}],
+            "grant_groups": [{
+                "grant_group_id": DEVICE, "device_id": DEVICE,
+                "client_id": CLIENT, "client_consent_active": True,
+                "scope_kind": "device", "space_id": None, "project_id": None,
+                "valid_until": None, "profile_key": "mcp-discovery",
+            }],
+        }
+        self.assertEqual(
+            recoverable_discovery_clients(authority, device_id=DEVICE, now=now),
+            [(CLIENT, "OrdaX RuntimeChatGPT")],
+        )
 
     def test_owner_oauth_pkce_exact_loopback_and_state(self):
         def open_browser(url, **kwargs):
