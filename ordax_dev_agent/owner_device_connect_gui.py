@@ -333,6 +333,19 @@ def select_chatgpt_session_with_dialogs(
                     _MB_YESNO | _MB_ICONQUESTION,
                 ) != _IDYES:
                     continue
+                # OAuth and the Windows confirmation dialog can take longer
+                # than the short-lived Platform ticket. Never submit a known
+                # expired challenge, even when it was valid at enumeration.
+                deadline = datetime.fromisoformat(
+                    expires_at.replace("Z", "+00:00")
+                )
+                if deadline.tzinfo is None or deadline <= clock():
+                    show(
+                        "Este pedido de sessao expirou antes da confirmacao. "
+                        "Solicite uma nova operacao no ChatGPT e tente novamente.",
+                        _MB_ICONINFORMATION,
+                    )
+                    continue
                 result = remote.owner_select_central_device(
                     token, client_id=client_id, challenge_id=challenge,
                     device_id=device_id,
