@@ -137,6 +137,112 @@ class OneClickOwnerConnectTests(unittest.TestCase):
                 self.assertEqual(gui.main([]), 2)
                 connect.assert_called_once()
 
+    def test_desktop_activation_when_connected_does_not_launch_again(self):
+        launches = []
+        messages = []
+        rc = gui.activate_with_dialogs(
+            observe=lambda: "connected", launch=lambda: launches.append(True),
+            show=lambda message, _flags: messages.append(message) or 1,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(launches, [])
+        self.assertEqual(len(messages), 1)
+        self.assertIn("ja esta ativo e conectado", messages[0])
+        self.assertNotIn("Registro do dispositivo", messages[0])
+
+    def test_desktop_activation_when_runtime_running_keeps_one_agent(self):
+        launches = []
+        messages = []
+        rc = gui.activate_with_dialogs(
+            observe=lambda: "running", launch=lambda: launches.append(True),
+            show=lambda message, _flags: messages.append(message) or 1,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(launches, [])
+        self.assertIn("ainda nao foi confirmada", messages[0])
+        self.assertNotIn("ativo e conectado", messages[0])
+
+    def test_desktop_activation_starts_one_launcher_and_never_forges_ready(self):
+        observations = iter(["unavailable", "running"])
+        launches = []
+        messages = []
+        rc = gui.activate_with_dialogs(
+            observe=lambda: next(observations),
+            launch=lambda: launches.append("canonical-native-launcher"),
+            show=lambda message, _flags: messages.append(message) or 1,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(launches, ["canonical-native-launcher"])
+        self.assertIn("ainda nao confirmou", messages[0])
+        self.assertNotIn("ativo e conectado", messages[0])
+
+    def test_desktop_activation_with_no_status_is_only_a_request(self):
+        launches = []
+        messages = []
+        rc = gui.activate_with_dialogs(
+            observe=lambda: "unavailable",
+            launch=lambda: launches.append("launcher"),
+            show=lambda message, _flags: messages.append(message) or 1,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(launches, ["launcher"])
+        self.assertIn("solicitada", messages[0])
+        self.assertIn("ainda nao foi confirmada", messages[0])
+
+    def test_desktop_activation_error_cannot_leak_secrets(self):
+        messages = []
+        rc = gui.activate_with_dialogs(
+            observe=lambda: "unavailable",
+            launch=lambda: (_ for _ in ()).throw(RuntimeError("SECRET_DEVICE_TOKEN")),
+            show=lambda message, _flags: messages.append(message) or 1,
+        )
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Nao foi possivel", messages[0])
+        self.assertNotIn("SECRET_DEVICE_TOKEN", messages[0])
+
+    def test_local_status_requires_true_runtime_readiness(self):
+        class FakeReply:
+            status = 200
+
+            def __init__(self, runtime):
+                self.runtime = runtime
+
+            def read(self, _n):
+                import json
+                return json.dumps({"runtime": self.runtime}).encode()
+
+        def observe(runtime):
+            connection = mock.Mock()
+            connection.getresponse.return_value = FakeReply(runtime)
+            with mock.patch.object(gui.http.client, "HTTPConnection", return_value=connection) as ctor:
+                value = gui._observe_local_runtime()
+            ctor.assert_called_once_with("127.0.0.1", 8765, timeout=1.5)
+            connection.request.assert_called_once_with("GET", "/status")
+            connection.close.assert_called_once()
+            return value
+
+        confirmed = {"state": "ready", "paired": True,
+                     "transport_state": "connected",
+                     "product_dispatch_ready": True}
+        self.assertEqual(observe(confirmed), "connected")
+        self.assertEqual(observe({**confirmed, "paired": False}), "running")
+        self.assertEqual(observe({**confirmed, "product_dispatch_ready": False}), "running")
+        self.assertEqual(observe({"state": "pairing"}), "running")
+        self.assertEqual(observe({}), "unavailable")
+
+    def test_activation_cli_is_distinct_from_oauth_and_network_diagnostics(self):
+        with mock.patch.object(gui.sys, "platform", "win32"):
+            with mock.patch.object(gui, "connect_with_dialogs") as connect:
+                with mock.patch.object(gui, "diagnose_with_dialogs") as network:
+                    with mock.patch.object(gui, "activate_with_dialogs", return_value=0) as activate:
+                        self.assertEqual(gui.main(["--ativar"]), 0)
+                    activate.assert_called_once()
+                network.assert_not_called()
+            connect.assert_not_called()
+            with self.assertRaises(SystemExit):
+                gui.main(["--ativar", "--verificar-rede"])
+
     def test_untrusted_grant_claim_does_not_get_success_message(self):
         self.assertEqual(gui.connect_with_dialogs(
             show=self.dialog,
