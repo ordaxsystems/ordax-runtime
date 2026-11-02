@@ -12,7 +12,7 @@ import httpx
 from ordax_core.owner_oauth import (
     OwnerOAuthError, browser_authorization_code, exchange_owner_code,
 )
-from ordax_dev_agent.owner_grants_cli import parse_args, perform, diagnose_owner_mcp_readiness, expiring_full_control_grants, renew_existing_full_control_grant, _DIAGNOSTIC_ACTIONS
+from ordax_dev_agent.owner_grants_cli import parse_args, perform, diagnose_owner_mcp_readiness, finite_full_control_grants, retain_existing_full_control_grant, _DIAGNOSTIC_ACTIONS
 from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 
 DEVICE = "24630b00-e9c0-4d93-b38a-2367048cd9d1"
@@ -337,7 +337,7 @@ class OwnerGrantsCliTests(unittest.TestCase):
             "device_id": DEVICE, "clients": [{"client_id": CLIENT}],
             "grant_groups": [base_group],
         }
-        entries = expiring_full_control_grants(authority, device_id=DEVICE, now=now)
+        entries = finite_full_control_grants(authority, device_id=DEVICE, now=now)
         self.assertEqual(entries, [(CLIENT, DEVICE, now + timedelta(days=1))])
         for invalid in (
             {"client_consent_active": False},
@@ -351,17 +351,17 @@ class OwnerGrantsCliTests(unittest.TestCase):
             {"valid_until": "not-a-date"},
         ):
             with self.subTest(invalid=invalid):
-                filtered = expiring_full_control_grants(
+                filtered = finite_full_control_grants(
                     {**authority, "grant_groups": [{**base_group, **invalid}]},
                     device_id=DEVICE, now=now,
                 )
                 self.assertEqual(filtered, [])
         with self.assertRaises(ValueError):
-            expiring_full_control_grants(
+            finite_full_control_grants(
                 {**authority, "device_id": CLIENT}, device_id=DEVICE, now=now,
             )
 
-    def test_full_control_renewal_only_reuses_authorized_scope(self):
+    def test_full_control_retention_only_reuses_authorized_scope(self):
         from types import SimpleNamespace
         now = datetime(2026, 11, 2, tzinfo=timezone.utc)
         authority = {
@@ -376,7 +376,7 @@ class OwnerGrantsCliTests(unittest.TestCase):
         }
         remote = FakeOwner()
         policy = {"enabled": True, "full_access": True, "full_filesystem": True}
-        result = renew_existing_full_control_grant(
+        result = retain_existing_full_control_grant(
             authority, device_id=DEVICE, client_id=CLIENT,
             token="opaque", remote=remote, config=SimpleNamespace(device_id=DEVICE),
             now=now, policy_checker=lambda _cfg: policy,
@@ -384,13 +384,13 @@ class OwnerGrantsCliTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertFalse(result["endToEndProven"])
         self.assertTrue(result["grantMutationPerformed"])
-        self.assertEqual(result["valid_until"], (now + timedelta(days=7)).isoformat())
+        self.assertIsNone(result["valid_until"])
         args = remote.calls[-1][2]
         self.assertEqual(args, {
             "client_id": CLIENT, "device_id": DEVICE,
             "profile_key": "full-computer-control",
             "space_id": None, "project_id": None,
-            "valid_until": (now + timedelta(days=7)).isoformat(),
+            "valid_until": None,
         })
         for invalid in (
             {"enabled": False, "full_access": True, "full_filesystem": True},
@@ -399,33 +399,31 @@ class OwnerGrantsCliTests(unittest.TestCase):
         ):
             prior = len(remote.calls)
             with self.subTest(invalid=invalid), self.assertRaisesRegex(
-                ValueError, "owner_renewal_local_full_access_required"
+                ValueError, "owner_retention_local_full_access_required"
             ):
-                renew_existing_full_control_grant(
+                retain_existing_full_control_grant(
                     authority, device_id=DEVICE, client_id=CLIENT,
                     token="opaque", remote=remote,
                     config=SimpleNamespace(device_id=DEVICE),
                     now=now, policy_checker=lambda _cfg: invalid,
                 )
             self.assertEqual(len(remote.calls), prior)
-        for client, device, days in (
-            (DEVICE, DEVICE, 7),
-            (CLIENT, "11111111-1111-4111-8111-111111111111", 7),
-            (CLIENT, DEVICE, 8),
-            (CLIENT, DEVICE, 0),
+        for client, device in (
+            (DEVICE, DEVICE),
+            (CLIENT, "11111111-1111-4111-8111-111111111111"),
         ):
             count = len(remote.calls)
-            with self.subTest(client=client, device=device, days=days):
+            with self.subTest(client=client, device=device):
                 with self.assertRaises(ValueError):
-                    renew_existing_full_control_grant(
+                    retain_existing_full_control_grant(
                         authority, device_id=device, client_id=client,
                         token="opaque", remote=remote,
                         config=SimpleNamespace(device_id=DEVICE), now=now,
-                        days=days, policy_checker=lambda _: policy,
+                        policy_checker=lambda _: policy,
                     )
                 self.assertEqual(len(remote.calls), count)
 
-    def test_renewal_refuses_duplicate_or_revoked_grants(self):
+    def test_retention_refuses_duplicate_or_revoked_grants(self):
         from types import SimpleNamespace
         now = datetime(2026, 11, 2, tzinfo=timezone.utc)
         group = {
@@ -438,12 +436,12 @@ class OwnerGrantsCliTests(unittest.TestCase):
         auth = {"device_id": DEVICE, "clients": [{"client_id": CLIENT}],
                 "grant_groups": [group, group]}
         with self.assertRaisesRegex(ValueError, "duplicate"):
-            expiring_full_control_grants(auth, device_id=DEVICE, now=now)
+            finite_full_control_grants(auth, device_id=DEVICE, now=now)
         remote = FakeOwner()
         for grants in ([], [{**group, "client_consent_active": False}]):
             before = len(remote.calls)
             with self.assertRaisesRegex(ValueError, "existing_grant_required"):
-                renew_existing_full_control_grant(
+                retain_existing_full_control_grant(
                     {**auth, "grant_groups": grants}, device_id=DEVICE,
                     client_id=CLIENT, token="opaque", remote=remote,
                     config=SimpleNamespace(device_id=DEVICE), now=now,
