@@ -547,7 +547,7 @@ class OneClickOwnerConnectTests(unittest.TestCase):
 
             def owner_central_session_targets(self, token, *, client_id):
                 calls.append(("targets", token, client_id))
-                return {"targets": [{"device_id": device}], "eligible_device_count": 1}
+                return {"targets": [{"device_id": device, "reported_online": True, "runtime_ready": True}], "eligible_device_count": 1}
 
             def owner_central_session_selections(self, token, *, client_id):
                 calls.append(("tickets", token, client_id))
@@ -604,7 +604,7 @@ class OneClickOwnerConnectTests(unittest.TestCase):
                 return {"device_id": device_id,
                         "clients": [{"client_id": client}], "grant_groups": []}
             def owner_central_session_targets(self, token, *, client_id):
-                return {"targets": [{"device_id": device}]}
+                return {"targets": [{"device_id": device, "reported_online": True, "runtime_ready": True}]}
             def owner_central_session_selections(self, token, *, client_id):
                 return {"pending_selections": self.tickets}
             def owner_select_central_device(self, *_args, **_kwargs):
@@ -629,7 +629,7 @@ class OneClickOwnerConnectTests(unittest.TestCase):
             show=lambda message, *_args: dialogs.append(message) or 6,
             client_factory=lambda *_args: Remote([]), **common,
         ), 2)
-        self.assertIn("Nenhum pedido pendente", dialogs[-1])
+        self.assertIn("Nenhum pedido elegivel", dialogs[-1])
         self.assertEqual(calls, [])
 
     def test_chatgpt_tickets_reject_unrelated_device_and_expired_challenge(self):
@@ -640,7 +640,7 @@ class OneClickOwnerConnectTests(unittest.TestCase):
 
         class Remote:
             def owner_central_session_targets(self, *_args, **_kwargs):
-                return {"targets": [{"device_id": device}]}
+                return {"targets": [{"device_id": device, "reported_online": True, "runtime_ready": True}]}
             def owner_central_session_selections(self, *_args, **_kwargs):
                 return {"pending_selections": [{"challenge_id": "22222222-2222-4222-8222-222222222222",
                     "created_at": "2026-11-01T00:00:00Z",
@@ -655,6 +655,50 @@ class OneClickOwnerConnectTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gui._central_selection_tickets(Remote(), "owner-token", device,
                 {**authority, "clients": [{"client_id": "not-uuid"}]}, now)
+
+    def test_central_session_rejects_unready_targets_before_listing_tickets(self):
+        from datetime import datetime, timezone
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        authority = {
+            "device_id": device,
+            "clients": [{"client_id": client}],
+            "grant_groups": [],
+        }
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        class Unready:
+            def __init__(self, online, ready):
+                self.online, self.ready, self.pending_calls = online, ready, 0
+            def owner_central_session_targets(self, _token, *, client_id):
+                return {"targets": [{
+                    "device_id": device, "reported_online": self.online,
+                    "runtime_ready": self.ready,
+                }]}
+            def owner_central_session_selections(self, *_args, **_kwargs):
+                self.pending_calls += 1
+                raise AssertionError("Unready Runtime must never offer a ticket")
+        for online, ready in ((False, False), (True, False), (False, True)):
+            with self.subTest(online=online, ready=ready):
+                remote = Unready(online, ready)
+                self.assertEqual(
+                    gui._central_selection_tickets(
+                        remote, "owner", device, authority, now,
+                    ), [],
+                )
+                self.assertEqual(remote.pending_calls, 0)
+
+    def test_central_session_has_no_false_error_when_oauth_clients_are_empty(self):
+        from datetime import datetime, timezone
+        device = "33333333-3333-4333-8333-333333333333"
+        class NoCalls:
+            def owner_central_session_targets(self, *_args, **_kwargs):
+                raise AssertionError("No OAuth consent: no remote preflight")
+        result = gui._central_selection_tickets(
+            NoCalls(), "owner", device,
+            {"device_id": device, "clients": [], "grant_groups": []},
+            datetime(2026, 11, 2, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result, [])
 
     def test_owner_dialog_cannot_submit_ticket_expired_during_confirmation(self):
         from datetime import datetime, timedelta, timezone
@@ -683,7 +727,7 @@ class OneClickOwnerConnectTests(unittest.TestCase):
                 }
 
             def owner_central_session_targets(self, _token, *, client_id):
-                return {"targets": [{"device_id": device}]}
+                return {"targets": [{"device_id": device, "reported_online": True, "runtime_ready": True}]}
 
             def owner_central_session_selections(self, _token, *, client_id):
                 return {"pending_selections": [{
