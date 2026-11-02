@@ -487,6 +487,63 @@ class OneClickOwnerConnectTests(unittest.TestCase):
             gui._central_selection_tickets(Remote(), "owner-token", device,
                 {**authority, "clients": [{"client_id": "not-uuid"}]}, now)
 
+    def test_owner_dialog_cannot_submit_ticket_expired_during_confirmation(self):
+        from datetime import datetime, timedelta, timezone
+        from types import SimpleNamespace
+
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        ticket = "22222222-2222-4222-8222-222222222222"
+        start = datetime(2026, 11, 2, 10, tzinfo=timezone.utc)
+        timestamps = iter([start, start + timedelta(minutes=3)])
+        displayed = []
+        selected = []
+
+        class Remote:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def owner_remote_authority(self, _token, *, device_id):
+                return {
+                    "device_id": device_id,
+                    "clients": [{"client_id": client}],
+                    "grant_groups": [],
+                }
+
+            def owner_central_session_targets(self, _token, *, client_id):
+                return {"targets": [{"device_id": device}]}
+
+            def owner_central_session_selections(self, _token, *, client_id):
+                return {"pending_selections": [{
+                    "challenge_id": ticket,
+                    "created_at": start.isoformat(),
+                    "expires_at": (start + timedelta(minutes=1)).isoformat(),
+                }]}
+
+            def owner_select_central_device(self, *_args, **_kwargs):
+                selected.append(True)
+                raise AssertionError("Expired challenge must not be submitted")
+
+        replies = iter([6, 6, 1])
+        result = gui.select_chatgpt_session_with_dialogs(
+            show=lambda msg, _flags: displayed.append(msg) or next(replies),
+            authorize=lambda: ("code", "verifier"),
+            exchange=lambda *_args: "owner-secret-token",
+            load_config=lambda: SimpleNamespace(
+                device_id=device, product_mcp_url="https://mcp.ordax.com.br"
+            ),
+            client_factory=lambda *_args: Remote(),
+            clock=lambda: next(timestamps),
+        )
+        self.assertEqual(result, 2)
+        self.assertEqual(selected, [])
+        self.assertEqual(len(displayed), 3)
+        self.assertIn("expirou antes da confirmacao", displayed[2])
+        self.assertNotIn("owner-secret-token", str(displayed))
+
     def test_chatgpt_owner_gui_routes_only_explicit_selection(self):
         with mock.patch.object(gui.sys, "platform", "win32"):
             with mock.patch.object(gui, "connect_with_dialogs") as connect:
