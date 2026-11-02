@@ -75,7 +75,7 @@ if ($LASTEXITCODE -ne 0) { throw "Owner device enrollment CLI missing" }
 if (-not (Test-Path -LiteralPath (Join-Path $runtime "pythonw.exe"))) { throw "Private Windows GUI host missing" }
 & $privatePython -c "import ordax_dev_agent.owner_device_connect_gui as gui; assert callable(gui.main)"
 if ($LASTEXITCODE -ne 0) { throw "Canonical Owner device onboarding presentation missing" }
-& $privatePython -c "from ordax_dev_agent.desktop_host_main import DESKTOP_OS_ACTIONS; assert DESKTOP_OS_ACTIONS == frozenset({'agent.status', 'computer.access_status'})"
+& $privatePython -c "from ordax_dev_agent.desktop_host_main import DESKTOP_OS_ACTIONS; from ordax_dev_agent.product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS; assert DESKTOP_OS_ACTIONS == frozenset({'agent.status', 'computer.access_status'}) | NATIVE_SURFACE_DEVICE_ACTIONS; assert NATIVE_SURFACE_DEVICE_ACTIONS == frozenset({'ordax.surface.open', 'ordax.surface.status'})"
 if ($LASTEXITCODE -ne 0) { throw "OrdaX Desktop host action scope missing from canonical runtime package" }
 & $privatePython -c "import importlib.metadata as m; assert m.version('ordax-runtime') == '$packageVersion'"
 if ($LASTEXITCODE -ne 0) { throw "Private Runtime version mismatch" }

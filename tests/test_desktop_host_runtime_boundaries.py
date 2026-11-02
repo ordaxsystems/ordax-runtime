@@ -11,6 +11,7 @@ from unittest.mock import patch
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.desktop_host_main import DESKTOP_OS_ACTIONS, main
+from ordax_dev_agent.product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS
 
 
 class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
@@ -35,6 +36,12 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
             product_mcp_url="https://mcp.ordax.com.br", projects={},
         )
 
+    def test_native_os_capabilities_have_one_canonical_device_scope_owner(self):
+        self.assertEqual(DESKTOP_OS_ACTIONS,
+                         frozenset({"agent.status", "computer.access_status"})
+                         | NATIVE_SURFACE_DEVICE_ACTIONS)
+        self.assertEqual(NATIVE_SURFACE_DEVICE_ACTIONS,
+                         frozenset({"ordax.surface.status", "ordax.surface.open"}))
     def test_only_explicit_os_readonly_capabilities_are_advertised(self):
         registry = ActionRegistry(replace(self.config, computer_access_source="native-unbound"), computer_adapter={},
                                   allowed_action_names=DESKTOP_OS_ACTIONS)
