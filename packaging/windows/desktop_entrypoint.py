@@ -35,10 +35,10 @@ def self_test() -> dict:
                                  computer_access_source="native-unbound")
             registry = ActionRegistry(config, computer_adapter={},
                                       allowed_action_names=DESKTOP_OS_ACTIONS)
-            if registry.names != ["agent.status", "computer.access_status", "ordax.surface.status"]:
+            if registry.names != ["agent.status", "computer.access_status", "ordax.surface.open", "ordax.surface.status"]:
                 raise RuntimeError("Desktop capability boundary changed")
             result = registry.execute("agent.status", {})
-            if not result.ok or result.data["actions"] != ["agent.status", "computer.access_status", "ordax.surface.status"]:
+            if not result.ok or result.data["actions"] != ["agent.status", "computer.access_status", "ordax.surface.open", "ordax.surface.status"]:
                 raise RuntimeError("Packaged canonical agent.status failed")
             policy = registry.execute("computer.access_status", {})
             if (not policy.ok or policy.data.get("enabled") is not False
@@ -47,6 +47,8 @@ def self_test() -> dict:
                     or policy.data.get("allowed_roots") != []
                     or policy.data.get("relative_paths_base") != ""):
                 raise RuntimeError("Packaged read-only Desktop policy status failed")
+            if registry.execute("ordax.surface.open", {"appId": "system"}).ok:
+                raise RuntimeError("Offline Product Runtime opened an untrusted Surface")
             if registry.execute("ordax.surface.status", {}).ok:
                 raise RuntimeError("Offline Product Runtime accessed an untrusted Surface")
             if registry.execute("computer.access_status", {"enabled": True}).ok:
@@ -62,7 +64,7 @@ def self_test() -> dict:
             if not ProductDeviceControlPlane or not ProductCentralSessionClient:
                 raise RuntimeError("Canonical Product transport missing")
     return {"schema": "ordax.desktop-runtime-offline-proof/1", "ok": True,
-            "profile": "ordax-desktop", "actions": ["agent.status", "computer.access_status", "ordax.surface.status"],
+            "profile": "ordax-desktop", "actions": ["agent.status", "computer.access_status", "ordax.surface.open", "ordax.surface.status"],
             "network_used": False, "device_credential_used": False,
             "remote_action_proven": False, "runtime_version": runtime_package_version()}
 

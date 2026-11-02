@@ -21,7 +21,7 @@ from .main import run
 # computer.access_status reads the local policy only; it does NOT enable it.
 # Additional OS actions require verified Native adapters; no unscoped Windows
 # filesystem, terminal, GUI control or host adapter is delegated.
-DESKTOP_OS_ACTIONS = frozenset({"agent.status", "computer.access_status", "ordax.surface.status"})
+DESKTOP_OS_ACTIONS = frozenset({"agent.status", "computer.access_status", "ordax.surface.open", "ordax.surface.status"})
 
 
 def main() -> int:

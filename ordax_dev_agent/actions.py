@@ -10,7 +10,7 @@ from collections.abc import Mapping
 
 from .config import AgentConfig
 from .models import ActionResult
-from .desktop_surface_actions import desktop_surface_status
+from .desktop_surface_actions import desktop_surface_status, desktop_surface_open
 from .projects import load_projects, Project
 from .observations import ObservationActions
 from .references import ReferenceActions
@@ -502,6 +502,7 @@ class ActionRegistry(
             # A Product-scoped action, never part of the Windows host's
             # generic Computer Control registry or its adapter grants.
             self._actions["ordax.surface.status"] = desktop_surface_status
+            self._actions["ordax.surface.open"] = desktop_surface_open
         # The Desktop-hosted OrdaX OS is a distinct Product Device context,
         # not an implicit Windows host administrator. A trusted host passes
         # the exact allowed actions, never an allowlist from remote requests.
