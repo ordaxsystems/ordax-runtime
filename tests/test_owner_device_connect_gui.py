@@ -523,6 +523,69 @@ class OneClickOwnerConnectTests(unittest.TestCase):
         ), 2)
         self.assertEqual(actions, [])
 
+    def test_owner_session_displays_sanitized_name_and_preserves_exact_client_uuid(self):
+        client = "11111111-1111-4111-8111-111111111111"
+        catalog = {"clients": [
+            {"client_id": client, "client_name": "ChatGPT\\nPERMISSAO TOTAL"},
+        ]}
+        # The literal newline and other controls may not generate a second
+        # field in a privileged Owner confirmation dialog.
+        catalog["clients"][0]["client_name"] = "ChatGPT\nPERMISSAO TOTAL\x00"
+        self.assertEqual(
+            gui._owner_client_display_name(catalog, client),
+            "ChatGPTPERMISSAO TOTAL",
+        )
+        self.assertEqual(
+            gui._owner_client_display_name(catalog, "22222222-2222-4222-8222-222222222222"),
+            "",
+        )
+        self.assertEqual(
+            gui._owner_client_display_name(
+                {"clients": [{"client_id": client, "client_name": "X" * 100}]},
+                client,
+            ),
+            "X" * 80,
+        )
+        self.assertEqual(
+            gui._owner_client_display_name(
+                {"clients": [
+                    {"client_id": client, "client_name": "First"},
+                    {"client_id": client, "client_name": "Second"},
+                ]}, client,
+            ),
+            "",
+        )
+
+    def test_owner_session_rejects_duplicate_oauth_client_catalog(self):
+        from datetime import datetime, timezone
+        client = "11111111-1111-4111-8111-111111111111"
+        device = "33333333-3333-4333-8333-333333333333"
+        class Backend:
+            def __init__(self):
+                self.lookups = 0
+            def owner_central_session_targets(self, _token, *, client_id):
+                self.lookups += 1
+                return {"targets": [{
+                    "device_id": device,
+                    "reported_online": True,
+                    "runtime_ready": True,
+                }]}
+            def owner_central_session_selections(self, _token, *, client_id):
+                return {"pending_selections": []}
+
+        authority = {
+            "device_id": device,
+            "clients": [{"client_id": client}, {"client_id": client}],
+            "grant_groups": [],
+        }
+        backend = Backend()
+        with self.assertRaises(ValueError):
+            gui._central_selection_tickets(
+                backend, "owner-token", device, authority,
+                datetime(2026, 11, 2, tzinfo=timezone.utc),
+            )
+        self.assertEqual(backend.lookups, 1)
+
     def test_chatgpt_owner_selects_exact_existing_ticket_with_separate_attestation(self):
         from datetime import datetime, timezone
         from types import SimpleNamespace
@@ -542,7 +605,7 @@ class OneClickOwnerConnectTests(unittest.TestCase):
             def owner_remote_authority(self, token, *, device_id):
                 calls.append(("authority", token, device_id))
                 return {"device_id": device_id,
-                        "clients": [{"client_id": client}],
+                        "clients": [{"client_id": client, "client_name": "ChatGPT Desktop"}],
                         "grant_groups": []}
 
             def owner_central_session_targets(self, token, *, client_id):
@@ -580,6 +643,7 @@ class OneClickOwnerConnectTests(unittest.TestCase):
         self.assertEqual([call[0] for call in calls].count("select"), 1)
         self.assertIn(device, dialogs[1][0])
         self.assertIn(client, dialogs[1][0])
+        self.assertIn("Nome do cliente: ChatGPT Desktop", dialogs[1][0])
         self.assertIn(ticket, dialogs[1][0])
         self.assertIn("ainda nao esta atestada", dialogs[-1][0])
         self.assertNotIn("owner-token", str(dialogs))
