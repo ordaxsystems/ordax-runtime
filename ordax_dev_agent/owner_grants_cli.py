@@ -303,7 +303,7 @@ def recoverable_discovery_clients(
         else:
             name = "".join(
                 ch for ch in name.strip()[:80]
-                if ch.isprintable() and ch not in "\\r\\n\\t"
+                if ch.isprintable()
             ) or "Cliente OAuth"
         choices.append((client_id, name))
         if len(choices) > 5:
