@@ -135,6 +135,7 @@ class ProductCentralSessionClientTests(unittest.TestCase):
                 return httpx.Response(200, json={
                     "ok": True, "status": "bound",
                     "device_id": DEVICE_ID, "request_id": CHALLENGE_ID,
+                    "expires_at": "2099-01-01T00:00:00Z",
                 })
             if len(requests) == 1:
                 return httpx.Response(200, json={
@@ -168,6 +169,67 @@ class ProductCentralSessionClientTests(unittest.TestCase):
         self.assertEqual(failed.last_error, "product_central_session_unavailable")
         self.assertTrue(failed.public_observation()["last_confirmation_observed"])
         self.assertEqual(requests, ["GET", "POST", "GET", "GET"])
+
+    def test_new_binding_receipt_rejects_missing_or_forged_contract_fields(self):
+        base = {
+            "ok": True, "status": "bound", "device_id": DEVICE_ID,
+            "request_id": CHALLENGE_ID, "expires_at": "2099-01-01T00:00:00Z",
+        }
+        malformed = (
+            {k: v for k, v in base.items() if k != "request_id"},
+            {**base, "request_id": "not-uuid"},
+            {**base, "request_id": False},
+            {k: v for k, v in base.items() if k != "expires_at"},
+            {**base, "expires_at": 123},
+            {**base, "expires_at": "not-a-date"},
+            {**base, "expires_at": "2099-01-01T00:00:00"},
+            {**base, "untrusted": True},
+            {**base, "device_id": "44444444-4444-4444-8444-444444444444"},
+        )
+        for receipt in malformed:
+            with self.subTest(receipt=receipt):
+                def respond(request: httpx.Request) -> httpx.Response:
+                    if request.method == "GET":
+                        return httpx.Response(200, json={
+                            "ok": True, "pending": True,
+                            "challenge_id": CHALLENGE_ID,
+                        })
+                    return httpx.Response(200, json=receipt)
+
+                status = self.make_client(["a" * 64], respond).tick(now=10.0)
+                self.assertFalse(status.confirmed)
+                self.assertIsNone(status.challenge_id)
+                self.assertEqual(
+                    status.last_error, "product_central_session_receipt_mismatch"
+                )
+
+    def test_existing_binding_request_uuid_can_differ_from_challenge(self):
+        # Platform reuses the canonical request_id when the OAuth session
+        # already has a valid binding. It must not be confused with the
+        # newly selected challenge_id.
+        existing = "55555555-5555-4555-8555-555555555555"
+        for idempotent in (False, True):
+            with self.subTest(idempotent=idempotent):
+                def respond(request: httpx.Request) -> httpx.Response:
+                    if request.method == "GET":
+                        return httpx.Response(200, json={
+                            "ok": True, "pending": True,
+                            "challenge_id": CHALLENGE_ID,
+                        })
+                    receipt = {
+                        "ok": True, "status": "bound", "request_id": existing,
+                    }
+                    if not idempotent:
+                        receipt.update({
+                            "device_id": DEVICE_ID,
+                            "expires_at": "2099-01-01T00:00:00+00:00",
+                        })
+                    return httpx.Response(200, json=receipt)
+
+                status = self.make_client(["a" * 64], respond).tick(now=10.0)
+                self.assertTrue(status.confirmed)
+                self.assertEqual(status.challenge_id, CHALLENGE_ID)
+                self.assertIsNone(status.last_error)
 
     def test_receipt_for_another_device_fails_closed(self):
         token = ["a" * 64]
