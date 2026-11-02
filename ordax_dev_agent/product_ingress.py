@@ -36,7 +36,7 @@ _OWNER_PATHS = frozenset({
 })
 _OWNER_GRANT_REVOKE = re.compile(
     r"/v3/owner/remote-grant-groups/[0-9a-f]{8}-[0-9a-f]{4}-"
-    r"[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\Z"
+    r"[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
 )
 _T = TypeVar("_T")
 
