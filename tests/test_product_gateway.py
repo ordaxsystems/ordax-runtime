@@ -364,6 +364,37 @@ class ProductGatewayTests(unittest.TestCase):
         self.assertNotIn("artifact.read_chunk", names)
         self.assertFalse(any(name.startswith("unity.") for name in names))
 
+    def test_native_surface_actions_remain_device_owned_and_require_exact_grant(self):
+        read = PRODUCT_ACTIONS["ordax.surface.status"]
+        open_app = PRODUCT_ACTIONS["ordax.surface.open"]
+        self.assertFalse(read.project_required)
+        self.assertEqual(read.effect, "read")
+        self.assertEqual(read.allowed_fields, frozenset())
+        self.assertFalse(open_app.project_required)
+        self.assertEqual(open_app.effect, "write")
+        self.assertEqual(open_app.allowed_fields, frozenset({"appId"}))
+        self.executor._names.extend(("ordax.surface.status", "ordax.surface.open"))
+        gateway = ProductActionGateway(self.executor, self.audit, clock=lambda: 2_000_000_000)
+        denied = gateway.execute(
+            "ordax.surface.open", {"appId": "system"},
+            context=self.context, grant=self.grant("computer.click"),
+        )
+        self.assertFalse(denied.ok)
+        self.assertEqual(denied.data["error_code"], "grant_required")
+        self.assertFalse(self.executor.calls)
+        accepted = gateway.execute(
+            "ordax.surface.open", {"appId": "settings"},
+            context=self.context, grant=self.grant("ordax.surface.open", projects=()),
+        )
+        self.assertTrue(accepted.ok)
+        self.assertEqual(self.executor.calls[-1],
+                         ("ordax.surface.open", {"appId": "settings"}))
+        denied_extra = gateway.execute(
+            "ordax.surface.open", {"appId": "system", "command": "shell"},
+            context=self.context, grant=self.grant("ordax.surface.open", projects=()),
+        )
+        self.assertFalse(denied_extra.ok)
+        self.assertEqual(len(self.executor.calls), 1)
     def test_all_device_scoped_actions_are_projectless_in_gateway_contract(self) -> None:
         self.assertTrue(DEVICE_SCOPED_ACTIONS)
         self.assertTrue(DEVICE_SCOPED_ACTIONS <= set(PRODUCT_ACTIONS))

@@ -827,6 +827,19 @@ def computer_hotkey(device_id: str, project: str, keys: list[str], space_id: str
     return _invoke(device_id=device_id, action="computer.hotkey", project=project, space_id=space_id, arguments={"project": project, "keys": keys})
 
 
+def ordax_surface_status(device_id: str, space_id: str | None = None) -> dict[str, Any]:
+    """Read the Native OrdaX Surface without inheriting the Windows MCP profile."""
+    return _invoke(device_id=device_id, action="ordax.surface.status",
+                   space_id=space_id, arguments={})
+
+
+def ordax_surface_open(
+    device_id: str, app_id: str, space_id: str | None = None,
+) -> dict[str, Any]:
+    """Open via the Product Device Native channel; only a visible receipt succeeds."""
+    return _invoke(device_id=device_id, action="ordax.surface.open",
+                   space_id=space_id, arguments={"appId": app_id})
+
 def computer_access_status(device_id: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.access_status", space_id=space_id, arguments={})
 

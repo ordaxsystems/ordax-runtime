@@ -33,6 +33,17 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
         description="Read declarative instructions, intents and packaged semantic UI identities for one exact app_id from the device App Intelligence registry. Use semantic element ids before screenshots or coordinate-based interaction. This does not grant permission to execute the app.",
     ),
     ProductMcpToolSpec(
+        name="ordax_surface_status",
+        action="ordax.surface.status",
+        description="Inspect the active application actually displayed by the Native OrdaX Surface. This uses the OrdaX Product Device, not the Windows desktop.",
+    ),
+    ProductMcpToolSpec(
+        name="ordax_surface_open",
+        action="ordax.surface.open",
+        effect="write",
+        description="Open an installed Native OrdaX system application through the OS-owned Surface activation port, and wait for a verified visible-app receipt. Allowed app IDs: account, settings, system, store. Never substitutes Windows automation.",
+    ),
+    ProductMcpToolSpec(
         name="projects_list",
         action="projects.list",
         description="List granted projects. Use this first when the user wants to continue/resume work but the target project is not yet known.",

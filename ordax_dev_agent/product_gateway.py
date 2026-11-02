@@ -89,6 +89,12 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
         allowed_fields=frozenset({"app_id"}),
         project_required=False,
     ),
+    "ordax.surface.status": ProductActionSpec(
+        name="ordax.surface.status",
+        local_action="ordax.surface.status",
+        allowed_fields=frozenset(),
+        project_required=False,
+    ),
     "projects.list": ProductActionSpec(
         name="projects.list",
         local_action="projects.list",
@@ -318,6 +324,13 @@ PRODUCT_TYPED_ACTIONS: dict[str, ProductActionSpec] = {
         "workspace.text_write",
         "workspace.text_write",
         frozenset({"project", "path", "content", "expected_sha256", "create"}),
+        effect="write",
+    ),
+    "ordax.surface.open": ProductActionSpec(
+        name="ordax.surface.open",
+        local_action="ordax.surface.open",
+        allowed_fields=frozenset({"appId"}),
+        project_required=False,
         effect="write",
     ),
     "workspace.text_patch": ProductActionSpec(
