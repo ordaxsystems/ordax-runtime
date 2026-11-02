@@ -595,6 +595,18 @@ def revoke_full_control_with_dialogs(
                     for item in rows
                 ):
                     raise ValueError("Owner revocation not persisted")
+                # An unrelated new group for the same OAuth client could
+                # have been created concurrently. Never claim that computer
+                # control was removed until the canonical view confirms no
+                # active full-control group remains for this exact client.
+                if any(
+                    str(item.get("client_id", "")).lower() == client_id.lower()
+                    and str(item.get("device_id", "")).lower() == device_id.lower()
+                    and item.get("profile_key") == "full-computer-control"
+                    and item.get("scope_kind") == "device"
+                    for item in rows
+                ):
+                    raise ValueError("Owner revocation access still active")
                 show(
                     "Revogacao confirmada pela Platform OrdaX.\n"
                     f"Cliente: {client_id}\n\n"
