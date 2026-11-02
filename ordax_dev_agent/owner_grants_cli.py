@@ -262,6 +262,34 @@ def retain_existing_full_control_grant(
     )
     if not isinstance(result, dict) or result.get("ok") is not True:
         raise ValueError("owner_retention_not_confirmed")
+    group_id = result.get("grant_group_id")
+    if not isinstance(group_id, str) or _UUID.fullmatch(group_id) is None:
+        raise ValueError("owner_retention_receipt_invalid")
+
+    # The write receipt alone cannot prove that the previous expiry was
+    # removed. Read back the authoritative Product Owner inventory after the
+    # committed RPC, without retrying or issuing a second grant mutation.
+    observed = remote.owner_remote_authority(token, device_id=device_id)
+    require_owner_mcp_device_identity(observed, device_id=device_id)
+    groups = observed.get("grant_groups")
+    if not isinstance(groups, list):
+        raise ValueError("owner_retention_readback_invalid")
+    confirmed = [
+        item for item in groups
+        if isinstance(item, dict)
+        and str(item.get("grant_group_id", "")).lower() == group_id.lower()
+        and str(item.get("client_id", "")).lower() == client_id.lower()
+        and str(item.get("device_id", "")).lower() == device_id.lower()
+        and item.get("client_consent_active") is True
+        and item.get("scope_kind") == "device"
+        and item.get("profile_key") == "full-computer-control"
+        and item.get("space_id") is None
+        and item.get("project_id") is None
+        and "valid_until" in item
+        and item["valid_until"] is None
+    ]
+    if len(confirmed) != 1:
+        raise ValueError("owner_retention_readback_unconfirmed")
     return {
         "ok": True,
         "device_id": device_id,
