@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,9 +36,9 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         )
 
     def test_only_explicit_os_readonly_capabilities_are_advertised(self):
-        registry = ActionRegistry(self.config, computer_adapter={},
+        registry = ActionRegistry(replace(self.config, computer_access_source="native-unbound"), computer_adapter={},
                                   allowed_action_names=DESKTOP_OS_ACTIONS)
-        self.assertEqual(registry.names, ["agent.status", "computer.access_status"])
+        self.assertEqual(registry.names, ["agent.status", "computer.access_status", "ordax.surface.status"])
         policy = registry.execute("computer.access_status", {})
         self.assertTrue(policy.ok)
         self.assertFalse(policy.data["full_access"])
@@ -65,6 +66,7 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         normal = ActionRegistry(self.config)
         self.assertIn("agent.status", normal.names)
         self.assertIn("terminal.exec", normal.names)
+        self.assertNotIn("ordax.surface.status", normal.names)
 
     def run_host(self, *, config=None, env=None):
         variables = {
@@ -94,7 +96,7 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         self.assertEqual(args[0].workspace_root, self.root / "Files")
         self.assertEqual(args[0].computer_access_source, "native-unbound")
         self.assertEqual(kwargs, {"computer_adapter": {},
-                                  "allowed_action_names": frozenset({"agent.status", "computer.access_status"}),
+                                  "allowed_action_names": frozenset({"agent.status", "computer.access_status", "ordax.surface.status"}),
                                   "status_port": 0})
 
     def test_desktop_policy_cannot_inherit_windows_agent_grants_or_environment(self):

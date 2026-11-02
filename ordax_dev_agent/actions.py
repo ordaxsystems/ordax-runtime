@@ -10,6 +10,7 @@ from collections.abc import Mapping
 
 from .config import AgentConfig
 from .models import ActionResult
+from .desktop_surface_actions import desktop_surface_status
 from .projects import load_projects, Project
 from .observations import ObservationActions
 from .references import ReferenceActions
@@ -497,6 +498,10 @@ class ActionRegistry(
                 self._actions[f"{name}.{operation}"] = (
                     lambda payload, fn=handler: fn(self._project(payload), payload))
             self._adapter_contracts[name] = external_adapter_contract(name)
+        if config.computer_access_source == "native-unbound":
+            # A Product-scoped action, never part of the Windows host's
+            # generic Computer Control registry or its adapter grants.
+            self._actions["ordax.surface.status"] = desktop_surface_status
         # The Desktop-hosted OrdaX OS is a distinct Product Device context,
         # not an implicit Windows host administrator. A trusted host passes
         # the exact allowed actions, never an allowlist from remote requests.
