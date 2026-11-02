@@ -124,6 +124,175 @@ class OneClickOwnerConnectTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertNotIn("SECRET_TOKEN_MUST_NOT_LEAK", messages[0])
 
+    def test_diagnostics_ready_runtime_never_claims_chatgpt_authorization(self):
+        network = {
+            "schema": "ordax.product-mcp-https-observation/1",
+            "primary": {"transport": "https_responded", "httpStatus": 404},
+            "restricted": {"transport": "unavailable", "httpStatus": None},
+            "mcpReady": False, "authenticated": False, "grantsAuthorized": False,
+        }
+        runtime = {
+            "state": "ready", "paired": True, "transport_state": "connected",
+            "product_dispatch_ready": True, "product_readiness_code": "ready",
+            "central_session": {
+                "checked": True, "last_confirmation_observed": False,
+                "last_error_code": None,
+            },
+        }
+        calls = []
+        messages = []
+        result = gui.diagnose_with_dialogs(
+            show=lambda msg, _flags: messages.append(msg) or 1,
+            inspect=lambda: calls.append("HTTPS") or network,
+            observe_runtime=lambda: calls.append("LOCAL") or runtime,
+        )
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, ["HTTPS", "LOCAL"])
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Runtime local: pronto e conectado", messages[0])
+        self.assertIn("sem confirmacao observada", messages[0])
+        self.assertIn("nao comprova autorizacao desta sessao", messages[0])
+        self.assertIn("Servidor principal: HTTPS respondeu (HTTP 404)", messages[0])
+        self.assertNotIn("Autorizacao concedida", messages[0])
+
+        old_session = {**runtime, "central_session": {
+            "checked": True, "last_confirmation_observed": True,
+            "last_error_code": None,
+        }}
+        history = gui._format_local_runtime_diagnosis(old_session)
+        self.assertIn("confirmacao anterior", history)
+        self.assertIn("sessao atual precisa ser verificada", history)
+        self.assertNotIn("sessao atual ativa", history)
+
+    def test_diagnostics_degraded_runtime_requires_attention_even_when_https_responds(self):
+        network = {
+            "schema": "ordax.product-mcp-https-observation/1",
+            "primary": {"transport": "https_responded", "httpStatus": 404},
+            "restricted": {"transport": "unavailable", "httpStatus": None},
+            "mcpReady": False, "authenticated": False, "grantsAuthorized": False,
+        }
+        scenarios = (
+            (
+                None,
+                "Runtime local: sem resposta",
+            ),
+            (
+                {"state": "pairing", "paired": False,
+                 "transport_state": "connecting",
+                 "product_dispatch_ready": False,
+                 "product_readiness_code": "pairing_required",
+                 "central_session": None},
+                "pareamento com a Platform pendente",
+            ),
+            (
+                {"state": "ready", "paired": True,
+                 "transport_state": "reconnecting",
+                 "product_dispatch_ready": False,
+                 "product_readiness_code": "transport_reconnecting",
+                 "central_session": {
+                     "checked": True, "last_confirmation_observed": False,
+                     "last_error_code": "central_session_challenge_expired",
+                 }},
+                "pedido de sessao expirado",
+            ),
+            (
+                {"state": "local-disabled", "paired": False,
+                 "transport_state": "not-configured",
+                 "product_dispatch_ready": False,
+                 "product_readiness_code": "local_access_disabled",
+                 "central_session": None},
+                "acesso local desativado",
+            ),
+        )
+        for runtime, expected in scenarios:
+            with self.subTest(expected=expected):
+                messages = []
+                status = gui.diagnose_with_dialogs(
+                    show=lambda msg, _flags: messages.append(msg) or 1,
+                    inspect=lambda: network, observe_runtime=lambda: runtime,
+                )
+                self.assertEqual(status, 1)
+                self.assertIn(expected, messages[0])
+                self.assertNotIn("foi autorizada", messages[0])
+
+    def test_diagnostics_rejects_forged_local_readiness_and_never_leaks_api_errors(self):
+        network = {
+            "schema": "ordax.product-mcp-https-observation/1",
+            "primary": {"transport": "https_responded", "httpStatus": 404},
+            "restricted": {"transport": "unavailable", "httpStatus": None},
+            "mcpReady": False, "authenticated": False, "grantsAuthorized": False,
+        }
+        base = {
+            "state": "ready", "paired": True, "transport_state": "connected",
+            "product_dispatch_ready": True, "product_readiness_code": "ready",
+            "central_session": {
+                "checked": True, "last_confirmation_observed": False,
+                "last_error_code": None,
+            },
+        }
+        invalid = (
+            {**base, "paired": False},
+            {**base, "product_dispatch_ready": False},
+            {**base, "product_readiness_code": "heartbeat_stale"},
+            {**base, "central_session": {
+                "checked": True, "last_confirmation_observed": False,
+                "last_error_code": "SECRET_TOKEN_MUST_NOT_LEAK",
+            }},
+            {**base, "central_session": {"last_error_code": None}},
+            {**base, "central_session": {
+                "checked": "true", "last_confirmation_observed": False,
+                "last_error_code": None,
+            }},
+        )
+        for runtime in invalid:
+            with self.subTest(runtime=runtime):
+                messages = []
+                code = gui.diagnose_with_dialogs(
+                    show=lambda msg, _flags: messages.append(msg) or 1,
+                    inspect=lambda: network, observe_runtime=lambda: runtime,
+                )
+                self.assertEqual(code, 1)
+                self.assertEqual(len(messages), 1)
+                self.assertIn("Nao foi possivel", messages[0])
+                self.assertNotIn("SECRET_TOKEN_MUST_NOT_LEAK", messages[0])
+
+    def test_local_status_reader_is_single_bounded_loopback_request(self):
+        class Response:
+            status = 200
+            def read(self, max_bytes):
+                import json
+                self.assert_no_content = max_bytes
+                return json.dumps({"runtime": {
+                    "state": "ready", "paired": True,
+                    "transport_state": "connected",
+                    "product_dispatch_ready": True,
+                }}).encode()
+
+        response = Response()
+        connection = mock.Mock()
+        connection.getresponse.return_value = response
+        with mock.patch.object(
+            gui.http.client, "HTTPConnection", return_value=connection,
+        ) as connect:
+            record = gui._read_local_runtime()
+        self.assertEqual(record["state"], "ready")
+        self.assertEqual(response.assert_no_content, 131073)
+        connect.assert_called_once_with("127.0.0.1", 8765, timeout=1.5)
+        connection.request.assert_called_once_with("GET", "/status")
+        connection.close.assert_called_once()
+
+        oversized = mock.Mock()
+        oversized.status = 200
+        oversized.read.return_value = b"{" + b"x" * 131072
+        broken_connection = mock.Mock()
+        broken_connection.getresponse.return_value = oversized
+        with mock.patch.object(
+            gui.http.client, "HTTPConnection",
+            return_value=broken_connection,
+        ):
+            self.assertIsNone(gui._read_local_runtime())
+        broken_connection.close.assert_called_once()
+
     def test_diagnostic_cli_routes_separately_from_owner_enrollment(self):
         with mock.patch.object(gui.sys, "platform", "win32"):
             with mock.patch.object(gui, "connect_with_dialogs") as connect:
