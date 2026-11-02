@@ -10,6 +10,8 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+from .product_ingress import TrustedProductIngress
+
 
 _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 _ACTION_STATUSES = _TERMINAL_STATUSES | {"queued", "leased", "running"}
@@ -88,6 +90,7 @@ class ProductRemoteClient:
         self.base_url = normalized
         self.http = http or httpx.Client(timeout=timeout_seconds)
         self._owns_http = http is None
+        self._trusted_ingress = TrustedProductIngress(normalized)
 
     def close(self) -> None:
         if self._owns_http:
@@ -130,8 +133,10 @@ class ProductRemoteClient:
     def _request(
         self, method: str, url: str, *, deadline: float | None = None, **kwargs: Any,
     ) -> httpx.Response:
-        try:
-            with self.http.stream(method, url, follow_redirects=False, **kwargs) as response:
+        def send(endpoint: str) -> httpx.Response:
+            with self.http.stream(
+                method, endpoint, follow_redirects=False, **kwargs,
+            ) as response:
                 content = bytearray()
                 for chunk in response.iter_bytes():
                     if deadline is not None and time.monotonic() >= deadline:
@@ -159,6 +164,18 @@ class ProductRemoteClient:
                     content=bytes(content),
                     request=response.request,
                 )
+        try:
+            # The installed Owner CLI uses the same pinned, strict Product
+            # ingress as Device enrollment. The policy permits only canonical
+            # Owner routes and retries only proven preconnect TCP/DNS errors.
+            # A response, 401/403/5xx, TLS error or lost response is NEVER
+            # replayed; bearer, method, query and body remain unchanged.
+            if (url.startswith(self.base_url + "/v3/owner/")
+                    and "?" not in url and "#" not in url):
+                return self._trusted_ingress.request(
+                    url[len(self.base_url):], send,
+                )
+            return send(url)
         except httpx.HTTPError as error:
             if deadline is not None and time.monotonic() >= deadline:
                 raise ProductRemoteError(
