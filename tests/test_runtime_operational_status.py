@@ -1,7 +1,17 @@
 """Operational status must distinguish Product readiness from liveness."""
 
+import io
+import json
+import os
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest import mock
+from dataclasses import replace
 
+from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.device_credentials import resolve_pending_token_path, resolve_token_path
 from ordax_dev_agent.product_central_session import ProductCentralSessionStatus
 from ordax_dev_agent.main import (
     _mark_transport_healthy,
@@ -11,6 +21,8 @@ from ordax_dev_agent.main import (
     _mark_transport_unavailable,
     _runtime_status_snapshot,
     product_dispatch_readiness,
+    _windows_enrollment_restart_ready,
+    run,
 )
 
 
@@ -167,6 +179,88 @@ class RuntimeOperationalStatusTests(unittest.TestCase):
         self.assertEqual("busy", runtime["state"])
         self.assertEqual("connected", runtime["transport_state"])
         self.assertIsNotNone(runtime["last_transport_recovered_at"])
+
+
+class WindowsFirstEnrollmentLifecycleTests(unittest.TestCase):
+    DEVICE_ID = "33333333-3333-4333-8333-333333333333"
+
+    def test_only_committed_owner_identity_requests_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp) / "owner-device"
+            with mock.patch.dict(os.environ, {
+                "ORDAX_AGENT_STATE_DIR": str(state),
+                "ORDAX_PRODUCT_MCP_URL": "https://mcp.ordax.com.br",
+            }):
+                os.environ.pop("ORDAX_DEVICE_ID", None)
+                config = AgentConfig.from_env()
+                with mock.patch("ordax_dev_agent.main.sys.platform", "win32"):
+                    self.assertFalse(_windows_enrollment_restart_ready(config))
+                    settings = state / "agent-settings.json"
+                    settings.write_text("{bad-json", encoding="utf-8")
+                    self.assertFalse(_windows_enrollment_restart_ready(config))
+                    settings.write_text(json.dumps({
+                        "device_id": self.DEVICE_ID,
+                        "control_plane_protocol": "cloudflare-v3",
+                        "product_mcp_url": "https://mcp.ordax.com.br",
+                    }), encoding="utf-8")
+                    self.assertFalse(_windows_enrollment_restart_ready(config))
+                    pending = resolve_pending_token_path(state)
+                    pending.write_text("a" * 64, encoding="ascii")
+                    self.assertFalse(_windows_enrollment_restart_ready(config))
+                    token = resolve_token_path(state)
+                    token.write_text("invalid", encoding="ascii")
+                    self.assertFalse(_windows_enrollment_restart_ready(config))
+                    token.write_text("a" * 64, encoding="ascii")
+                    self.assertTrue(_windows_enrollment_restart_ready(config))
+                    # A second identity never silently changes a live agent.
+                    self.assertFalse(_windows_enrollment_restart_ready(
+                        replace(config, device_id=self.DEVICE_ID)
+                    ))
+                # Non-Windows callers (including Native OS composition) do not
+                # restart on this Windows-only first-run file observation.
+                with mock.patch("ordax_dev_agent.main.sys.platform", "linux"):
+                    self.assertFalse(_windows_enrollment_restart_ready(config))
+
+    def test_other_state_root_cannot_trigger_owner_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp) / "original"
+            different = Path(temp) / "other"
+            with mock.patch.dict(os.environ, {
+                "ORDAX_AGENT_STATE_DIR": str(state),
+            }):
+                os.environ.pop("ORDAX_DEVICE_ID", None)
+                config = AgentConfig.from_env()
+                different.mkdir()
+                (different / "agent-settings.json").write_text(
+                    json.dumps({"device_id": self.DEVICE_ID}), encoding="utf-8")
+                resolve_token_path(different).write_text("a" * 64, encoding="ascii")
+                with mock.patch.dict(os.environ, {"ORDAX_AGENT_STATE_DIR": str(different)}):
+                    with mock.patch("ordax_dev_agent.main.sys.platform", "win32"):
+                        self.assertFalse(_windows_enrollment_restart_ready(config))
+
+    @unittest.skipUnless(os.name == "nt", "Windows installed Runtime lifecycle")
+    def test_windows_local_ready_exits_to_existing_supervisor_after_enrollment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp) / "owner-device"
+            with mock.patch.dict(os.environ, {
+                "ORDAX_AGENT_STATE_DIR": str(state),
+                "ORDAX_PRODUCT_MCP_URL": "https://mcp.ordax.com.br",
+            }):
+                os.environ.pop("ORDAX_DEVICE_ID", None)
+                config = AgentConfig.from_env()
+                (state / "agent-settings.json").write_text(json.dumps({
+                    "device_id": self.DEVICE_ID,
+                    "control_plane_protocol": "cloudflare-v3",
+                    "product_mcp_url": "https://mcp.ordax.com.br",
+                }), encoding="utf-8")
+                resolve_token_path(state).write_text("a" * 64, encoding="ascii")
+                with mock.patch("ordax_dev_agent.main._start_local_watchdog", return_value=None):
+                    with redirect_stdout(io.StringIO()):
+                        result = run(config, status_port=0)
+                self.assertEqual(result, 42)
+                # The owner agent exits for the SINGLE existing supervisor;
+                # no heartbeat, remote grant, OS Desktop profile or second
+                # process is created by this transition.
 
 
 if __name__ == "__main__":
