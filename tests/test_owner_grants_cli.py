@@ -383,7 +383,22 @@ class OwnerGrantsCliTests(unittest.TestCase):
                 "valid_until": (now + timedelta(days=1)).isoformat(),
             }],
         }
-        remote = FakeOwner()
+        class StoredOwner(FakeOwner):
+            def __init__(self):
+                super().__init__()
+                self.authority = authority
+
+            def replace_owner_remote_grant_group(self, token, **kwargs):
+                super().replace_owner_remote_grant_group(token, **kwargs)
+                self.authority = {
+                    **authority,
+                    "grant_groups": [
+                        {**authority["grant_groups"][0], "valid_until": None},
+                    ],
+                }
+                return {"ok": True, "grant_group_id": DEVICE}
+
+        remote = StoredOwner()
         policy = {"enabled": True, "full_access": True, "full_filesystem": True}
         result = retain_existing_full_control_grant(
             authority, device_id=DEVICE, client_id=CLIENT,
@@ -394,7 +409,8 @@ class OwnerGrantsCliTests(unittest.TestCase):
         self.assertFalse(result["endToEndProven"])
         self.assertTrue(result["grantMutationPerformed"])
         self.assertIsNone(result["valid_until"])
-        args = remote.calls[-1][2]
+        self.assertEqual([x[0] for x in remote.calls], ["grant", "authority"])
+        args = remote.calls[0][2]
         self.assertEqual(args, {
             "client_id": CLIENT, "device_id": DEVICE,
             "profile_key": "full-computer-control",
@@ -431,6 +447,68 @@ class OwnerGrantsCliTests(unittest.TestCase):
                         policy_checker=lambda _: policy,
                     )
                 self.assertEqual(len(remote.calls), count)
+
+    def test_indefinite_grant_requires_authoritative_readback_before_success(self):
+        from types import SimpleNamespace
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        original = {
+            "grant_group_id": DEVICE, "device_id": DEVICE,
+            "client_id": CLIENT, "client_consent_active": True,
+            "scope_kind": "device", "space_id": None, "project_id": None,
+            "profile_key": "full-computer-control",
+            "valid_until": (now + timedelta(days=1)).isoformat(),
+        }
+        authority = {
+            "device_id": DEVICE, "clients": [{"client_id": CLIENT}],
+            "grant_groups": [original],
+        }
+
+        class WriteAcceptedOwner(FakeOwner):
+            def __init__(self, readback):
+                super().__init__()
+                self.authority = readback
+
+            def replace_owner_remote_grant_group(self, token, **kwargs):
+                super().replace_owner_remote_grant_group(token, **kwargs)
+                return {"ok": True, "grant_group_id": DEVICE}
+
+        invalid_readbacks = (
+            authority,  # The finite expiry persisted despite HTTP 200.
+            {**authority, "grant_groups": [{**original, "valid_until": None,
+                                            "client_consent_active": False}]},
+            {**authority, "grant_groups": [{**original, "valid_until": None,
+                                            "client_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}]},
+            {**authority, "grant_groups": [{**original, "valid_until": None,
+                                            "device_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}]},
+            {**authority, "grant_groups": [{**original, "valid_until": None,
+                                            "profile_key": "computer-observe"}]},
+            {**authority, "grant_groups": [{**original, "valid_until": None,
+                                            "grant_group_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}]},
+            {**authority, "grant_groups": [{**original, "valid_until": None,
+                                            "scope_kind": "project"}]},
+            {**authority, "device_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"},
+        )
+        for readback in invalid_readbacks:
+            with self.subTest(readback=readback):
+                remote = WriteAcceptedOwner(readback)
+                with self.assertRaises(ValueError):
+                    retain_existing_full_control_grant(
+                        authority, device_id=DEVICE, client_id=CLIENT,
+                        token="opaque", remote=remote,
+                        config=SimpleNamespace(device_id=DEVICE),
+                        now=now, policy_checker=lambda _: {
+                            "enabled": True, "full_access": True,
+                            "full_filesystem": True,
+                        },
+                    )
+                # Never repeat a potentially committed write upon an uncertain
+                # readback; Owner must verify identity manually.
+                self.assertEqual(
+                    [event[0] for event in remote.calls].count("grant"), 1,
+                )
+                self.assertEqual(
+                    [event[0] for event in remote.calls].count("authority"), 1,
+                )
 
     def test_retention_refuses_duplicate_or_revoked_grants(self):
         from types import SimpleNamespace
