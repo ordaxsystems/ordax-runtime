@@ -617,7 +617,7 @@ class OneClickOwnerConnectTests(unittest.TestCase):
         self.assertEqual(outcome, 0)
         self.assertEqual(calls[-1], ("retain", device, client, "owner-token"))
         self.assertEqual(len(dialogs), 3)
-        self.assertIn("MANTER ACESSO AO COMPUTADOR ATE REVOGAR", dialogs[1])
+        self.assertIn("AUTORIZAR ACESSO AO COMPUTADOR ATE REVOGAR", dialogs[1])
         self.assertIn(client, dialogs[1])
         self.assertIn("Acesso sem vencimento confirmado", dialogs[2])
         self.assertNotIn("owner-token", str(dialogs))
@@ -674,6 +674,170 @@ class OneClickOwnerConnectTests(unittest.TestCase):
         self.assertIn("ja possui acesso completo sem vencimento", messages[1])
         self.assertIn("Nenhuma alteracao foi realizada", messages[1])
         self.assertNotIn("opaque-owner-token", str(messages))
+
+    def test_owner_recovers_expired_full_control_using_existing_discovery_in_gui(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        calls = []
+        dialogs = []
+
+        class Owner:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def owner_remote_authority(self, _token, *, device_id):
+                calls.append(("read-authority", device_id))
+                return {
+                    "device_id": device_id,
+                    "clients": [{"client_id": client, "client_name": "ChatGPT OrdaX"}],
+                    "grant_groups": [{
+                        "grant_group_id": device,
+                        "device_id": device,
+                        "client_id": client,
+                        "client_consent_active": True,
+                        "scope_kind": "device",
+                        "space_id": None,
+                        "project_id": None,
+                        "profile_key": "mcp-discovery",
+                        "valid_until": None,
+                    }],
+                }
+
+        def set_grant(authority, *, device_id, client_id, token, remote,
+                      config, now, restore_from_discovery=False):
+            calls.append(("restore", device_id, client_id, token,
+                          restore_from_discovery))
+            self.assertTrue(restore_from_discovery)
+            self.assertEqual(config.device_id, device)
+            return {
+                "ok": True, "grantMutationPerformed": True,
+                "endToEndProven": False, "valid_until": None,
+            }
+
+        def show(message, _flags):
+            dialogs.append(message)
+            return 6 if len(dialogs) <= 2 else 1
+
+        outcome = gui.retain_full_control_with_dialogs(
+            show=show, authorize=lambda: ("code", "verifier"),
+            exchange=lambda *_args: "opaque-owner-token",
+            load_config=lambda: SimpleNamespace(
+                device_id=device, product_mcp_url="https://mcp.ordax.com.br",
+            ),
+            client_factory=lambda *_args: Owner(),
+            clock=lambda: now, retain=set_grant,
+        )
+        self.assertEqual(outcome, 0)
+        self.assertEqual(calls[-1], ("restore", device, client,
+                                     "opaque-owner-token", True))
+        self.assertIn("ChatGPT OrdaX", dialogs[1])
+        self.assertIn("Cliente OAuth: " + client, dialogs[1])
+        self.assertIn("expirada ou inexistente", dialogs[1])
+        self.assertIn("SEM VENCIMENTO", dialogs[1])
+        self.assertIn("Acesso sem vencimento confirmado", dialogs[2])
+        self.assertNotIn("opaque-owner-token", str(dialogs))
+
+    def test_recovery_owner_decline_fails_without_grant_mutation(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+
+        class Owner:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def owner_remote_authority(self, _token, *, device_id):
+                return {
+                    "device_id": device_id,
+                    "clients": [{"client_id": client, "client_name": "ChatGPT"}],
+                    "grant_groups": [{
+                        "grant_group_id": device, "device_id": device,
+                        "client_id": client, "client_consent_active": True,
+                        "scope_kind": "device", "space_id": None, "project_id": None,
+                        "profile_key": "mcp-discovery", "valid_until": None,
+                    }],
+                }
+
+        decisions = iter([6, 7])
+        outcome = gui.retain_full_control_with_dialogs(
+            show=lambda *_args: next(decisions),
+            authorize=lambda: ("code", "verifier"),
+            exchange=lambda *_args: "opaque-token",
+            load_config=lambda: SimpleNamespace(
+                device_id=device, product_mcp_url="https://mcp.ordax.com.br",
+            ),
+            client_factory=lambda *_args: Owner(),
+            clock=lambda: datetime(2026, 11, 2, tzinfo=timezone.utc),
+            retain=lambda *_args, **_kwargs: self.fail(
+                "Refused grant must never be created"
+            ),
+        )
+        self.assertEqual(outcome, 2)
+
+    def test_one_permanent_client_does_not_hide_another_recoverable_client(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        device = "33333333-3333-4333-8333-333333333333"
+        permanent_client = "11111111-1111-4111-8111-111111111111"
+        expired_client = "22222222-2222-4222-8222-222222222222"
+        groups = [{
+            "grant_group_id": device, "device_id": device,
+            "client_id": permanent_client, "client_consent_active": True,
+            "scope_kind": "device", "space_id": None, "project_id": None,
+            "profile_key": "full-computer-control", "valid_until": None,
+        }, {
+            "grant_group_id": expired_client, "device_id": device,
+            "client_id": expired_client, "client_consent_active": True,
+            "scope_kind": "device", "space_id": None, "project_id": None,
+            "profile_key": "mcp-discovery", "valid_until": None,
+        }]
+
+        class Owner:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def owner_remote_authority(self, _token, *, device_id):
+                return {
+                    "device_id": device_id,
+                    "clients": [
+                        {"client_id": permanent_client, "client_name": "First"},
+                        {"client_id": expired_client, "client_name": "Second"},
+                    ],
+                    "grant_groups": groups,
+                }
+
+        calls = []
+        dialogs = []
+        decisions = iter([6, 6, 1])
+
+        def restore(_authority, *, device_id, client_id, token, remote,
+                    config, now, restore_from_discovery=False):
+            calls.append((client_id, restore_from_discovery))
+            return {
+                "ok": True, "grantMutationPerformed": True,
+                "endToEndProven": False, "valid_until": None,
+            }
+
+        outcome = gui.retain_full_control_with_dialogs(
+            show=lambda msg, _flags: dialogs.append(msg) or next(decisions),
+            authorize=lambda: ("code", "verifier"),
+            exchange=lambda *_args: "owner-token",
+            load_config=lambda: SimpleNamespace(
+                device_id=device, product_mcp_url="https://mcp.ordax.com.br",
+            ),
+            client_factory=lambda *_args: Owner(),
+            clock=lambda: datetime(2026, 11, 2, tzinfo=timezone.utc),
+            retain=restore,
+        )
+        self.assertEqual(outcome, 0)
+        self.assertEqual(calls, [(expired_client, True)])
+        self.assertIn("Second", dialogs[1])
+        self.assertNotIn("First", dialogs[1])
 
     def test_retain_grant_gui_owner_decline_never_changes_authority(self):
         from datetime import datetime, timedelta, timezone
