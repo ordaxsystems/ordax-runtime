@@ -35,6 +35,18 @@ class RuntimeOperationalStatusTests(unittest.TestCase):
             "last_heartbeat_at": heartbeat_at,
         }
 
+    def test_windows_owner_profile_without_home_uses_localappdata_safely(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": temp}, clear=True):
+                with mock.patch.object(Path, "home", side_effect=RuntimeError("home unavailable")):
+                    config = AgentConfig.from_env()
+                self.assertEqual(config.state_dir, Path(temp) / "OrdaX" / "DevAgent")
+                self.assertTrue(config.state_dir.is_dir())
+                self.assertEqual(config.hordax_path, Path(temp) / "Documents" / "github" / "HORDAX-game")
+                self.assertEqual(config.workspace_root, config.hordax_path.parent.resolve())
+                self.assertFalse(config.product_wake_enabled)
+                self.assertEqual(config.product_mcp_url, "https://mcp.ordax.com.br")
+
     def test_ready_and_busy_runtime_require_recent_product_heartbeat(self):
         for state in ("ready", "busy"):
             with self.subTest(state=state):
