@@ -137,6 +137,72 @@ class OneClickOwnerConnectTests(unittest.TestCase):
                 self.assertEqual(gui.main([]), 2)
                 connect.assert_called_once()
 
+    def test_all_owner_gui_flows_use_mcp_browser_return_not_terminal(self):
+        # The OAuth callback page must tell the user to return to the
+        # standalone MCP application, not to an inaccessible CLI window.
+        self.assertIs(
+            gui.connect_with_dialogs.__kwdefaults__["authorize"],
+            gui._browser_authorization,
+        )
+        self.assertIs(
+            gui.select_chatgpt_session_with_dialogs.__kwdefaults__["authorize"],
+            gui._browser_authorization,
+        )
+        self.assertIs(
+            gui.retain_full_control_with_dialogs.__kwdefaults__["authorize"],
+            gui._browser_authorization,
+        )
+        with mock.patch.object(
+            gui, "browser_authorization_code",
+            return_value=("owner-code", "pkce-verifier"),
+        ) as authorize:
+            self.assertEqual(
+                gui._browser_authorization(),
+                ("owner-code", "pkce-verifier"),
+            )
+        authorize.assert_called_once_with(mcp_callback=True)
+
+    def test_one_click_connected_owner_handoff_requires_explicit_yes(self):
+        messages = []
+        selected = []
+        launches = []
+        status = gui.activate_with_dialogs(
+            show=lambda message, flags: messages.append((message, flags)) or 6,
+            observe=lambda: "connected",
+            launch=lambda: launches.append("forbidden"),
+            select_session=lambda: selected.append("owner-gui") or 0,
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(selected, ["owner-gui"])
+        self.assertEqual(launches, [])
+        self.assertEqual(len(messages), 1)
+        self.assertIn("NAO significa que o ChatGPT tenha acesso", messages[0][0])
+        self.assertEqual(messages[0][1] & gui._MB_YESNO, gui._MB_YESNO)
+
+        selected.clear()
+        messages.clear()
+        status = gui.activate_with_dialogs(
+            show=lambda message, flags: messages.append((message, flags)) or 7,
+            observe=lambda: "connected",
+            launch=lambda: launches.append("forbidden"),
+            select_session=lambda: selected.append("forbidden") or 0,
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(selected, [])
+        self.assertEqual(launches, [])
+        self.assertEqual(len(messages), 1)
+
+    def test_one_click_unconfirmed_transport_never_authenticates_owner(self):
+        selected = []
+        for observed in ("running",):
+            self.assertEqual(gui.activate_with_dialogs(
+                show=lambda *_args: 6,
+                observe=lambda: observed,
+                launch=lambda: self.fail("Must not start another agent"),
+                select_session=lambda: selected.append("forbidden") or 0,
+            ), 0)
+        self.assertEqual(selected, [])
+
     def test_desktop_activation_when_connected_does_not_launch_again(self):
         launches = []
         messages = []
