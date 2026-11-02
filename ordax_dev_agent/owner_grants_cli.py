@@ -179,11 +179,11 @@ def diagnose_owner_mcp_readiness(
     }
 
 
-def finite_full_control_grants(
+def eligible_full_control_grants(
     authority: dict[str, Any], *, device_id: str,
     now: datetime,
-) -> list[tuple[str, str, datetime]]:
-    """List only existing consented, finite device-scoped full-control grants.
+) -> list[tuple[str, str, datetime | None]]:
+    """List existing consented, active device-scoped full-control grants.
 
     The Product Owner authority is the only source of these grants. This
     read-only helper never manufactures access or infers consent from liveness.
@@ -195,7 +195,7 @@ def finite_full_control_grants(
     groups = authority.get("grant_groups")
     if not isinstance(groups, list) or len(groups) > 500:
         raise ValueError("owner_grant_catalog_invalid")
-    results: list[tuple[str, str, datetime]] = []
+    results: list[tuple[str, str, datetime | None]] = []
     seen_clients: set[str] = set()
     for group in groups:
         if not isinstance(group, dict):
@@ -210,14 +210,19 @@ def finite_full_control_grants(
         client_id = select_consented_owner_mcp_client(
             authority, device_id=device_id, requested_client_id=group.get("client_id"),
         )
-        until = group.get("valid_until")
-        if not isinstance(until, str) or not until.strip():
-            continue  # Never silently change an unbounded access grant.
-        try:
-            expires = datetime.fromisoformat(until.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if expires.tzinfo is None or expires <= now:
+        if "valid_until" not in group:
+            continue  # Missing expiry metadata is not an indefinite grant.
+        until = group["valid_until"]
+        if until is None:
+            expires = None  # Already authorized until the Owner revokes.
+        elif isinstance(until, str) and until.strip():
+            try:
+                expires = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if expires.tzinfo is None or expires <= now:
+                continue
+        else:
             continue
         if client_id in seen_clients:
             raise ValueError("owner_grant_duplicate_full_control_client")
@@ -225,7 +230,7 @@ def finite_full_control_grants(
         results.append((client_id, str(group.get("grant_group_id") or ""), expires))
         if len(results) > 5:
             raise ValueError("owner_grant_retention_catalog_too_large")
-    return sorted(results, key=lambda item: (item[2], item[0]))
+    return sorted(results, key=lambda item: (item[2] is None, item[2] or now, item[0]))
 
 
 def retain_existing_full_control_grant(
@@ -242,10 +247,10 @@ def retain_existing_full_control_grant(
     """
     if str(config.device_id or "").lower() != device_id.lower():
         raise ValueError("owner_retention_must_run_on_target_device")
-    candidates = finite_full_control_grants(
+    candidates = eligible_full_control_grants(
         authority, device_id=device_id, now=now,
     )
-    matched = [row for row in candidates if row[0] == client_id]
+    matched = [row for row in candidates if row[0] == client_id and row[2] is not None]
     if len(matched) != 1:
         raise ValueError("owner_retention_existing_grant_required")
     local = policy_checker(config)
