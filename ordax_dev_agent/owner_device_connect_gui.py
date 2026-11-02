@@ -263,7 +263,7 @@ def _central_selection_tickets(remote: object, token: str, device_id: str, autho
 def select_chatgpt_session_with_dialogs(
     *,
     show: Callable[[str, int], int] = _show_message,
-    authorize: Callable[[], tuple[str, str]] = browser_authorization_code,
+    authorize: Callable[[], tuple[str, str]] = _browser_authorization,
     exchange: Callable[[str, str], str] = exchange_owner_code,
     load_config: Callable[[], AgentConfig] = AgentConfig.from_env,
     client_factory: Callable[..., ProductRemoteClient] = ProductRemoteClient,
@@ -356,7 +356,7 @@ def select_chatgpt_session_with_dialogs(
 def retain_full_control_with_dialogs(
     *,
     show: Callable[[str, int], int] = _show_message,
-    authorize: Callable[[], tuple[str, str]] = browser_authorization_code,
+    authorize: Callable[[], tuple[str, str]] = _browser_authorization,
     exchange: Callable[[str, str], str] = exchange_owner_code,
     load_config: Callable[[], AgentConfig] = AgentConfig.from_env,
     client_factory: Callable[..., ProductRemoteClient] = ProductRemoteClient,
