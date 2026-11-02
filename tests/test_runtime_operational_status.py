@@ -218,7 +218,8 @@ class WindowsFirstEnrollmentLifecycleTests(unittest.TestCase):
                     ))
                 # Non-Windows callers (including Native OS composition) do not
                 # restart on this Windows-only first-run file observation.
-                self.assertFalse(_windows_enrollment_restart_ready(config))
+                with mock.patch("ordax_dev_agent.main.sys.platform", "linux"):
+                    self.assertFalse(_windows_enrollment_restart_ready(config))
 
     def test_other_state_root_cannot_trigger_owner_restart(self):
         with tempfile.TemporaryDirectory() as temp:
