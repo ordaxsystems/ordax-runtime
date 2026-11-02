@@ -188,6 +188,66 @@ class ProductCentralSessionClientTests(unittest.TestCase):
         self.assertFalse(status.confirmed)
         self.assertEqual(status.last_error, "product_central_session_receipt_mismatch")
 
+    def test_idempotent_central_confirmation_recovers_after_lost_http_receipt(self):
+        # The Platform may commit a valid challenge even if the first POST's
+        # response is lost. Its repeat receipt has no device_id, but the
+        # canonical RPC has already verified device token and challenge owner.
+        calls = []
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.method)
+            if request.method == "GET":
+                return httpx.Response(200, json={
+                    "ok": True, "pending": True, "challenge_id": CHALLENGE_ID,
+                })
+            if calls.count("POST") == 1:
+                raise httpx.ReadTimeout("lost response after authoritative commit",
+                                        request=request)
+            return httpx.Response(200, json={
+                "ok": True, "status": "bound", "request_id": CHALLENGE_ID,
+            })
+
+        client = self.make_client(["a" * 64], handler)
+        first = client.tick(now=10.0)
+        self.assertFalse(first.confirmed)
+        self.assertEqual(first.last_error, "product_central_session_unavailable")
+        second = client.tick(now=30.0)
+        self.assertTrue(second.confirmed)
+        self.assertEqual(second.challenge_id, CHALLENGE_ID)
+        self.assertIsNone(second.last_error)
+        self.assertEqual(calls, ["GET", "POST", "GET", "POST"])
+        self.assertTrue(second.public_observation()["last_confirmation_observed"])
+
+    def test_idempotent_receipt_requires_exact_platform_shape_and_uuid(self):
+        # An absent/wrong device_id is not a general-purpose success path.
+        # Only the verified, deliberately smaller Platform duplicate receipt
+        # can be accepted. Extra fields, forged types and wrong device fail.
+        valid = {"ok": True, "status": "bound", "request_id": CHALLENGE_ID}
+        cases = [
+            {"ok": True, "status": "bound"},
+            {"ok": True, "status": "bound", "request_id": "not-uuid"},
+            {"ok": True, "status": "bound", "request_id": None},
+            {"ok": True, "status": "bound", "request_id": 42},
+            {**valid, "device_id": None},
+            {**valid, "device_id": "44444444-4444-4444-8444-444444444444"},
+            {**valid, "expires_at": "2099-01-01T00:00:00Z"},
+            {**valid, "extra": True},
+        ]
+        for receipt in cases:
+            with self.subTest(receipt=receipt):
+                def handler(request: httpx.Request) -> httpx.Response:
+                    if request.method == "GET":
+                        return httpx.Response(200, json={
+                            "ok": True, "pending": True,
+                            "challenge_id": CHALLENGE_ID,
+                        })
+                    return httpx.Response(200, json=receipt)
+                status = self.make_client(["a" * 64], handler).tick(now=10.0)
+                self.assertFalse(status.confirmed)
+                self.assertEqual(
+                    status.last_error, "product_central_session_receipt_mismatch",
+                )
+                self.assertIsNone(status.challenge_id)
+
     def test_unauthorized_device_requires_reenrollment(self):
         token = ["a" * 64]
 
