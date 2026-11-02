@@ -78,6 +78,33 @@ class ProductMcpServerTests(unittest.TestCase):
         shutdown.assert_called_once_with()
         self.assertIsNone(handlers._PRODUCT_HTTP_TRANSPORT)
 
+    def test_native_ordax_surface_actions_route_by_product_device_only(self):
+        status = server.ordax_surface_status("dev-ordax", "space-1")
+        opened = server.ordax_surface_open("dev-ordax", "settings", "space-1")
+        self.assertEqual(status["status"], "succeeded")
+        self.assertEqual(opened["status"], "succeeded")
+        calls = [call[2] for instance in FakeClient.instances
+                 for call in instance.calls if call[0] == "submit"]
+        self.assertEqual([call["action"] for call in calls], [
+            "ordax.surface.status", "ordax.surface.open",
+        ])
+        self.assertTrue(all(call["device_id"] == "dev-ordax" for call in calls))
+        self.assertTrue(all(call["project"] is None for call in calls))
+        self.assertTrue(all(call["space_id"] == "space-1" for call in calls))
+        self.assertEqual(calls[0]["arguments"], {})
+        self.assertEqual(calls[1]["arguments"], {"appId": "settings"})
+
+    def test_native_mcp_tool_schema_is_typed_and_not_windows_scope(self):
+        specs = {tool.name: tool for tool in server.PRODUCT_MCP_TOOLS}
+        self.assertEqual(specs["ordax_surface_status"].action, "ordax.surface.status")
+        self.assertEqual(specs["ordax_surface_status"].effect, "read")
+        self.assertEqual(specs["ordax_surface_open"].action, "ordax.surface.open")
+        self.assertEqual(specs["ordax_surface_open"].effect, "write")
+        self.assertNotIn("ordax.surface.open", {
+            tool.action for tool in specs.values() if tool.name.startswith("computer_")
+        })
+        self.assertIsNotNone(server.mcp._tool_manager.get_tool("ordax_surface_status"))
+        self.assertIsNotNone(server.mcp._tool_manager.get_tool("ordax_surface_open"))
     def test_device_process_start_routes_without_project(self):
         response = server.computer_process_start("dev-1", ["node", "--version"], cwd="C:/project", wait_seconds=1)
         self.assertEqual(response["status"], "succeeded")

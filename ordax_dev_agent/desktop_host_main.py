@@ -16,12 +16,14 @@ from uuid import UUID
 
 from .config import AgentConfig
 from .main import run
+from .product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS
 
-# Positive, minimal read-only authority during Desktop's first integration.
+# Minimal Native Product authority: observation is read-only; app opening
+# requires an independent Platform Owner grant and a real Surface receipt.
 # computer.access_status reads the local policy only; it does NOT enable it.
 # Additional OS actions require verified Native adapters; no unscoped Windows
 # filesystem, terminal, GUI control or host adapter is delegated.
-DESKTOP_OS_ACTIONS = frozenset({"agent.status", "computer.access_status"})
+DESKTOP_OS_ACTIONS = frozenset({"agent.status", "computer.access_status"}) | NATIVE_SURFACE_DEVICE_ACTIONS
 
 
 def main() -> int:

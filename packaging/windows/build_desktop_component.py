@@ -57,6 +57,7 @@ def main() -> None:
            for name in modules):
         raise RuntimeError("Studio or UI dependency leaked into Desktop component")
     required = {"ordax_dev_agent.desktop_host_main", "ordax_dev_agent.main",
+                "ordax_dev_agent.desktop_surface_actions",
                 "ordax_dev_agent.product_device_control_plane",
                 "ordax_dev_agent.product_central_session"}
     if not required.issubset(modules):
@@ -74,7 +75,7 @@ def main() -> None:
                    APPDATA=str(isolated / "roaming"), PYTHONNOUSERSITE="1")
         proof = json.loads(run(str(executable), "--self-test", cwd=isolated, env=env, timeout=90))
         if (proof.get("ok") is not True or proof.get("profile") != "ordax-desktop"
-                or proof.get("actions") != ["agent.status", "computer.access_status"]
+                or proof.get("actions") != ["agent.status", "computer.access_status", "ordax.surface.open", "ordax.surface.status"]
                 or proof.get("network_used") is not False
                 or proof.get("device_credential_used") is not False
                 or proof.get("remote_action_proven") is not False):

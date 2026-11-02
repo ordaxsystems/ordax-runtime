@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from unittest.mock import patch
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.desktop_host_main import DESKTOP_OS_ACTIONS, main
+from ordax_dev_agent.product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS
 
 
 class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
@@ -34,10 +36,16 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
             product_mcp_url="https://mcp.ordax.com.br", projects={},
         )
 
+    def test_native_os_capabilities_have_one_canonical_device_scope_owner(self):
+        self.assertEqual(DESKTOP_OS_ACTIONS,
+                         frozenset({"agent.status", "computer.access_status"})
+                         | NATIVE_SURFACE_DEVICE_ACTIONS)
+        self.assertEqual(NATIVE_SURFACE_DEVICE_ACTIONS,
+                         frozenset({"ordax.surface.status", "ordax.surface.open"}))
     def test_only_explicit_os_readonly_capabilities_are_advertised(self):
-        registry = ActionRegistry(self.config, computer_adapter={},
+        registry = ActionRegistry(replace(self.config, computer_access_source="native-unbound"), computer_adapter={},
                                   allowed_action_names=DESKTOP_OS_ACTIONS)
-        self.assertEqual(registry.names, ["agent.status", "computer.access_status"])
+        self.assertEqual(registry.names, ["agent.status", "computer.access_status", "ordax.surface.open", "ordax.surface.status"])
         policy = registry.execute("computer.access_status", {})
         self.assertTrue(policy.ok)
         self.assertFalse(policy.data["full_access"])
@@ -65,6 +73,8 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         normal = ActionRegistry(self.config)
         self.assertIn("agent.status", normal.names)
         self.assertIn("terminal.exec", normal.names)
+        self.assertNotIn("ordax.surface.status", normal.names)
+        self.assertNotIn("ordax.surface.open", normal.names)
 
     def run_host(self, *, config=None, env=None):
         variables = {
@@ -94,7 +104,7 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         self.assertEqual(args[0].workspace_root, self.root / "Files")
         self.assertEqual(args[0].computer_access_source, "native-unbound")
         self.assertEqual(kwargs, {"computer_adapter": {},
-                                  "allowed_action_names": frozenset({"agent.status", "computer.access_status"}),
+                                  "allowed_action_names": frozenset({"agent.status", "computer.access_status", "ordax.surface.open", "ordax.surface.status"}),
                                   "status_port": 0})
 
     def test_desktop_policy_cannot_inherit_windows_agent_grants_or_environment(self):

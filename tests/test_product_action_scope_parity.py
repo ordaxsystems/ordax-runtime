@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ordax_dev_agent.product_action_scope import (
     APP_INTELLIGENCE_DEVICE_ACTIONS,
+    NATIVE_SURFACE_DEVICE_ACTIONS,
     COMPUTER_DEVICE_ACTIONS,
     DEVICE_SCOPED_ACTIONS,
 )
@@ -27,13 +28,17 @@ class ProductActionScopeParityTests(unittest.TestCase):
         self.assertNotIn("git.command", DEVICE_SCOPED_ACTIONS)
         self.assertNotIn("process.start", DEVICE_SCOPED_ACTIONS)
         self.assertTrue(all(action.startswith("computer.") for action in COMPUTER_DEVICE_ACTIONS))
+        self.assertEqual(NATIVE_SURFACE_DEVICE_ACTIONS,
+                         frozenset({"ordax.surface.status", "ordax.surface.open"}))
+        self.assertTrue(NATIVE_SURFACE_DEVICE_ACTIONS.isdisjoint(COMPUTER_DEVICE_ACTIONS))
         self.assertEqual(
             APP_INTELLIGENCE_DEVICE_ACTIONS,
             frozenset({"intelligence.app_catalog", "intelligence.app_detail"}),
         )
         self.assertEqual(
             DEVICE_SCOPED_ACTIONS,
-            frozenset({*COMPUTER_DEVICE_ACTIONS, *APP_INTELLIGENCE_DEVICE_ACTIONS, "orchestrator.app_read"}),
+            frozenset({*COMPUTER_DEVICE_ACTIONS, *APP_INTELLIGENCE_DEVICE_ACTIONS,
+                       *NATIVE_SURFACE_DEVICE_ACTIONS, "orchestrator.app_read"}),
         )
 
     def test_python_product_mcp_server_must_not_keep_project_bound_computer_tools(self) -> None:
