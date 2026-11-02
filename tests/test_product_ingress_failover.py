@@ -365,7 +365,10 @@ class TrustedProductIngressTests(unittest.TestCase):
                 raise httpx.ConnectTimeout("connect unavailable", request=request)
             if request.method == "GET":
                 return httpx.Response(200, json={"ok": True, "pending": True, "challenge_id": challenge})
-            return httpx.Response(200, json={"ok": True, "status": "bound", "device_id": device_id})
+            return httpx.Response(200, json={
+                "ok": True, "status": "bound", "device_id": device_id,
+                "request_id": challenge, "expires_at": "2099-01-01T00:00:00Z",
+            })
 
         with httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False) as client:
             session = ProductCentralSessionClient(
