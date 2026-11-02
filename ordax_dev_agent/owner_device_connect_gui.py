@@ -21,6 +21,7 @@ from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code, 
 from ordax_connector.owner_grants import require_owner_mcp_device_identity, select_consented_owner_mcp_client
 from ordax_dev_agent.device_setup import SetupError
 from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.owner_grants_cli import expiring_full_control_grants, renew_existing_full_control_grant
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 from ordax_dev_agent.owner_device_connect_cli import enroll_owner_device
 from ordax_dev_agent.product_ingress import inspect_pinned_https_ingress
@@ -352,6 +353,97 @@ def select_chatgpt_session_with_dialogs(
     return 1
 
 
+def renew_full_control_with_dialogs(
+    *,
+    show: Callable[[str, int], int] = _show_message,
+    authorize: Callable[[], tuple[str, str]] = browser_authorization_code,
+    exchange: Callable[[str, str], str] = exchange_owner_code,
+    load_config: Callable[[], AgentConfig] = AgentConfig.from_env,
+    client_factory: Callable[..., ProductRemoteClient] = ProductRemoteClient,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    renew: Callable[..., dict[str, Any]] = renew_existing_full_control_grant,
+) -> int:
+    """Allow the Owner to renew, never silently create or expand access."""
+    if show(
+        "Verificar autorizacoes existentes do OrdaX MCP?\n\n"
+        "O navegador sera aberto para autenticar o proprietario. "
+        "Sera possivel renovar por 7 dias SOMENTE um acesso completo "
+        "ja concedido, com vencimento nos proximos 7 dias.\n\n"
+        "Nada sera renovado sem outra confirmacao explicita.",
+        _MB_YESNO | _MB_ICONQUESTION,
+    ) != _IDYES:
+        return 2
+    try:
+        config = load_config()
+        device_id = str(config.device_id or "")
+        if not device_id:
+            raise ValueError("Device not enrolled")
+        code, verifier = authorize()
+        token = exchange(code, verifier)
+        if not isinstance(token, str) or not token:
+            raise ValueError("Owner OAuth token missing")
+        with client_factory(config.product_mcp_url) as remote:
+            authority = remote.owner_remote_authority(token, device_id=device_id)
+            current_time = clock()
+            candidates = expiring_full_control_grants(
+                authority, device_id=device_id, now=current_time,
+            )
+            if not candidates:
+                show(
+                    "Nenhum acesso completo elegivel para renovacao.\n\n"
+                    "Uma autorizacao expirada, revogada ou ausente deve "
+                    "ser concedida novamente pelo fluxo oficial do Owner.",
+                    _MB_ICONINFORMATION,
+                )
+                return 2
+            for client_id, _group_id, expires in candidates:
+                approved = show(
+                    "RENOVAR ACESSO AO COMPUTADOR\n\n"
+                    f"Dispositivo: {device_id}\n"
+                    f"Cliente OAuth: {client_id}\n"
+                    f"Autorizacao atual vence em: {expires.isoformat()}\n\n"
+                    "Deseja renovar por 7 dias este mesmo perfil "
+                    "full-computer-control? Acesso a mouse, teclado, "
+                    "terminal e arquivos continuara sujeito ao Owner.",
+                    _MB_YESNO | _MB_ICONQUESTION,
+                )
+                if approved != _IDYES:
+                    continue
+                result = renew(
+                    authority, device_id=device_id, client_id=client_id,
+                    token=token, remote=remote, config=config,
+                    now=current_time, days=7,
+                )
+                if (
+                    result.get("ok") is not True
+                    or result.get("grantMutationPerformed") is not True
+                    or result.get("endToEndProven") is not False
+                ):
+                    raise ValueError("Owner renewal result invalid")
+                show(
+                    "Renovacao confirmada pela Platform OrdaX.\n"
+                    f"Novo vencimento: {result['valid_until']}\n\n"
+                    "A renovacao nao atesta uma sessao ChatGPT. "
+                    "Se necessario, utilize Autorizar ChatGPT no menu Iniciar.",
+                    _MB_ICONINFORMATION,
+                )
+                return 0
+        return 2
+    except OwnerOAuthError:
+        show("Autenticacao do proprietario nao concluida.", _MB_ICONERROR)
+    except ProductRemoteError:
+        show("Nao foi possivel consultar ou renovar o acesso na Platform.", _MB_ICONERROR)
+    except Exception:
+        # Preserve fail-closed semantics without leaking untrusted server
+        # details, credentials, tokens or private installation paths.
+        show(
+            "Renovacao nao concluida. Confira a instalacao e as "
+            "permissoes locais antes de tentar novamente.",
+            _MB_ICONERROR,
+        )
+    return 1
+
+
 def _format_ingress_observation(label: str, record: object) -> str:
     if not isinstance(record, dict):
         raise ValueError("Untrusted ingress diagnostic shape")
@@ -419,6 +511,10 @@ def main(argv: list[str] | None = None) -> int:
         "--selecionar-chatgpt", action="store_true",
         help="confirmar explicitamente um pedido de sessao ChatGPT ja autorizado",
     )
+    mode.add_argument(
+        "--renovar-acesso", action="store_true",
+        help="renovar explicitamente um grant full-computer-control ja existente",
+    )
     args = parser.parse_args(argv)
     if sys.platform != "win32":
         return 1
@@ -426,6 +522,8 @@ def main(argv: list[str] | None = None) -> int:
         return activate_with_dialogs()
     if args.selecionar_chatgpt:
         return select_chatgpt_session_with_dialogs()
+    if args.renovar_acesso:
+        return renew_full_control_with_dialogs()
     if args.verificar_rede:
         return diagnose_with_dialogs()
     return connect_with_dialogs()
