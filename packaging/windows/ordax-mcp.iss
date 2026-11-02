@@ -47,6 +47,10 @@ Name: "{userdesktop}\\OrdaX MCP"; Filename: "{app}\\runtime\\pythonw.exe"; Param
 ; This shortcut only opens the existing Owner PKCE enrollment flow in the
 ; packaged, private Python. It does not launch another Runtime or issue grants.
 Name: "{group}\\Conectar dispositivo"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
+; Explicit, Owner-authenticated selection for this ChatGPT OAuth client. This
+; existing private GUI requires a pending central challenge and a human click:
+; neither OAuth identity, device grants nor session attestation are inferred.
+Name: "{group}\\Autorizar ChatGPT"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --selecionar-chatgpt"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 ; A read-only network check. Never launches OAuth or issues grants.
 Name: "{group}\\Verificar conexão"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 
