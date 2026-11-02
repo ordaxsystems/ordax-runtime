@@ -25,7 +25,10 @@ class OwnerCentralDeviceSelectionClientTests(unittest.TestCase):
                 self.assertEqual(req.url.params["client_id"], CLIENT)
                 return httpx.Response(200, json={
                     "ok": True, "client_id": CLIENT, "eligible_device_count": 2,
-                    "targets": [{"device_id": NOTEBOOK}, {"device_id": DESKTOP}],
+                    "targets": [
+                        {"device_id": NOTEBOOK, "reported_online": False, "runtime_ready": False},
+                        {"device_id": DESKTOP, "reported_online": True, "runtime_ready": True},
+                    ],
                     "state": "owner_selection_required", "attested": False,
                     "dispatch_authorized": False, "owner_choice_performed": False,
                 })
@@ -92,6 +95,49 @@ class OwnerCentralDeviceSelectionClientTests(unittest.TestCase):
                         remote.owner_select_central_device(
                             "jwt", client_id=CLIENT, challenge_id=TICKET, device_id=DESKTOP)
                 self.assertEqual(err.exception.error_code, "product_remote_invalid_response")
+
+    def test_owner_target_projection_requires_presence_and_runtime_readiness_evidence(self):
+        valid = {
+            "ok": True, "client_id": CLIENT, "eligible_device_count": 1,
+            "targets": [{
+                "device_id": DESKTOP, "reported_online": True,
+                "runtime_ready": True,
+            }],
+            "state": "single_granted_target", "attested": False,
+            "dispatch_authorized": False, "owner_choice_performed": False,
+        }
+        invalid_targets = [
+            {"device_id": DESKTOP},
+            {"device_id": DESKTOP, "reported_online": True},
+            {"device_id": DESKTOP, "runtime_ready": True},
+            {"device_id": DESKTOP, "reported_online": "true", "runtime_ready": True},
+            {"device_id": DESKTOP, "reported_online": True, "runtime_ready": 1},
+            {"device_id": DESKTOP, "reported_online": False, "runtime_ready": True},
+        ]
+        for record in invalid_targets:
+            with self.subTest(target=record):
+                response = {**valid, "targets": [record]}
+                remote = ProductRemoteClient(
+                    "https://mcp.example.test",
+                    http=httpx.Client(transport=httpx.MockTransport(
+                        lambda _request: httpx.Response(200, json=response)
+                    )),
+                )
+                with self.assertRaises(ProductRemoteError) as error:
+                    remote.owner_central_session_targets("jwt", client_id=CLIENT)
+                self.assertEqual(
+                    error.exception.error_code, "product_remote_invalid_response"
+                )
+        remote = ProductRemoteClient(
+            "https://mcp.example.test",
+            http=httpx.Client(transport=httpx.MockTransport(
+                lambda _request: httpx.Response(200, json=valid)
+            )),
+        )
+        response = remote.owner_central_session_targets(
+            "jwt", client_id=CLIENT,
+        )
+        self.assertTrue(response["targets"][0]["runtime_ready"])
 
     def test_pending_timestamp_values_require_nonempty_text(self):
         # An old unmerged client branch only checked for string types.
