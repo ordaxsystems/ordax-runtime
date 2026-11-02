@@ -213,6 +213,18 @@ jobs:
               $diagnosticShortcut.Arguments -cne '-m ordax_dev_agent.owner_device_connect_gui --verificar-rede') {
             throw 'MCP network diagnostic is not routed through the single canonical private GUI'
           }
+          # Owner session selection is a separate, consent-gated action.
+          # This shortcut must never be the login-free activation entrypoint.
+          $centralShortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\OrdaX MCP\Autorizar ChatGPT.lnk'
+          if (-not (Test-Path -LiteralPath $centralShortcutPath)) {
+            throw 'Owner ChatGPT session selection shortcut missing'
+          }
+          $centralShortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($centralShortcutPath)
+          if ($centralShortcut.TargetPath -ine $privatePythonw -or
+              $centralShortcut.Arguments -cne '-m ordax_dev_agent.owner_device_connect_gui --selecionar-chatgpt' -or
+              $centralShortcut.WorkingDirectory -ine $root) {
+            throw 'Owner ChatGPT session shortcut bypasses canonical private GUI'
+          }
           # A visible manual activation shortcut must exist independently of
           # HKCU Run. Clicking it uses the private GUI and the same native
           # launcher/mutex, never a second agent, OAuth enrollment or shell.
@@ -244,6 +256,7 @@ jobs:
           if (Test-Path (Join-Path $root 'ORDAX Runtime.exe')) { throw 'Standalone MCP Runtime remained after uninstall' }
           if (Test-Path -LiteralPath $shortcutPath) { throw 'MCP connect shortcut remained after uninstall' }
           if (Test-Path -LiteralPath $diagnosticShortcutPath) { throw 'MCP network diagnostic shortcut remained after uninstall' }
+          if (Test-Path -LiteralPath $centralShortcutPath) { throw 'MCP Owner selection shortcut remained after uninstall' }
           if (Test-Path -LiteralPath $shortcutStart -or Test-Path -LiteralPath $shortcutDesktop) {
             throw 'MCP manual activation shortcut remained after uninstall'
           }
