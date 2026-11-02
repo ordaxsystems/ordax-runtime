@@ -38,6 +38,12 @@ VersionInfoDescription=OrdaX MCP standalone Runtime candidate
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
+; One visible, installer-owned activation entry in Start Menu and on the
+; desktop. The private GUI starts ONLY the installed native Runtime launcher,
+; whose existing Windows mutex prevents duplicate agents, and reports the
+; observed local connection state without ever granting remote access.
+Name: "{group}\\OrdaX MCP"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --ativar"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
+Name: "{userdesktop}\\OrdaX MCP"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --ativar"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 ; This shortcut only opens the existing Owner PKCE enrollment flow in the
 ; packaged, private Python. It does not launch another Runtime or issue grants.
 Name: "{group}\\Conectar dispositivo"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
