@@ -523,9 +523,15 @@ class ProductRemoteClient:
         if (
             type(count) is not int or count < 0 or count > 25
             or not isinstance(targets, list) or len(targets) != count
-            or not all(isinstance(item, dict) and isinstance(item.get("device_id"), str)
-                       and _UUID.fullmatch(item["device_id"]) is not None
-                       for item in targets)
+            or not all(
+                isinstance(item, dict)
+                and isinstance(item.get("device_id"), str)
+                and _UUID.fullmatch(item["device_id"]) is not None
+                and type(item.get("reported_online")) is bool
+                and type(item.get("runtime_ready")) is bool
+                and not (item["runtime_ready"] and not item["reported_online"])
+                for item in targets
+            )
             or body.get("attested") is not False
             or body.get("dispatch_authorized") is not False
             or body.get("owner_choice_performed") is not False
