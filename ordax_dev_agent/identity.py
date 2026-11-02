@@ -37,3 +37,16 @@ def machine_id() -> str:
     # Never send raw Windows MachineGuid. The Edge Function hashes this again,
     # while this local hash avoids exposing the platform identifier in transit.
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+def desktop_machine_binding() -> str:
+    """Stable, domain-separated instance binding for the OrdaX Desktop product.
+
+    The Windows agent uses machine_id() directly.  PostgreSQL intentionally
+    enforces one device credential per binding, so the native Desktop must
+    never enroll with the Windows agent's binding or rotate its token.
+    """
+    physical = machine_id()
+    return hashlib.sha256(
+        b"ordax.product.device-binding/1\0ordax-desktop\0"
+        + physical.encode("ascii")
+    ).hexdigest()

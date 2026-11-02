@@ -16,7 +16,7 @@ import httpx
 
 from .config import DEFAULT_PRODUCT_MCP_URL
 from .device_credentials import resolve_pending_token_path, resolve_token_path
-from .identity import machine_id
+from .identity import machine_id, desktop_machine_binding
 from .product_ingress import TrustedProductIngress
 
 
@@ -315,6 +315,17 @@ def _configure(
 
         if not identity or not identity.get("ok"):
             credential = str(product_access_token or "").strip()
+            if not credential and interactive:
+                # Existing owner-approved PKCE; no device secret or grant reuse.
+                from ordax_core.owner_oauth import (
+                    OwnerOAuthError, browser_authorization_code,
+                    exchange_owner_code,
+                )
+                try:
+                    code, verifier = browser_authorization_code(mcp_callback=True)
+                    credential = exchange_owner_code(code, verifier)
+                except OwnerOAuthError:
+                    raise SetupError("PRODUCT_ACCOUNT_LOGIN_REQUIRED") from None
             if not credential or len(credential) > 16_000:
                 raise SetupError("PRODUCT_ACCOUNT_LOGIN_REQUIRED")
             if pending.is_file():
@@ -388,6 +399,8 @@ def _configure(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--interactive", action="store_true")
+    parser.add_argument("--desktop-dev", action="store_true",
+                        help="Enroll independent OrdaX Desktop local product profile")
     parser.add_argument(
         "--product-mcp-url",
         default=os.environ.get("ORDAX_PRODUCT_MCP_URL"),
@@ -404,13 +417,24 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        state = Path(os.environ["LOCALAPPDATA"]) / "OrdaX" / "DevAgent"
+        if args.desktop_dev:
+            state = (Path(os.environ["APPDATA"]) /
+                     "OrdaX OS Desktop Local Development" /
+                     "native-state" / "product-runtime")
+            binding = desktop_machine_binding()
+            device_name = "OrdaX Desktop (" + socket.gethostname() + ")"
+        else:
+            state = Path(os.environ["LOCALAPPDATA"]) / "OrdaX" / "DevAgent"
+            binding = None
+            device_name = None
         result = configure(
             state,
             interactive=args.interactive,
             product_mcp_url=args.product_mcp_url,
             device_kind=args.device_kind,
             channel=args.channel,
+            binding=binding,
+            device_name=device_name,
         )
         print(json.dumps(result))
         return 0

@@ -1,6 +1,7 @@
 import hashlib
 import inspect
 import json
+import sys
 import tempfile
 import unittest
 import uuid
@@ -10,6 +11,9 @@ from unittest.mock import patch
 import httpx
 
 from ordax_dev_agent.device_setup import SetupError, configure, private_directory, setup_lock
+from ordax_dev_agent.identity import desktop_machine_binding
+from ordax_dev_agent import device_setup as setup_module
+from ordax_core.owner_oauth import OwnerOAuthError
 
 
 class SetupTests(unittest.TestCase):
@@ -288,6 +292,64 @@ class SetupTests(unittest.TestCase):
         self.run_setup()
         self.assertEqual(1, self.enrollments)
 
+
+    def test_desktop_binding_is_not_the_windows_agent_binding(self):
+        with patch("ordax_dev_agent.identity.machine_id", return_value="a" * 64):
+            first = desktop_machine_binding()
+            second = desktop_machine_binding()
+        self.assertEqual(first, second)
+        self.assertRegex(first, r"^[0-9a-f]{64}$")
+        self.assertNotEqual(first, "a" * 64)
+
+    def test_owner_interactive_pkce_enrolls_only_after_real_owner_session(self):
+        with patch("ordax_core.owner_oauth.browser_authorization_code",
+                   return_value=("approved-code", "pkce-verifier")) as login, \
+             patch("ordax_core.owner_oauth.exchange_owner_code",
+                   return_value="ordax-product-session") as exchange:
+            result = self.run_setup(product_access_token=None, interactive=True)
+        self.assertEqual(self.device, result["device_id"])
+        login.assert_called_once_with(mcp_callback=True)
+        exchange.assert_called_once_with("approved-code", "pkce-verifier")
+        self.assertEqual(1, self.enrollments)
+        self.assertNotIn("ordax-product-session",
+                         (self.state / "agent-settings.json").read_text())
+
+    def test_existing_enrollment_does_not_repeat_owner_oauth(self):
+        self.run_setup()
+        with patch("ordax_core.owner_oauth.browser_authorization_code",
+                   side_effect=AssertionError("owner login repeated")):
+            result = self.run_setup(product_access_token=None, interactive=True)
+        self.assertEqual(self.device, result["device_id"])
+        self.assertEqual(1, self.enrollments)
+
+    def test_rejected_owner_oauth_does_not_create_any_device_token(self):
+        with patch("ordax_core.owner_oauth.browser_authorization_code",
+                   side_effect=OwnerOAuthError("owner_oauth_rejected")):
+            with self.assertRaisesRegex(SetupError, "PRODUCT_ACCOUNT_LOGIN_REQUIRED"):
+                self.run_setup(product_access_token=None, interactive=True)
+        self.assertFalse((self.state / "device-token.cloudflare-v3.txt").exists())
+        self.assertFalse((self.state / "device-token.cloudflare-v3.txt.pending-setup").exists())
+        self.assertEqual([], self.calls)
+
+    def test_desktop_cli_targets_separate_profile_and_product_binding(self):
+        with patch.dict("os.environ",
+                        {"APPDATA": self.temp.name, "LOCALAPPDATA": self.temp.name}), \
+             patch("sys.argv", ["device_setup", "--desktop-dev", "--interactive"]), \
+             patch("ordax_dev_agent.device_setup.desktop_machine_binding",
+                   return_value="b" * 64), \
+             patch("ordax_dev_agent.device_setup.socket.gethostname",
+                   return_value="DESKTOP-TEST"), \
+             patch("ordax_dev_agent.device_setup.configure",
+                   return_value={"ok": True, "device_id": self.device}) as configure_mock:
+            self.assertEqual(0, setup_module.main())
+        state = configure_mock.call_args.args[0]
+        self.assertEqual(state, Path(self.temp.name) /
+                         "OrdaX OS Desktop Local Development" /
+                         "native-state" / "product-runtime")
+        kwargs = configure_mock.call_args.kwargs
+        self.assertEqual("b" * 64, kwargs["binding"])
+        self.assertEqual("OrdaX Desktop (DESKTOP-TEST)", kwargs["device_name"])
+        self.assertTrue(kwargs["interactive"])
 
 if __name__ == "__main__":
     unittest.main()
