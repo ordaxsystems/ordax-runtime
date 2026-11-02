@@ -12,12 +12,16 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
-from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code
+from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code, exchange_owner_code
+from ordax_connector.owner_grants import require_owner_mcp_device_identity, select_consented_owner_mcp_client
 from ordax_dev_agent.device_setup import SetupError
+from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 from ordax_dev_agent.owner_device_connect_cli import enroll_owner_device
 from ordax_dev_agent.product_ingress import inspect_pinned_https_ingress
 
@@ -219,6 +223,135 @@ def activate_with_dialogs(
     return 0
 
 
+def _central_selection_tickets(remote: object, token: str, device_id: str, authority: dict, now: datetime) -> list[tuple[str, str, str]]:
+    """Read Owner-consented clients and exact pending challenges, never grants."""
+    require_owner_mcp_device_identity(authority, device_id=device_id)
+    clients = authority.get("clients")
+    if not isinstance(clients, list) or not 1 <= len(clients) <= 5:
+        raise ValueError("Owner client catalog must have between one and five clients")
+    choices: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for client in clients:
+        if not isinstance(client, dict):
+            raise ValueError("Invalid consented OAuth client")
+        client_id = select_consented_owner_mcp_client(
+            authority, device_id=device_id, requested_client_id=client.get("client_id"),
+        )
+        targets = remote.owner_central_session_targets(token, client_id=client_id)
+        if not any(
+            item.get("device_id") == device_id
+            for item in targets["targets"] if isinstance(item, dict)
+        ):
+            continue  # No existing device grant for this OAuth client.
+        pending = remote.owner_central_session_selections(token, client_id=client_id)
+        for item in pending["pending_selections"]:
+            challenge = item["challenge_id"]
+            expiry = datetime.fromisoformat(item["expires_at"].replace("Z", "+00:00"))
+            if expiry.tzinfo is None:
+                raise ValueError("Owner selection deadline lacks time zone")
+            if expiry <= now:
+                continue
+            key = (client_id, challenge)
+            if key in seen or len(choices) >= 25:
+                raise ValueError("Ambiguous or oversized Owner selection catalog")
+            seen.add(key)
+            choices.append((client_id, challenge, item["expires_at"]))
+    return choices
+
+
+def select_chatgpt_session_with_dialogs(
+    *,
+    show: Callable[[str, int], int] = _show_message,
+    authorize: Callable[[], tuple[str, str]] = browser_authorization_code,
+    exchange: Callable[[str, str], str] = exchange_owner_code,
+    load_config: Callable[[], AgentConfig] = AgentConfig.from_env,
+    client_factory: Callable[..., ProductRemoteClient] = ProductRemoteClient,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> int:
+    """One explicit Owner GUI flow for an already-granted ChatGPT MCP client.
+
+    The device is fixed to this installation. A selected pending ticket is
+    sent to canonical Product Owner authority; only the Native device can
+    attest the session, and this flow never creates or updates grants.
+    """
+    consent = show(
+        "Selecionar este computador para uma sessao do OrdaX MCP?\n\n"
+        "O navegador sera aberto para autenticar o proprietario. "
+        "Somente clientes OAuth ja autorizados e pedidos pendentes serao "
+        "exibidos. Nenhuma permissao sera concedida automaticamente.",
+        _MB_YESNO | _MB_ICONQUESTION,
+    )
+    if consent != _IDYES:
+        return 2
+    try:
+        config = load_config()
+        device_id = str(config.device_id or "")
+        if not device_id:
+            raise ValueError("Device is not enrolled")
+        code, verifier = authorize()
+        token = exchange(code, verifier)
+        if not isinstance(token, str) or not token:
+            raise ValueError("Owner OAuth token missing")
+        with client_factory(config.product_mcp_url) as remote:
+            authority = remote.owner_remote_authority(token, device_id=device_id)
+            choices = _central_selection_tickets(
+                remote, token, device_id, authority, clock(),
+            )
+            if not choices:
+                show(
+                    "Nenhum pedido pendente elegivel para este computador.\n\n"
+                    "No ChatGPT, solicite uma operacao OrdaX MCP neste dispositivo "
+                    "e abra este atalho novamente para confirmar o pedido.",
+                    _MB_ICONINFORMATION,
+                )
+                return 2
+            for client_id, challenge, expires_at in choices:
+                if show(
+                    "CONFIRMAR SELECAO DO DISPOSITIVO\n\n"
+                    f"Computador: {device_id}\n"
+                    f"Cliente OAuth: {client_id}\n"
+                    f"Pedido: {challenge}\n"
+                    f"Expira: {expires_at}\n\n"
+                    "Confirmar este cliente e este pedido especificos? "
+                    "A autorizacao ainda depende da atestacao do dispositivo "
+                    "e das permissoes ja existentes.",
+                    _MB_YESNO | _MB_ICONQUESTION,
+                ) != _IDYES:
+                    continue
+                result = remote.owner_select_central_device(
+                    token, client_id=client_id, challenge_id=challenge,
+                    device_id=device_id,
+                )
+                if (
+                    result.get("status") != "pending"
+                    or result.get("attested") is not False
+                    or result.get("dispatch_authorized") is not False
+                ):
+                    raise ValueError("Unexpected Owner selection result")
+                show(
+                    "Selecao enviada para a autoridade OrdaX.\n\n"
+                    "A sessao ainda nao esta atestada. "
+                    "O dispositivo deve confirmar o pedido antes do "
+                    "controle remoto ficar disponivel. "
+                    "Nenhuma nova permissao foi concedida.",
+                    _MB_ICONINFORMATION,
+                )
+                return 0
+        return 2  # All candidates explicitly declined.
+    except OwnerOAuthError:
+        show("Autenticacao do proprietario nao concluida.", _MB_ICONERROR)
+    except ProductRemoteError:
+        show("Nao foi possivel confirmar o pedido na Platform OrdaX.", _MB_ICONERROR)
+    except Exception:
+        # Never show tokens, file paths or untrusted API exception details.
+        show(
+            "Selecao nao concluida. Verifique a instalacao, "
+            "as autorizacoes do Owner e o pedido no ChatGPT.",
+            _MB_ICONERROR,
+        )
+    return 1
+
+
 def _format_ingress_observation(label: str, record: object) -> str:
     if not isinstance(record, dict):
         raise ValueError("Untrusted ingress diagnostic shape")
@@ -282,11 +415,17 @@ def main(argv: list[str] | None = None) -> int:
         "--ativar", action="store_true",
         help="ativar o unico Runtime instalado e mostrar estado local",
     )
+    mode.add_argument(
+        "--selecionar-chatgpt", action="store_true",
+        help="confirmar explicitamente um pedido de sessao ChatGPT ja autorizado",
+    )
     args = parser.parse_args(argv)
     if sys.platform != "win32":
         return 1
     if args.ativar:
         return activate_with_dialogs()
+    if args.selecionar_chatgpt:
+        return select_chatgpt_session_with_dialogs()
     if args.verificar_rede:
         return diagnose_with_dialogs()
     return connect_with_dialogs()
