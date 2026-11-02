@@ -7,7 +7,12 @@ The unsigned validation candidate must not be offered as a public release.
 from __future__ import annotations
 
 import argparse
+import http.client
+import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
@@ -101,6 +106,119 @@ def connect_with_dialogs(
     return 0
 
 
+def _observe_local_runtime() -> str:
+    """Observe one private, loopback-only Runtime; never infer Owner grants."""
+    connection = http.client.HTTPConnection("127.0.0.1", 8765, timeout=1.5)
+    try:
+        connection.request("GET", "/status")
+        response = connection.getresponse()
+        if response.status != 200:
+            return "unavailable"
+        body = response.read(131073)
+        if len(body) > 131072:
+            return "unavailable"
+        status = json.loads(body)
+        runtime = status.get("runtime") if isinstance(status, dict) else None
+        if not isinstance(runtime, dict):
+            return "unavailable"
+        if (runtime.get("state") in {"ready", "busy"}
+                and runtime.get("paired") is True
+                and runtime.get("transport_state") == "connected"
+                and runtime.get("product_dispatch_ready") is True):
+            return "connected"
+        return "running" if isinstance(runtime.get("state"), str) else "unavailable"
+    except (OSError, ValueError, TypeError):
+        return "unavailable"
+    finally:
+        connection.close()
+
+
+def _launch_canonical_runtime() -> None:
+    """Start only the installer-owned launcher; its OS mutex prevents duplicates."""
+    if sys.platform != "win32":
+        raise RuntimeError("Windows only")
+    local_data = os.environ.get("LOCALAPPDATA")
+    if not local_data:
+        raise RuntimeError("Canonical Windows profile unavailable")
+    root = Path(local_data) / "Programs" / "OrdaX MCP"
+    private_gui = root / "runtime" / "pythonw.exe"
+    launcher = root / "ORDAX Runtime.exe"
+    # Do not allow a source checkout or an unrelated Python host to launch
+    # an arbitrary executable by using this first-party UI entrypoint.
+    if os.path.normcase(os.path.realpath(sys.executable)) != os.path.normcase(
+        os.path.realpath(private_gui)
+    ):
+        raise RuntimeError("Canonical private GUI host required")
+    for path in (root, private_gui.parent, private_gui, launcher):
+        if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+            raise RuntimeError("Linked Runtime installation rejected")
+    if not private_gui.is_file() or not launcher.is_file():
+        raise RuntimeError("Installed Runtime launcher unavailable")
+    subprocess.Popen(
+        [str(launcher)], cwd=str(root), shell=False, close_fds=True,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def activate_with_dialogs(
+    *,
+    show: Callable[[str, int], int] = _show_message,
+    observe: Callable[[], str] = _observe_local_runtime,
+    launch: Callable[[], None] = _launch_canonical_runtime,
+) -> int:
+    """Desktop/Start shortcut: idempotent Runtime activation with visible status.
+
+    Do not enroll a device, change grants, start another daemon or claim remote
+    readiness without the existing Runtime's paired/dispatch evidence.
+    """
+    try:
+        before = observe()
+        if before not in {"connected", "running", "unavailable"}:
+            raise ValueError("Invalid local Runtime status")
+        if before == "connected":
+            show(
+                "OrdaX MCP ja esta ativo e conectado.\\n\\n"
+                "Permissoes de controle continuam sujeitas aos grants do Owner.",
+                _MB_ICONINFORMATION,
+            )
+            return 0
+        if before == "running":
+            show(
+                "OrdaX MCP ja esta em execucao, mas a conexao ainda nao foi "
+                "confirmada.\\n\\nUse Verificar conexao ou Conectar dispositivo "
+                "no menu Iniciar, se necessario.",
+                _MB_ICONINFORMATION,
+            )
+            return 0
+        launch()  # One official Windows launcher, guarded by the native mutex.
+        after = observe()
+        if after not in {"connected", "running", "unavailable"}:
+            raise ValueError("Invalid local Runtime status")
+    except Exception:
+        show(
+            "Nao foi possivel solicitar a ativacao do OrdaX MCP.\\n"
+            "Confira a instalacao e use Verificar conexao no menu Iniciar.\\n"
+            "Nenhuma permissao foi alterada.",
+            _MB_ICONERROR,
+        )
+        return 1
+    if after == "connected":
+        message = "OrdaX MCP esta ativo e conectado."
+    elif after == "running":
+        message = (
+            "OrdaX MCP foi iniciado, mas ainda nao confirmou a conexao. "
+            "Consulte Verificar conexao se persistir."
+        )
+    else:
+        message = (
+            "Inicializacao do OrdaX MCP solicitada. A prontidao ainda nao "
+            "foi confirmada. Confira a conexao no menu Iniciar."
+        )
+    show(message + "\\n\\nO atalho nao instala outro agente nem concede permissoes.", _MB_ICONINFORMATION)
+    return 0
+
+
 def _format_ingress_observation(label: str, record: object) -> str:
     if not isinstance(record, dict):
         raise ValueError("Untrusted ingress diagnostic shape")
@@ -155,13 +273,20 @@ def diagnose_with_dialogs(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ordax-mcp-connect")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--verificar-rede", action="store_true",
         help="verificar somente HTTPS sem autorizar ou conectar dispositivos",
+    )
+    mode.add_argument(
+        "--ativar", action="store_true",
+        help="ativar o unico Runtime instalado e mostrar estado local",
     )
     args = parser.parse_args(argv)
     if sys.platform != "win32":
         return 1
+    if args.ativar:
+        return activate_with_dialogs()
     if args.verificar_rede:
         return diagnose_with_dialogs()
     return connect_with_dialogs()
