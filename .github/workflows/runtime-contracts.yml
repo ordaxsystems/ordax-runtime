@@ -33,6 +33,7 @@ jobs:
           tests.test_product_device_control_plane
           tests.test_remote_protocol
           tests.test_product_ingress_failover
+          tests.test_device_capability_snapshot_overflow
           tests.test_owner_device_connect_gui
           tests.test_native_product_credential_guard
           tests.test_product_wake_signal
@@ -143,6 +144,7 @@ jobs:
           tests.test_terminal_outbox
           tests.test_runtime_operational_status
           tests.test_product_idle_poll_budget
+          tests.test_device_capability_snapshot_overflow
           tests.test_product_update
           tests.test_product_update_apply
           tests.test_owner_dev_update_preflight
