@@ -573,7 +573,10 @@ def revoke_full_control_with_dialogs(
                 if (
                     not isinstance(receipt, dict)
                     or receipt.get("ok") is not True
-                    or receipt.get("revoked") is not True
+                    or str(receipt.get("grant_group_id", "")).lower()
+                        != group_id.lower()
+                    or type(receipt.get("revoked_capabilities")) is not int
+                    or receipt["revoked_capabilities"] < 1
                 ):
                     raise ValueError("Owner revocation receipt not confirmed")
                 observed = remote.owner_remote_authority(
