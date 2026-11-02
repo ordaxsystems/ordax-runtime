@@ -349,8 +349,10 @@ def _central_selection_tickets(remote: object, token: str, device_id: str, autho
     """Read Owner-consented clients and exact pending challenges, never grants."""
     require_owner_mcp_device_identity(authority, device_id=device_id)
     clients = authority.get("clients")
-    if not isinstance(clients, list) or not 1 <= len(clients) <= 5:
-        raise ValueError("Owner client catalog must have between one and five clients")
+    if not isinstance(clients, list) or len(clients) > 25:
+        raise ValueError("Owner client catalog exceeds safe bounds")
+    if not clients:
+        return []  # No consented client means no pending action to approve.
     choices: list[tuple[str, str, str]] = []
     seen: set[tuple[str, str]] = set()
     for client in clients:
@@ -362,9 +364,13 @@ def _central_selection_tickets(remote: object, token: str, device_id: str, autho
         targets = remote.owner_central_session_targets(token, client_id=client_id)
         if not any(
             item.get("device_id") == device_id
+            and item.get("reported_online") is True
+            and item.get("runtime_ready") is True
             for item in targets["targets"] if isinstance(item, dict)
         ):
-            continue  # No existing device grant for this OAuth client.
+            # A grant alone is insufficient: the Platform must attest fresh
+            # presence and capabilities before offering Owner selection.
+            continue
         pending = remote.owner_central_session_selections(token, client_id=client_id)
         for item in pending["pending_selections"]:
             challenge = item["challenge_id"]
@@ -421,9 +427,11 @@ def select_chatgpt_session_with_dialogs(
             )
             if not choices:
                 show(
-                    "Nenhum pedido pendente elegivel para este computador.\n\n"
-                    "No ChatGPT, solicite uma operacao OrdaX MCP neste dispositivo "
-                    "e abra este atalho novamente para confirmar o pedido.",
+                    "Nenhum pedido elegivel encontrado para este computador.\n\n"
+                    "Confirme que o Runtime esta conectado e pronto em "
+                    "Verificar conexao. Em seguida, solicite uma operacao "
+                    "OrdaX MCP no ChatGPT e reabra Autorizar ChatGPT. "
+                    "Nenhuma permissao foi modificada.",
                     _MB_ICONINFORMATION,
                 )
                 return 2
