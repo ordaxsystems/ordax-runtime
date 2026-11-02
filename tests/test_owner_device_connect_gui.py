@@ -434,16 +434,16 @@ class OneClickOwnerConnectTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 gui.main(["--selecionar-chatgpt", "--ativar"])
 
-    def test_renew_grant_gui_cancel_never_authenticates_or_updates(self):
+    def test_retain_grant_gui_cancel_never_authenticates_or_updates(self):
         called = []
-        self.assertEqual(gui.renew_full_control_with_dialogs(
+        self.assertEqual(gui.retain_full_control_with_dialogs(
             show=lambda *_: 7,
             authorize=lambda: called.append("oauth"),
             client_factory=lambda *_: called.append("remote"),
         ), 2)
         self.assertEqual(called, [])
 
-    def test_renew_grant_gui_requires_two_explicit_owner_confirmations(self):
+    def test_retain_grant_gui_requires_two_explicit_owner_confirmations(self):
         from datetime import datetime, timedelta, timezone
         from types import SimpleNamespace
         device = "33333333-3333-4333-8333-333333333333"
@@ -472,37 +472,35 @@ class OneClickOwnerConnectTests(unittest.TestCase):
             dialogs.append(message)
             return 6 if len(dialogs) <= 2 else 1
 
-        def renewal(authority, *, device_id, client_id, token, remote,
-                    config, now, days):
-            calls.append(("renew", device_id, client_id, token, days))
+        def retention(authority, *, device_id, client_id, token, remote,
+                      config, now):
+            calls.append(("retain", device_id, client_id, token))
             self.assertEqual(config.device_id, device)
-            self.assertEqual(days, 7)
             self.assertIsInstance(authority, dict)
             return {
                 "ok": True, "grantMutationPerformed": True,
-                "endToEndProven": False,
-                "valid_until": (now + timedelta(days=7)).isoformat(),
+                "endToEndProven": False, "valid_until": None,
             }
 
-        outcome = gui.renew_full_control_with_dialogs(
+        outcome = gui.retain_full_control_with_dialogs(
             show=display, authorize=lambda: ("code", "verifier"),
             exchange=lambda *_: "owner-token",
             load_config=lambda: SimpleNamespace(
                 device_id=device, product_mcp_url="https://mcp.ordax.com.br",
             ),
             client_factory=lambda *_: Owner(),
-            clock=lambda: now, renew=renewal,
+            clock=lambda: now, retain=retention,
         )
         self.assertEqual(outcome, 0)
-        self.assertEqual(calls[-1], ("renew", device, client, "owner-token", 7))
+        self.assertEqual(calls[-1], ("retain", device, client, "owner-token"))
         self.assertEqual(len(dialogs), 3)
-        self.assertIn("RENOVAR ACESSO AO COMPUTADOR", dialogs[1])
+        self.assertIn("MANTER ACESSO AO COMPUTADOR ATE REVOGAR", dialogs[1])
         self.assertIn(client, dialogs[1])
-        self.assertIn("Renovacao confirmada", dialogs[2])
+        self.assertIn("Acesso sem vencimento confirmado", dialogs[2])
         self.assertNotIn("owner-token", str(dialogs))
         self.assertNotIn("code", str(dialogs))
 
-    def test_renew_grant_gui_owner_decline_never_changes_authority(self):
+    def test_retain_grant_gui_owner_decline_never_changes_authority(self):
         from datetime import datetime, timedelta, timezone
         from types import SimpleNamespace
         device = "33333333-3333-4333-8333-333333333333"
@@ -522,7 +520,7 @@ class OneClickOwnerConnectTests(unittest.TestCase):
                             "valid_until": (now + timedelta(days=1)).isoformat(),
                         }]}
         replies = iter([6, 7])
-        self.assertEqual(gui.renew_full_control_with_dialogs(
+        self.assertEqual(gui.retain_full_control_with_dialogs(
             show=lambda *_: next(replies),
             authorize=lambda: ("code", "verifier"),
             exchange=lambda *_: "token",
@@ -530,18 +528,18 @@ class OneClickOwnerConnectTests(unittest.TestCase):
                 device_id=device, product_mcp_url="https://mcp.ordax.com.br"),
             client_factory=lambda *_: Owner(),
             clock=lambda: now,
-            renew=lambda *_args, **_kwargs: self.fail("Must not renew"),
+            retain=lambda *_args, **_kwargs: self.fail("Must not retain"),
         ), 2)
 
-    def test_renew_grant_gui_only_routes_explicit_option(self):
+    def test_retain_grant_gui_only_routes_explicit_option(self):
         with mock.patch.object(gui.sys, "platform", "win32"):
-            with mock.patch.object(gui, "renew_full_control_with_dialogs", return_value=2) as renew:
+            with mock.patch.object(gui, "retain_full_control_with_dialogs", return_value=2) as retain:
                 with mock.patch.object(gui, "connect_with_dialogs") as connect:
-                    self.assertEqual(gui.main(["--renovar-acesso"]), 2)
+                    self.assertEqual(gui.main(["--manter-acesso"]), 2)
                     connect.assert_not_called()
-                renew.assert_called_once()
+                retain.assert_called_once()
             with self.assertRaises(SystemExit):
-                gui.main(["--renovar-acesso", "--selecionar-chatgpt"])
+                gui.main(["--manter-acesso", "--selecionar-chatgpt"])
 
     def test_untrusted_grant_claim_does_not_get_success_message(self):
         self.assertEqual(gui.connect_with_dialogs(
