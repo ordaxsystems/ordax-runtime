@@ -870,6 +870,194 @@ class OneClickOwnerConnectTests(unittest.TestCase):
             retain=lambda *_args, **_kwargs: self.fail("Must not retain"),
         ), 2)
 
+    def test_revoke_access_gui_confirms_exact_group_and_canonical_readback(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        group = "22222222-2222-4222-8222-222222222222"
+        calls = []
+        dialogs = []
+
+        class Owner:
+            def __init__(self):
+                self.groups = [{
+                    "grant_group_id": group,
+                    "client_id": client,
+                    "device_id": device,
+                    "client_consent_active": True,
+                    "scope_kind": "device",
+                    "profile_key": "full-computer-control",
+                    "space_id": None, "project_id": None,
+                    "valid_until": None,
+                }]
+
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+
+            def owner_remote_authority(self, token, *, device_id):
+                calls.append(("authority", token, device_id))
+                return {
+                    "device_id": device_id,
+                    "clients": [{"client_id": client}],
+                    "grant_groups": self.groups,
+                }
+
+            def revoke_owner_remote_grant_group(
+                self, token, *, client_id, grant_group_id
+            ):
+                calls.append(("revoke", token, client_id, grant_group_id))
+                self.groups = []
+                return {
+                    "ok": True, "grant_group_id": grant_group_id,
+                    "revoked_capabilities": 35,
+                }
+
+        def show(message, flags):
+            dialogs.append((message, flags))
+            return 6 if len(dialogs) <= 2 else 1
+
+        result = gui.revoke_full_control_with_dialogs(
+            show=show, authorize=lambda: ("code", "verifier"),
+            exchange=lambda *_args: "owner-secret",
+            load_config=lambda: SimpleNamespace(
+                device_id=device, product_mcp_url="https://mcp.ordax.com.br",
+            ),
+            client_factory=lambda *_args: Owner(),
+            clock=lambda: datetime(2026, 11, 2, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result, 0)
+        self.assertEqual([item[0] for item in calls],
+                         ["authority", "revoke", "authority"])
+        self.assertEqual(calls[1], ("revoke", "owner-secret", client, group))
+        self.assertIn(client, dialogs[1][0])
+        self.assertIn(group, dialogs[1][0])
+        self.assertIn("REVOGAR CONTROLE DO COMPUTADOR", dialogs[1][0])
+        self.assertIn("Revogacao confirmada", dialogs[2][0])
+        self.assertNotIn("owner-secret", str(dialogs))
+
+    def test_revoke_access_gui_cancel_prevents_every_remote_mutation(self):
+        seen = []
+        result = gui.revoke_full_control_with_dialogs(
+            show=lambda *_args: 7,
+            authorize=lambda: seen.append("oauth"),
+            client_factory=lambda *_args: seen.append("remote"),
+        )
+        self.assertEqual(result, 2)
+        self.assertEqual(seen, [])
+
+    def test_revoke_access_gui_owner_decline_never_calls_revoke(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        group = "22222222-2222-4222-8222-222222222222"
+
+        class Owner:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def owner_remote_authority(self, token, *, device_id):
+                return {
+                    "device_id": device_id,
+                    "clients": [{"client_id": client}],
+                    "grant_groups": [{
+                        "grant_group_id": group, "client_id": client,
+                        "device_id": device,
+                        "client_consent_active": True,
+                        "scope_kind": "device",
+                        "profile_key": "full-computer-control",
+                        "space_id": None, "project_id": None,
+                        "valid_until": None,
+                    }],
+                }
+            def revoke_owner_remote_grant_group(self, *_args, **_kwargs):
+                raise AssertionError("Owner declined revocation")
+
+        decisions = iter([6, 7])
+        result = gui.revoke_full_control_with_dialogs(
+            show=lambda *_args: next(decisions),
+            authorize=lambda: ("code", "verifier"),
+            exchange=lambda *_args: "owner-token",
+            load_config=lambda: SimpleNamespace(
+                device_id=device, product_mcp_url="https://mcp.ordax.com.br",
+            ),
+            client_factory=lambda *_args: Owner(),
+            clock=lambda: datetime(2026, 11, 2, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result, 2)
+
+    def test_revoke_access_gui_never_claims_success_without_readback(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        device = "33333333-3333-4333-8333-333333333333"
+        client = "11111111-1111-4111-8111-111111111111"
+        group = "22222222-2222-4222-8222-222222222222"
+
+        class Owner:
+            def __init__(self, receipt):
+                self.receipt = receipt
+                self.revocations = 0
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def owner_remote_authority(self, _token, *, device_id):
+                # The original grant is STILL visible after a mock deletion.
+                return {
+                    "device_id": device_id,
+                    "clients": [{"client_id": client}],
+                    "grant_groups": [{
+                        "grant_group_id": group, "client_id": client,
+                        "device_id": device, "client_consent_active": True,
+                        "scope_kind": "device", "space_id": None,
+                        "project_id": None,
+                        "profile_key": "full-computer-control",
+                        "valid_until": None,
+                    }],
+                }
+            def revoke_owner_remote_grant_group(self, *_args, **_kwargs):
+                self.revocations += 1
+                return self.receipt
+
+        for receipt in (
+            {"ok": True, "grant_group_id": group,
+             "revoked_capabilities": 1},
+            {"ok": True, "grant_group_id": group,
+             "revoked_capabilities": 0},
+            {"ok": True, "grant_group_id": client,
+             "revoked_capabilities": 1},
+            {"ok": True, "grant_group_id": group,
+             "revoked_capabilities": True},
+        ):
+            remote = Owner(receipt)
+            messages = []
+            results = iter([6, 6, 1])
+            code = gui.revoke_full_control_with_dialogs(
+                show=lambda message, flags: messages.append(message) or next(results),
+                authorize=lambda: ("code", "verifier"),
+                exchange=lambda *_args: "secret-token",
+                load_config=lambda: SimpleNamespace(
+                    device_id=device, product_mcp_url="https://mcp.ordax.com.br",
+                ),
+                client_factory=lambda *_args: remote,
+                clock=lambda: datetime(2026, 11, 2, tzinfo=timezone.utc),
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(remote.revocations, 1)
+            self.assertNotIn("Revogacao confirmada", messages[-1])
+            self.assertNotIn("secret-token", str(messages))
+
+    def test_revoke_access_shortcut_routes_only_explicit_mode(self):
+        with mock.patch.object(gui.sys, "platform", "win32"):
+            with mock.patch.object(
+                gui, "revoke_full_control_with_dialogs", return_value=2,
+            ) as revoke:
+                with mock.patch.object(gui, "connect_with_dialogs") as connect:
+                    self.assertEqual(gui.main(["--revogar-acesso"]), 2)
+                    connect.assert_not_called()
+                revoke.assert_called_once()
+            with self.assertRaises(SystemExit):
+                gui.main(["--revogar-acesso", "--manter-acesso"])
+
     def test_retain_grant_gui_only_routes_explicit_option(self):
         with mock.patch.object(gui.sys, "platform", "win32"):
             with mock.patch.object(gui, "retain_full_control_with_dialogs", return_value=2) as retain:
