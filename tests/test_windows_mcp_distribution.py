@@ -51,7 +51,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         installer = INNO.read_text(encoding="utf-8")
         icons = installer.split("[Icons]", 1)[1].split("[Registry]", 1)[0]
         lines = [line for line in icons.splitlines() if line.startswith("Name: ")]
-        self.assertEqual(len(lines), 4, "Two activation plus two Owner utilities")
+        self.assertEqual(len(lines), 5, "Two activation plus three Owner utilities")
         for name in (r'{group}\\OrdaX MCP', r'{userdesktop}\\OrdaX MCP'):
             matching = [line for line in lines if ('Name: "' + name + '"') in line]
             self.assertEqual(len(matching), 1)
@@ -61,6 +61,11 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             self.assertIn(r'WorkingDir: "{app}"', entry)
             self.assertIn(r'IconFilename: "{app}\\{#RuntimeExe}"', entry)
             self.assertNotIn("runascurrentuser", entry)
+        self.assertEqual(len([
+            line for line in lines
+            if 'Name: "{group}\\\\Autorizar ChatGPT"' in line
+            and 'Parameters: "-m ordax_dev_agent.owner_device_connect_gui --selecionar-chatgpt"' in line
+        ]), 1)
         self.assertEqual(installer.count("ValueName: \"OrdaX MCP\""), 1)
         self.assertIn(r'Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"', installer)
         # A manual click never installs, starts a competing agent, or runs OAuth.
