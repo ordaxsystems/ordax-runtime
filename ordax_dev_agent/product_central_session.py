@@ -193,8 +193,24 @@ class ProductCentralSessionClient:
                 }:
                     raise RuntimeError(str(code))
                 raise RuntimeError("product_central_session_unavailable")
-            if receipt.get("status") != "bound" or receipt.get("device_id") != self.device_id:
+            if receipt.get("status") != "bound":
                 raise RuntimeError("product_central_session_receipt_mismatch")
+            if receipt.get("device_id") != self.device_id:
+                # The canonical Platform RPC has two successful shapes:
+                # new binding: device_id + request_id + expires_at;
+                # idempotent existing binding: ok/status/request_id only.
+                # In the latter case the RPC itself checked the authenticated
+                # device token AND challenge-to-device binding before replying.
+                # Accept only that exact already-confirmed receipt. Do not
+                # mistake a forged/missing device_id on any other payload for
+                # proof that the current device was selected.
+                already_bound = (
+                    set(receipt) == {"ok", "status", "request_id"}
+                    and isinstance(receipt.get("request_id"), str)
+                    and _UUID.fullmatch(receipt["request_id"]) is not None
+                )
+                if not already_bound:
+                    raise RuntimeError("product_central_session_receipt_mismatch")
 
             self._status = ProductCentralSessionStatus(
                 True, True, challenge_id, None, time.time()
