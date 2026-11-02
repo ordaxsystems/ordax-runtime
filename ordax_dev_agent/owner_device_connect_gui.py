@@ -111,31 +111,137 @@ def connect_with_dialogs(
     return 0
 
 
-def _observe_local_runtime() -> str:
-    """Observe one private, loopback-only Runtime; never infer Owner grants."""
+def _read_local_runtime() -> dict[str, Any] | None:
+    """Bounded read of the installed Runtime's loopback status, without grants.
+
+    Reuse the same single status source for activation and diagnostics. This
+    observes local readiness; it does not perform Owner authentication or
+    attest the calling ChatGPT session.
+    """
     connection = http.client.HTTPConnection("127.0.0.1", 8765, timeout=1.5)
     try:
         connection.request("GET", "/status")
         response = connection.getresponse()
         if response.status != 200:
-            return "unavailable"
+            return None
         body = response.read(131073)
         if len(body) > 131072:
-            return "unavailable"
-        status = json.loads(body)
-        runtime = status.get("runtime") if isinstance(status, dict) else None
-        if not isinstance(runtime, dict):
-            return "unavailable"
-        if (runtime.get("state") in {"ready", "busy"}
-                and runtime.get("paired") is True
-                and runtime.get("transport_state") == "connected"
-                and runtime.get("product_dispatch_ready") is True):
-            return "connected"
-        return "running" if isinstance(runtime.get("state"), str) else "unavailable"
+            return None
+        payload = json.loads(body)
+        runtime = payload.get("runtime") if isinstance(payload, dict) else None
+        return runtime if isinstance(runtime, dict) else None
     except (OSError, ValueError, TypeError):
-        return "unavailable"
+        return None
     finally:
         connection.close()
+
+
+def _observe_local_runtime() -> str:
+    """Classify the same status source without inventing session authority."""
+    runtime = _read_local_runtime()
+    if runtime is None:
+        return "unavailable"
+    if (
+        runtime.get("state") in {"ready", "busy"}
+        and runtime.get("paired") is True
+        and runtime.get("transport_state") == "connected"
+        and runtime.get("product_dispatch_ready") is True
+    ):
+        return "connected"
+    return "running" if isinstance(runtime.get("state"), str) else "unavailable"
+
+
+_LOCAL_READINESS = {
+    "action_registry_unavailable": "acoes locais ainda indisponiveis",
+    "credential_recovery_required": "identidade do dispositivo precisa ser recuperada",
+    "local_access_disabled": "acesso local desativado nos ajustes",
+    "remote_control_not_configured": "transporte do dispositivo nao configurado",
+    "pairing_required": "pareamento com a Platform pendente",
+    "runtime_not_ready": "Runtime ainda inicializando",
+    "transport_reconnecting": "transporte reconectando",
+    "transport_not_connected": "transporte desconectado",
+    "heartbeat_not_observed": "heartbeat ainda nao confirmado",
+    "heartbeat_stale": "heartbeat desatualizado",
+}
+_CENTRAL_ERRORS = {
+    "product_identity_reenrollment_required": "identidade rejeitada; reconectar dispositivo",
+    "product_central_session_unavailable": "servico de sessoes indisponivel",
+    "product_central_session_response_invalid": "resposta de sessao invalida",
+    "product_central_session_response_oversized": "resposta de sessao excedeu limite",
+    "product_central_session_receipt_mismatch": "confirmacao de sessao inconsistente",
+    "central_session_challenge_invalid": "pedido de sessao invalido",
+    "central_session_challenge_expired": "pedido de sessao expirado",
+    "central_device_grant_revoked": "permissao do dispositivo revogada",
+    "central_session_revoked": "sessao revogada",
+}
+
+
+def _format_local_runtime_diagnosis(runtime: object) -> str:
+    """Only recognize the existing public /status fields and fixed error codes."""
+    if runtime is None:
+        return (
+            "Runtime local: sem resposta. Abra OrdaX MCP para solicitar ativacao.\n"
+            "Sessao ChatGPT: nao verificavel sem o Runtime."
+        )
+    if not isinstance(runtime, dict):
+        raise ValueError("Invalid local Runtime observation")
+    state = runtime.get("state")
+    paired = runtime.get("paired")
+    transport = runtime.get("transport_state")
+    dispatch = runtime.get("product_dispatch_ready")
+    readiness = runtime.get("product_readiness_code")
+    if (
+        not isinstance(state, str) or state not in {
+            "ready", "busy", "starting", "initializing", "pairing",
+            "credential-recovery-required", "local-disabled", "stopped",
+            "error", "offline", "idle",
+        }
+        or type(paired) is not bool
+        or not isinstance(transport, str)
+        or type(dispatch) is not bool
+        or (readiness != "ready" and readiness not in _LOCAL_READINESS)
+    ):
+        raise ValueError("Invalid local Runtime status contract")
+    if dispatch:
+        if (state not in {"ready", "busy"}
+                or paired is not True or transport != "connected"
+                or readiness != "ready"):
+            raise ValueError("Inconsistent local Runtime readiness")
+        summary = "Runtime local: pronto e conectado a Platform."
+    else:
+        if readiness == "ready":
+            raise ValueError("Unattested Runtime readiness")
+        summary = "Runtime local: " + _LOCAL_READINESS[readiness] + "."
+    central = runtime.get("central_session")
+    if central is None:
+        session = "Sessao central: verificacao ainda nao iniciada."
+    elif isinstance(central, dict) and set(central) == {
+        "checked", "last_confirmation_observed", "last_error_code",
+    } and type(central["checked"]) is bool and type(
+        central["last_confirmation_observed"]
+    ) is bool and (
+        central["last_error_code"] is None
+        or central["last_error_code"] in _CENTRAL_ERRORS
+        if isinstance(central["last_error_code"], str)
+        else central["last_error_code"] is None
+    ):
+        error_code = central["last_error_code"]
+        if error_code is not None:
+            session = "Sessao central: " + _CENTRAL_ERRORS[error_code] + "."
+        elif central["last_confirmation_observed"] is True:
+            session = (
+                "Sessao central: houve confirmacao anterior; "
+                "a sessao atual precisa ser verificada pelo ChatGPT."
+            )
+        else:
+            session = (
+                "Sessao central: sem confirmacao observada; "
+                "autorize o pedido no atalho Autorizar ChatGPT."
+            )
+    else:
+        raise ValueError("Invalid local central session observation")
+    return summary + "\n" + session
+
 
 
 def _launch_canonical_runtime() -> None:
@@ -655,8 +761,9 @@ def diagnose_with_dialogs(
     *,
     show: Callable[[str, int], int] = _show_message,
     inspect: Callable[[], dict[str, object]] = inspect_pinned_https_ingress,
+    observe_runtime: Callable[[], dict[str, Any] | None] = _read_local_runtime,
 ) -> int:
-    """User-invoked diagnostics only; never mutate identity or suggest grants."""
+    """Read-only HTTPS and local Runtime diagnosis, never an Owner grant."""
     try:
         result = inspect()
         if not isinstance(result, dict) or set(result) != {
@@ -669,6 +776,7 @@ def diagnose_with_dialogs(
             raise ValueError("Untrusted ingress diagnostic authority")
         primary = _format_ingress_observation("Servidor principal", result["primary"])
         restricted = _format_ingress_observation("Acesso de contingencia", result["restricted"])
+        local = _format_local_runtime_diagnosis(observe_runtime())
     except Exception:
         show(
             "Nao foi possivel verificar a conectividade. Tente novamente."
@@ -678,13 +786,11 @@ def diagnose_with_dialogs(
         return 1
 
     show(
-        "Diagnostico de rede do OrdaX MCP\n\n"
-        + primary + "\n" + restricted + "\n\n"
-        "Esta verificacao apenas observa respostas HTTPS. "
-        "Ela nao comprova cadastro, login, prontidao do MCP ou autorizacao "
-        "para controlar o computador.\n\n"
-        "Se o servidor principal falhar, consulte sua conexao de rede "
-        "antes de tentar conectar o dispositivo.",
+        "Diagnostico do OrdaX MCP\n\n"
+        + local + "\n\n" + primary + "\n" + restricted + "\n\n"
+        "O Runtime local pronto nao comprova autorizacao desta sessao "
+        "ChatGPT. Somente a Platform e o dispositivo podem confirma-la. "
+        "Este teste nao abre o navegador nem altera permissoes.",
         _MB_ICONINFORMATION,
     )
     return 0 if result["primary"]["transport"] == "https_responded" else 1
@@ -695,7 +801,7 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--verificar-rede", action="store_true",
-        help="verificar somente HTTPS sem autorizar ou conectar dispositivos",
+        help="verificar HTTPS e Runtime local sem alterar identidade ou grants",
     )
     mode.add_argument(
         "--ativar", action="store_true",
