@@ -62,7 +62,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             self.assertIn(r'IconFilename: "{app}\\{#RuntimeExe}"', entry)
             self.assertNotIn("runascurrentuser", entry)
         self.assertEqual(installer.count("ValueName: \"OrdaX MCP\""), 1)
-        self.assertIn(r'Root: HKCU; Subkey: "Software\\Microsoft\\Windows\\CurrentVersion\\Run"', installer)
+        self.assertIn(r'Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"', installer)
         # A manual click never installs, starts a competing agent, or runs OAuth.
         run_section = installer.split("[Run]", 1)[1].split("[Code]", 1)[0]
         self.assertEqual(len([
