@@ -417,22 +417,23 @@ def retain_full_control_with_dialogs(
                 authority, device_id=device_id, now=current_time,
             )
             candidates = [grant for grant in existing if grant[2] is not None]
-            if not candidates and any(grant[2] is None for grant in existing):
-                show(
-                    "Este computador ja possui acesso completo sem "
-                    "vencimento para um cliente OAuth autorizado.\n\n"
-                    "Ele permanecera valido ate revogacao pelo "
-                    "proprietario, sujeito a identidade e politica local. "
-                    "Nenhuma alteracao foi realizada.",
-                    _MB_ICONINFORMATION,
-                )
-                return 0
-            recovery = (
-                recoverable_discovery_clients(
-                    authority, device_id=device_id, now=current_time,
-                ) if not candidates else []
+            # Several OAuth clients may be consented. A permanent grant for
+            # client A must not hide client B's expired grant or the Owner's
+            # ability to recover client B through its independent discovery.
+            recovery = recoverable_discovery_clients(
+                authority, device_id=device_id, now=current_time,
             )
             if not candidates and not recovery:
+                if any(grant[2] is None for grant in existing):
+                    show(
+                        "Este computador ja possui acesso completo sem "
+                        "vencimento para um cliente OAuth autorizado.\n\n"
+                        "Ele permanecera valido ate revogacao pelo "
+                        "proprietario, sujeito a identidade e politica local. "
+                        "Nenhuma alteracao foi realizada.",
+                        _MB_ICONINFORMATION,
+                    )
+                    return 0
                 show(
                     "Nenhum acesso completo ativo nem cliente de descoberta "
                     "elegivel para recuperacao.\n\n"
@@ -455,7 +456,7 @@ def retain_full_control_with_dialogs(
                     f"Cliente OAuth: {client_id}\n"
                     + (f"Nome do cliente: {client_name}\n" if client_name else "")
                     + f"Autorizacao atual: {expiry_label}\n\n"
-                    "Deseja conceder ou manter o perfil full-computer-control "
+                    + "Deseja conceder ou manter o perfil full-computer-control "
                     "SEM VENCIMENTO ate revogar? Isso permite controle de "
                     "mouse, teclado, terminal e arquivos. Nenhum outro "
                     "cliente sera autorizado.",
