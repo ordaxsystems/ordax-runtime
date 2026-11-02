@@ -237,6 +237,18 @@ jobs:
               $retainShortcut.WorkingDirectory -ine $root) {
             throw 'Owner grant retention shortcut bypasses canonical private GUI'
           }
+          # Revocation must use only the same private Owner GUI. No
+          # permissions are modified at install or at system startup.
+          $revokeShortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\OrdaX MCP\Revogar acesso.lnk'
+          if (-not (Test-Path -LiteralPath $revokeShortcutPath)) {
+            throw 'Owner grant revocation shortcut missing'
+          }
+          $revokeShortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($revokeShortcutPath)
+          if ($revokeShortcut.TargetPath -ine $privatePythonw -or
+              $revokeShortcut.Arguments -cne '-m ordax_dev_agent.owner_device_connect_gui --revogar-acesso' -or
+              $revokeShortcut.WorkingDirectory -ine $root) {
+            throw 'Owner grant revocation shortcut bypasses canonical private GUI'
+          }
           # A visible manual activation shortcut must exist independently of
           # HKCU Run. Clicking it uses the private GUI and the same native
           # launcher/mutex, never a second agent, OAuth enrollment or shell.
@@ -270,6 +282,7 @@ jobs:
           if (Test-Path -LiteralPath $diagnosticShortcutPath) { throw 'MCP network diagnostic shortcut remained after uninstall' }
           if (Test-Path -LiteralPath $centralShortcutPath) { throw 'MCP Owner selection shortcut remained after uninstall' }
           if (Test-Path -LiteralPath $retainShortcutPath) { throw 'MCP Owner retention shortcut remained after uninstall' }
+          if (Test-Path -LiteralPath $revokeShortcutPath) { throw 'MCP Owner revocation shortcut remained after uninstall' }
           if (Test-Path -LiteralPath $shortcutStart -or Test-Path -LiteralPath $shortcutDesktop) {
             throw 'MCP manual activation shortcut remained after uninstall'
           }
