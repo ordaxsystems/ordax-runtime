@@ -345,6 +345,28 @@ def activate_with_dialogs(
     return 0
 
 
+def _owner_client_display_name(authority: dict, client_id: str) -> str:
+    """Display-only metadata from the canonical Owner catalog; never authority.
+
+    The exact OAuth client UUID remains visible and is the only selection key.
+    Untrusted client names may not inject newlines or impersonate other fields.
+    """
+    clients = authority.get("clients")
+    if not isinstance(clients, list):
+        return ""
+    matches = [
+        item for item in clients
+        if isinstance(item, dict) and item.get("client_id") == client_id
+    ]
+    if len(matches) != 1:
+        return ""
+    name = matches[0].get("client_name")
+    if not isinstance(name, str):
+        return ""
+    safe = " ".join("".join(ch for ch in name if ch.isprintable()).split())
+    return safe[:80]
+
+
 def _central_selection_tickets(remote: object, token: str, device_id: str, authority: dict, now: datetime) -> list[tuple[str, str, str]]:
     """Read Owner-consented clients and exact pending challenges, never grants."""
     require_owner_mcp_device_identity(authority, device_id=device_id)
@@ -355,12 +377,16 @@ def _central_selection_tickets(remote: object, token: str, device_id: str, autho
         return []  # No consented client means no pending action to approve.
     choices: list[tuple[str, str, str]] = []
     seen: set[tuple[str, str]] = set()
+    seen_clients: set[str] = set()
     for client in clients:
         if not isinstance(client, dict):
             raise ValueError("Invalid consented OAuth client")
         client_id = select_consented_owner_mcp_client(
             authority, device_id=device_id, requested_client_id=client.get("client_id"),
         )
+        if client_id in seen_clients:
+            raise ValueError("Duplicated Owner OAuth client in canonical catalog")
+        seen_clients.add(client_id)
         targets = remote.owner_central_session_targets(token, client_id=client_id)
         if not any(
             item.get("device_id") == device_id
@@ -436,11 +462,13 @@ def select_chatgpt_session_with_dialogs(
                 )
                 return 2
             for client_id, challenge, expires_at in choices:
+                client_name = _owner_client_display_name(authority, client_id)
                 if show(
                     "CONFIRMAR SELECAO DO DISPOSITIVO\n\n"
                     f"Computador: {device_id}\n"
                     f"Cliente OAuth: {client_id}\n"
-                    f"Pedido: {challenge}\n"
+                    + (f"Nome do cliente: {client_name}\n" if client_name else "")
+                    + f"Pedido: {challenge}\n"
                     f"Expira: {expires_at}\n\n"
                     "Confirmar este cliente e este pedido especificos? "
                     "A autorizacao ainda depende da atestacao do dispositivo "
