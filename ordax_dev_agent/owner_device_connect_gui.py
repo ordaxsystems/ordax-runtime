@@ -178,7 +178,7 @@ def activate_with_dialogs(
             raise ValueError("Invalid local Runtime status")
         if before == "connected":
             show(
-                "OrdaX MCP ja esta ativo e conectado.\\n\\n"
+                "OrdaX MCP ja esta ativo e conectado.\n\n"
                 "Permissoes de controle continuam sujeitas aos grants do Owner.",
                 _MB_ICONINFORMATION,
             )
@@ -186,7 +186,7 @@ def activate_with_dialogs(
         if before == "running":
             show(
                 "OrdaX MCP ja esta em execucao, mas a conexao ainda nao foi "
-                "confirmada.\\n\\nUse Verificar conexao ou Conectar dispositivo "
+                "confirmada.\n\nUse Verificar conexao ou Conectar dispositivo "
                 "no menu Iniciar, se necessario.",
                 _MB_ICONINFORMATION,
             )
@@ -197,8 +197,8 @@ def activate_with_dialogs(
             raise ValueError("Invalid local Runtime status")
     except Exception:
         show(
-            "Nao foi possivel solicitar a ativacao do OrdaX MCP.\\n"
-            "Confira a instalacao e use Verificar conexao no menu Iniciar.\\n"
+            "Nao foi possivel solicitar a ativacao do OrdaX MCP.\n"
+            "Confira a instalacao e use Verificar conexao no menu Iniciar.\n"
             "Nenhuma permissao foi alterada.",
             _MB_ICONERROR,
         )
@@ -215,7 +215,7 @@ def activate_with_dialogs(
             "Inicializacao do OrdaX MCP solicitada. A prontidao ainda nao "
             "foi confirmada. Confira a conexao no menu Iniciar."
         )
-    show(message + "\\n\\nO atalho nao instala outro agente nem concede permissoes.", _MB_ICONINFORMATION)
+    show(message + "\n\nO atalho nao instala outro agente nem concede permissoes.", _MB_ICONINFORMATION)
     return 0
 
 
