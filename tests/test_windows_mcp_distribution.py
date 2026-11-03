@@ -29,6 +29,12 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             'Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"',
             installer,
         )
+        self.assertIn('Name: "{group}\\\\Selecionar dispositivo para sessão"', installer)
+        self.assertIn(
+            'Parameters: "-m ordax_dev_agent.owner_device_connect_gui --selecionar-sessao"',
+            installer,
+        )
+        self.assertIn("Canonical Owner session device selection UI missing", builder)
         self.assertIn("Private Windows GUI host missing", builder)
         self.assertIn("ordax_dev_agent.owner_device_connect_gui", builder)
         self.assertNotIn("irm ", installer)
@@ -46,6 +52,46 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn("Remove-Item $stage -Recurse -Force", builder)
         self.assertNotIn("presentation\\ORDAX Studio.exe", installer)
         self.assertNotIn("ORDAX Studio.exe\"; Flags: nowait", installer)
+
+    def test_clean_windows_install_has_manual_reactivation_shortcuts_without_second_agent(self):
+        installer = INNO.read_text(encoding="utf-8")
+        launcher = (ROOT / "packaging/windows/ordax_launcher.c").read_text(encoding="utf-8")
+        self.assertEqual(
+            installer.count('Name: "{group}\\\\Iniciar ou reativar OrdaX MCP"'), 1
+        )
+        self.assertIn('Name: "{userdesktop}\\\\OrdaX MCP"', installer)
+        self.assertIn('Name: "desktopicon"', installer)
+        self.assertIn("Tasks: desktopicon", installer)
+        self.assertIn('Filename: "{app}\\\\{#RuntimeExe}"', installer)
+        self.assertIn('ValueName: "OrdaX MCP"', installer)
+        self.assertIn('Local\\\\ORDAXRuntime', launcher)
+        self.assertIn('ERROR_ALREADY_EXISTS', launcher)
+        self.assertIn('run_python_child(', launcher)
+        self.assertIn('backoff_ms', launcher)
+        self.assertIn('ORDAX_RUNTIME_LAUNCHER ? L"OrdaX MCP" : L"ORDAX Studio"', launcher)
+        self.assertIn("O runtime privado do OrdaX MCP", launcher)
+        # Existing launcher and Runtime own restart/mutex; no extra watchdog.
+        self.assertNotIn("Register-ScheduledTask", installer)
+        self.assertNotIn("ordax-agent-watchdog", installer)
+
+    def test_local_candidate_requires_clean_sources_and_supports_user_inno(self):
+        builder = BUILDER.read_text(encoding="utf-8")
+        self.assertIn(
+            "git -C $root status --porcelain --untracked-files=normal", builder,
+        )
+        self.assertIn(
+            'if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0)', builder,
+        )
+        self.assertIn("Runtime source must be clean for candidate packaging", builder)
+        self.assertIn('Join-Path $root "pyproject.toml"', builder)
+        self.assertNotIn("open('pyproject.toml','rb')", builder)
+        self.assertIn('Programs\\Inno Setup 6\\ISCC.exe', builder)
+        self.assertIn('Test-Path -LiteralPath $_ -PathType Leaf', builder)
+        self.assertIn('MSVC and Windows SDK developer environment required', builder)
+        self.assertLess(builder.index('foreach ($nativeTool'), builder.index('Remove-Item $stage'))
+        self.assertNotIn(
+            '$env:GITHUB_ACTIONS -eq "true" -and $dirty.Count', builder,
+        )
 
     def test_no_duplicate_agent_or_clobber_of_existing_studio_installation(self):
         installer = INNO.read_text(encoding="utf-8")

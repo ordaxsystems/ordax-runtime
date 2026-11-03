@@ -30,7 +30,8 @@ static bool is_central_requested(void) {
 }
 
 static void fatal_message(const wchar_t *message) {
-    MessageBoxW(NULL, message, L"ORDAX Studio", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+    const wchar_t *product_title = ORDAX_RUNTIME_LAUNCHER ? L"OrdaX MCP" : L"ORDAX Studio";
+    MessageBoxW(NULL, message, product_title, MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
 }
 
 static bool get_install_root(wchar_t *root, DWORD capacity) {
@@ -392,7 +393,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
     wchar_t python[ORDAX_MAX_PATH];
     wchar_t studio_ui[ORDAX_MAX_PATH];
     if (!get_install_root(root, ORDAX_MAX_PATH)) {
-        fatal_message(L"Não foi possível localizar a instalação do ORDAX Studio.");
+        fatal_message(ORDAX_RUNTIME_LAUNCHER
+            ? L"Não foi possível localizar a instalação do OrdaX MCP."
+            : L"Não foi possível localizar a instalação do ORDAX Studio.");
         CloseHandle(shutdown_event);
         ReleaseMutex(mutex);
         CloseHandle(mutex);
@@ -408,7 +411,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
             L"%ls\\runtime\\%ls",
             root,
             python_name) < 0 || !file_exists(python)) {
-        fatal_message(L"O runtime privado do ORDAX Studio está ausente ou corrompido.");
+        fatal_message(ORDAX_RUNTIME_LAUNCHER
+            ? L"O runtime privado do OrdaX MCP está ausente ou corrompido."
+            : L"O runtime privado do ORDAX Studio está ausente ou corrompido.");
         CloseHandle(shutdown_event);
         ReleaseMutex(mutex);
         CloseHandle(mutex);

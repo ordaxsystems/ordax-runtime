@@ -141,6 +141,28 @@ janela de autorização. O Runtime único continua supervisionado pelo
 mesmo launcher. Isso não substitui a aplicação completa de gerenciamento
 de conexões e revogação, que segue pendente.
 
+### Inicialização e reativação — Windows sem OrdaX OS
+
+O instalador independente registra **uma única** inicialização automática no
+`HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run`, apontando para
+`ORDAX Runtime.exe`. O menu Iniciar deve oferecer sempre **Iniciar ou reativar
+OrdaX MCP**, e o assistente oferece **OrdaX MCP** na Área de Trabalho como
+tarefa opcional, selecionada por padrão. Ambos apontam para o **mesmo
+launcher instalado**, não para um script, ambiente virtual ou segundo agente.
+
+O launcher protege a instância com `Local\\ORDAXRuntime`; uma segunda
+invocação não inicia outro processo supervisionado. O filho Native já tem
+recuperação com espera progressiva no próprio launcher (sem adicionar outro
+watchdog, serviço ou tarefa agendada). Os atalhos não fazem cadastro,
+concessão de acesso, escolha de sessão nem afirmam prontidão remota.
+A UI de conexão Owner permanece independente; a prova de funcionamento
+ainda requer chamada MCP real com recibo, no dispositivo correto.
+
+Esse modo Windows não exige OrdaX OS/USB nem o aplicativo Studio.
+O host `ordax-desktop` e o USB seguem seus próprios supervisores e
+identidades de dispositivo, consumindo o Runtime canônico, sem copiar
+as credenciais de uma instalação Windows independente.
+
 ## Teste físico de entrada Windows — 2026-11-01
 
 O teste físico no Windows 10 x64 autorizado usou o **candidato privado
@@ -174,7 +196,7 @@ Owner OAuth, presença, `capability_digest`, grants e ações reais
 autorizadas. Não se declara conexão concluída ou release homologada
 enquanto esses gates permanecerem abertos.
 
-### Diagnóstico HTTPS no menu Iniciar — sem autorização
+### Diagnóstico no menu Iniciar — HTTPS e Runtime local, sem autorização
 
 A pasta **OrdaX MCP** do menu Iniciar oferece duas ações separadas,
 construídas a partir do mesmo `pythonw.exe` privado e do mesmo módulo
@@ -186,17 +208,24 @@ construídas a partir do mesmo `pythonw.exe` privado e do mesmo módulo
   `GET /v3/device/setup` sem token, cookie, dispositivo ou corpo, usando
   HTTPS verificado nos hosts **fixos** já previstos no seletor canônico:
   `mcp.ordax.com.br` e
-  `ordax-mcp.ordaxsystems.workers.dev`. Não usa uma nova origem nem
-  modifica a seleção de ingress do Runtime.
+  `ordax-mcp.ordaxsystems.workers.dev`. Também consulta exclusivamente
+  `GET http://127.0.0.1:8765/health`, o status read-only do próprio
+  Runtime instalado. Não altera o roteamento, o ingress ou a identidade.
 
-O resultado informa individualmente se houve **resposta HTTPS**
-(incluindo HTTP 401, 404, 405 ou 503) ou falha de transporte. Uma
-resposta HTTP, inclusive 200, **nunca** implica confirmação da
-identidade, readiness, `capability_digest`, funcionamento do protocolo
-MCP ou grants. Essa opção não chama OAuth e não altera arquivos de
-estado, chaves, conexão ou permissões. Não há polling ou consulta
-repetida em background. Se ambos falharem, o diagnóstico não trata a
-situação como conexão bem-sucedida.
+A consulta local usa somente a biblioteca HTTP padrão, endereço e porta
+fixos, timeout de 1,5 segundo, leitura limitada a 4 KiB, validação estrita
+do JSON e **nenhuma credencial**. Falha de transporte, redirecionamento,
+resposta excessiva ou formato inválido são apresentados como status local
+não verificável, sem expor exceções. A tela distingue resposta HTTP da
+Platform, resposta da porta de status local e autorização efetiva.
+
+Uma resposta HTTP, inclusive 200, **nunca** comprova a identidade
+criptográfica do processo local, a sessão atestada, `capability_digest`,
+execução de ação MCP ou grants. O campo `ok` local é somente saúde do
+servidor de status. Essa opção não abre OAuth nem altera arquivos, chaves,
+sessão ou permissões. Não há polling ou consulta em background.
+Se o servidor principal falhar, o diagnóstico não trata uma resposta
+apenas local como conexão remota bem-sucedida.
 
 Na verificação somente de leitura da conta Cloudflare OrdaX em
 01/11/2026, `mcp.ordax.com.br` estava associado ao Worker
@@ -205,6 +234,41 @@ Na verificação somente de leitura da conta Cloudflare OrdaX em
 não acesso TCP, resposta autenticada ou readiness em todos os clientes.
 O timeout TCP/443 no Windows físico permanece uma falha real a
 investigar por rota/rede e Platform, sem override local do endpoint.
+
+### Seleção Owner na interface Windows (fonte candidata)
+
+O atalho **Selecionar dispositivo para sessão** executa o mesmo
+`owner_device_connect_gui` com `--selecionar-sessao`. A sequência exige:
+
+1. Consentimento explícito antes de abrir OAuth Owner PKCE no navegador.
+2. Resolução da identidade da instalação Windows local (sem usar o
+   Product Device distinto do OrdaX Desktop).
+3. Consulta à autoridade Owner e aos endpoints canônicos
+   `central-session-targets` / `central-session-selections`, para
+   clientes OAuth previamente consentidos e elegíveis.
+4. Exibição do **cliente OAuth exato**, `device_id`, `challenge_id`
+   e expiração; o proprietário confirma uma solicitação específica.
+5. Reutilização literal de `owner_grants_cli.perform(central-select)`
+   para a única alteração, que é selecionar o alvo no desafio existente.
+
+A escolha **não** concede grants, não confirma o challenge com credenciais
+nativas, não despacha trabalho e não representa prontidão MCP. O Runtime
+selecionado ainda deve atestar o desafio na Platform. Todas as decisões de
+autorização permanecem no Control Plane; não existe cache de tokens,
+segundo agente, polling automático ou renovação silenciosa.
+
+Solicitações vencidas, ausência de alvo elegível, resposta inconsistente
+ou fila excessiva falham fechadas. Se a resposta ao POST for perdida, a
+interface **não repete a seleção**; o usuário deverá consultar novamente.
+Essa apresentação é específica do Windows, mas a autenticação Owner e
+o comando canônico são compartilháveis por uma interface Native no
+OrdaX OS USB, com identidade e Supervisor próprios.
+
+A implementação nesta árvore ainda precisa ser incorporada a uma
+compilação verificada, assinatura e prova física interativa de OAuth,
+escolha de dispositivo e confirmação Runtime. O código-fonte ou os testes
+não significam que o atalho já exista na instalação atual, nem que o
+recurso esteja disponível em todas as instalações públicas.
 
 ## Proveniencia do Python privado — SSOT Windows
 
