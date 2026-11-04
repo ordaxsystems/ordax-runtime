@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import fcntl
 import importlib.util
 import json
@@ -28,20 +29,60 @@ def native_config(state: Path, workspace: Path, device_id: str) -> AgentConfig:
     )
 
 
+def _os_owned_module(source: Path, module_name: str):
+    # Import only from the OS-owned verified system root. No remote payload or
+    # Windows package can provide a Native adapter or identity implementation.
+    info = source.lstat()
+    if not stat.S_ISREG(info.st_mode) or source.is_symlink() or info.st_mode & 0o022:
+        raise ValueError("OS owner source is unsafe")
+    spec = importlib.util.spec_from_file_location(module_name, source)
+    if spec is None or spec.loader is None:
+        raise ValueError("OS owner source is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
 def identity_store(system_root: Path, state: Path):
     # This file arrives in the OS's verified main/release. The executable does
     # not embed another credential parser, enroll a device or copy its token.
-    source = system_root / "surface/runtime/product_device_identity.py"
-    info = source.lstat()
-    if not stat.S_ISREG(info.st_mode) or source.is_symlink() or info.st_mode & 0o022:
-        raise ValueError("OS identity owner source is unsafe")
-    spec = importlib.util.spec_from_file_location("ordax_native_product_identity", source)
-    if spec is None or spec.loader is None:
-        raise ValueError("OS identity owner source is unavailable")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = _os_owned_module(
+        system_root / "surface/runtime/product_device_identity.py",
+        "ordax_native_product_identity",
+    )
     return module.ProductDeviceIdentityStore(str(state))
+
+
+def os_graphical_adapter(system_root: Path) -> dict:
+    """Optional signed-OS Native graphics actions; absent means none advertised.
+
+    The OS owns display/input/session integration, never this portable Runtime.
+    The existing ActionRegistry validates and dispatches the same typed MCP
+    action names under the canonical local and remote grant boundaries.
+    """
+    source = system_root / "surface/runtime/product_computer_adapter.py"
+    try:
+        source.lstat()
+    except FileNotFoundError:
+        return {}
+    module = _os_owned_module(source, "ordax_native_product_computer_adapter")
+    factory = getattr(module, "build_computer_adapter", None)
+    if not callable(factory):
+        raise ValueError("OS graphical adapter factory is unavailable")
+    handlers = factory()
+    from .actions import COMPUTER_GRAPHICAL_ACTIONS
+    if not isinstance(handlers, Mapping) or any(
+        type(name) is not str or name not in COMPUTER_GRAPHICAL_ACTIONS
+        or not callable(handler)
+        for name, handler in handlers.items()
+    ):
+        raise ValueError("OS graphical adapter contains an invalid action")
+    return dict(handlers)
 
 
 def self_test() -> dict:
@@ -250,8 +291,11 @@ def main(argv: list[str] | None = None) -> int:
     lock = acquire_native_product_instance_lock(config.state_dir)
     try:
         from .main import run
+        # Only explicit Owner DEV full-access may load verified OS graphical
+        # handlers. Without the OS module, never advertise Windows fallbacks.
+        graphical_handlers = os_graphical_adapter(args.system_root) if args.full_access else {}
         return run(config, device_credential_provider=store.read_enrolled_credential,
-                   computer_adapter={}, status_port=args.status_port,
+                   computer_adapter=graphical_handlers, status_port=args.status_port,
                    native_access_enabled=store.development_visibility_enabled)
     finally:
         os.close(lock)

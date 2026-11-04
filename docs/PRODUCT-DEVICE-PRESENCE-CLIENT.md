@@ -52,8 +52,8 @@ Windows. `ordax_dev_agent/status_server.py` oferece `GET /readiness` no
 filas, threads de polling ou autoridade. `ordax_dev_agent/main.py` calcula a
 resposta em memória via `product_dispatch_readiness`, sem varredura de
 arquivos, chamadas remotas ou `agent_status`. O port é o mesmo `status_port`
-do Runtime; o OS pode escolher `status_port=0` e usar a porta retornada pelo
-seu próprio Supervisor (não assumir porta 8765 no Native).
+do Runtime. Na entrada CLI Native o OS Supervisor define `--status-port`
+no intervalo 1..65535; não assumir a porta 8765 do Windows no Native.
 
 `local_dispatch_ready=true` exige estado `ready/busy`, transporte
 `connected`, heartbeat ainda válido, registry local e identidade confirmada.

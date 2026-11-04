@@ -9,9 +9,9 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from ordax_dev_agent.native_main import (acquire_native_product_instance_lock, identity_store, main, native_config, self_test)
+from ordax_dev_agent.native_main import (acquire_native_product_instance_lock, identity_store, main, native_config, os_graphical_adapter, self_test)
 from ordax_dev_agent.process_environment import external_process_environment
 
 
@@ -169,6 +169,97 @@ with tempfile.TemporaryDirectory() as temporary:
             module.chmod(0o666)
             with self.assertRaises(ValueError):
                 identity_store(root / "system", root / "private")
+
+    def test_native_graphical_adapter_has_one_os_owner_and_no_win32_fallback(self):
+        from ordax_dev_agent.actions import ActionRegistry, COMPUTER_GRAPHICAL_ACTIONS
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            system = root / "system"
+            self.assertEqual(os_graphical_adapter(system), {})
+            source = system / "surface/runtime/product_computer_adapter.py"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                "from ordax_dev_agent.models import ActionResult\n"
+                "def build_computer_adapter():\n"
+                "    return {'computer.screen_info': lambda payload: "
+                "ActionResult(True, 'OS-owned screen', {'width': 1920})}\n",
+                encoding="utf-8",
+            )
+            source.chmod(0o644)
+            handlers = os_graphical_adapter(system)
+            self.assertEqual(set(handlers), {"computer.screen_info"})
+            self.assertTrue(set(handlers).issubset(COMPUTER_GRAPHICAL_ACTIONS))
+            state = root / "state"
+            config = native_config(state, root, "22222222-2222-4222-8222-222222222222")
+            config.state_dir.mkdir(parents=True)
+            (config.state_dir / "agent-settings.json").write_text(json.dumps({
+                "computer_access": {"enabled": True, "allowed_roots": [str(root)]},
+            }))
+            registry = ActionRegistry(config, computer_adapter=handlers)
+            self.assertEqual(
+                registry.execute("computer.screen_info", {}).data["width"], 1920,
+            )
+            self.assertFalse(registry.execute("computer.click", {"x": 1, "y": 1}).ok)
+            source.chmod(0o666)
+            with self.assertRaisesRegex(ValueError, "unsafe"):
+                os_graphical_adapter(system)
+            source.chmod(0o644)
+            source.write_text(
+                "def build_computer_adapter():\n"
+                "    return {'computer.terminal_exec': lambda payload: None}\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "invalid action"):
+                os_graphical_adapter(system)
+            source.write_text("not_a_factory = True\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "factory is unavailable"):
+                os_graphical_adapter(system)
+            source.unlink()
+            self.assertEqual(os_graphical_adapter(system), {})
+            source.symlink_to(root / "untrusted-module.py")
+            with self.assertRaisesRegex(ValueError, "unsafe"):
+                os_graphical_adapter(system)
+
+    def test_native_graphics_are_loaded_only_under_explicit_owner_dev_full_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = root / "state"
+            state.mkdir()
+            store = Mock()
+            store.read_enrolled_credential.return_value = {
+                "device_id": "22222222-2222-4222-8222-222222222222",
+                "device_token": "b" * 64,
+            }
+            store.development_visibility_enabled.return_value = True
+            base_args = [
+                "--run", "--distribution-profile", "owner-development",
+                "--product-mode", "usb", "--system-root", str(root),
+                "--state-root", str(state), "--workspace", str(root),
+            ]
+            adapter = {"computer.screen_info": Mock()}
+            for full_access in (False, True):
+                with self.subTest(full_access=full_access):
+                    fd = os.open(os.devnull, os.O_RDONLY)
+                    with (
+                        patch("ordax_dev_agent.native_main.identity_store", return_value=store),
+                        patch("ordax_dev_agent.native_main.acquire_native_product_instance_lock", return_value=fd),
+                        patch("ordax_dev_agent.native_main.os_graphical_adapter", return_value=adapter) as loader,
+                        patch("ordax_dev_agent.main.run", return_value=0) as runner,
+                    ):
+                        arguments = base_args + (["--full-access"] if full_access else [])
+                        self.assertEqual(main(arguments), 0)
+                    if full_access:
+                        loader.assert_called_once_with(root)
+                    else:
+                        loader.assert_not_called()
+                    self.assertEqual(
+                        runner.call_args.kwargs["computer_adapter"],
+                        adapter if full_access else {},
+                    )
+                    self.assertIs(
+                        runner.call_args.kwargs["native_access_enabled"],
+                        store.development_visibility_enabled,
+                    )
 
     def test_full_filesystem_policy_keeps_os_owned_private_state_protected(self):
         from ordax_dev_agent.actions import ActionRegistry
