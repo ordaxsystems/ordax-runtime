@@ -130,3 +130,34 @@ O acesso remoto é autorizado pela **Conta OrdaX, cliente OAuth exato e disposit
 O Runtime preserva a integridade de seus próprios arquivos de estado e de execução, que devem ser modificados somente pelas superfícies oficiais de configuração e atualização. Não há classificação automática confiável de arquivos pessoais por nome ou extensão: o proprietário deve considerar que Full Access pode alcançar também conteúdos privados armazenados no computador. Autorizar acesso integral tem efeito amplo, inclusive sobre o material sensível legível pelo processo, e **avisos do GPT/Grok não substituem a autorização da Conta OrdaX nem o controle de destino**. Nenhum provedor externo recebe dados automaticamente apenas por estar conectado; as ferramentas acionadas continuam seguindo seu fluxo de autorização, resultado e auditoria.
 
 O proprietário pode revogar os grants Product ou desativar o Computer Control local a qualquer momento. As proteções de identidade, cliente, dispositivo e sessão operam independentemente de quais pastas e aplicativos o proprietário decidiu liberar. O catálogo de capacidades não deve ser artificialmente limitado a um único projeto no modo de controle do computador.
+
+## Adaptador gráfico do OrdaX OS Native (contrato de integração)
+
+O Runtime é o mesmo no Windows e no OrdaX OS, mas **não** usa Win32,
+Pillow ou a automação do desktop Windows como fallback Native. Para o OS
+habilitar suas próprias interfaces gráficas, o componente Native pode importar
+**somente** o módulo entregue pela imagem verificada do OS em
+`<system-root>/surface/runtime/product_computer_adapter.py`. O módulo deve
+exportar `build_computer_adapter() -> Mapping[str, Callable]`, com handlers
+`(payload: dict) -> ActionResult` para um subconjunto das ações já
+definidas em `COMPUTER_GRAPHICAL_ACTIONS` (ex.: `computer.windows`,
+`computer.screen_info`, `computer.click`, `computer.type`).
+
+O OS é **owner** das implementações reais de compositor, janela, entrada,
+captura e política/consentimento local. O Runtime apenas valida nomes e handlers,
+registra capacidades efetivamente implementadas e reaproveita a fila, locks,
+grant remoto, recibo e validação tipada do MCP canônico. O módulo é carregado
+somente em `--run --distribution-profile owner-development --product-mode usb
+--full-access`, após validação da identidade/visibilidade Owner. Arquivo
+ausente gera catálogo gráfico vazio; arquivo simbólico, inseguro, sem factory
+ou com ação não permitida falha fechado. Não criar alternativa de UI no Runtime.
+
+**Não confundir** `--full-access` DEV com autorização remota: cada ação ainda
+exige grant Device/Space/Product e política local correspondente. A integração
+física e a implementação do adaptador são responsabilidade de
+`ordaxsystems/ordax-os`; a presença do contrato neste repositório não é
+evidência de que o compositor/Surface Native do OS já disponibilize mouse,
+teclado ou screenshots. Preservar o mesmo `ProductDeviceIdentityStore`, o
+Supervisor OS e a única instância nativa.
+
+Teste de contrato: `tests.test_native_product_package` no runner Linux.
