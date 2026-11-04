@@ -461,3 +461,21 @@ entre os owners `ordax-runtime` (host/instalacao) e `ordax-apps`
 Nao alterar `ordax-os` USB Dev PR #2243, `ordax-flow` ou `ordax-gpt`
 por motivo deste empacotamento; nao inferir que um dispositivo offline
 foi atualizado por uma build de CI.
+
+## Encerramento seguro sem dependencia WMI/CIM (04/11/2026)
+
+Em teste fisico, a atualizacao transacional foi bloqueada no
+`PrepareToInstall` (`ORDAX_MCP_QUIESCE_FAILED`, Inno exit 7).
+A instalacao anterior foi preservada e o Supervisor restaurou a prontidao;
+uma tentativa controlada posterior com o **mesmo hash oficial** concluiu
+`committed`. O quiesce antigo varria todos os processos por WMI/CIM,
+que pode travar no Windows fisico.
+
+O script unico `scripts/windows/ordax-upgrade-quiesce.ps1` agora usa
+`Get-Process`, seleciona somente nomes instalaveis e exige o **caminho
+sob a raiz canonica**, a identidade do PID e o horario de criacao antes
+de `Stop-Process -InputObject`. Revalidacao falha fechada em qualquer
+troca de identidade; so um PID comprovadamente ausente tolera corrida de
+encerramento. Nunca interromper arvore inteira, Python/Node externo,
+novo agente, nem remover o journal `recovery-required` antes da prova.
+A mesma rotina e usada pelos candidatos MCP e Studio, com gates existentes.

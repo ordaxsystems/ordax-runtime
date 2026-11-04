@@ -7,7 +7,9 @@ from .product_gateway import PRODUCT_ACTIONS
 
 
 DEVICE_AGENT_CAPABILITIES_SCHEMA = "ordax.device-agent-capabilities/1"
-MAX_DEVICE_CAPABILITIES = 64
+# Bounded for local clients, but must hold the current 93 Product action IDs.
+# Expanding the canonical catalog past this limit requires an explicit review.
+MAX_DEVICE_CAPABILITIES = 128
 
 
 def device_capability_snapshot(action_names: Iterable[str]) -> dict[str, Any]:

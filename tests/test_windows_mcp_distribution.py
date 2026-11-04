@@ -186,7 +186,9 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         script = (
             ROOT / "scripts" / "windows" / "ordax-upgrade-quiesce.ps1"
         ).read_text(encoding="utf-8")
-        self.assertIn("$current.CreationDate -ne $process.CreationDate", script)
+        self.assertIn("$actualStart -ne $process.StartTimeTicks", script)
+        self.assertIn("Get-Process -Name $ownedProcessNames", script)
+        self.assertNotIn("Get-CimInstance", script)
         self.assertIn("ORDAX_UPGRADE_IDENTITY_CHANGED", script)
         self.assertIn("ORDAX_UPGRADE_PROCESS_PATH_UNVERIFIED", script)
         self.assertIn(
@@ -197,15 +199,12 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             'throw "ORDAX packaged processes are still running',
             script,
         )
-        # All three transient gaps (Get-Process, executable path, Stop-
-        # Process) must re-query exact PID and continue only when absent.
-        self.assertEqual(
-            script.count(
-                'if (-not (Get-CimInstance Win32_Process '
-                '-Filter "ProcessId = $pidValue" -ErrorAction Stop))'
-            ),
-            3,
-        )
+        # A missing PID is benign; another process with the same PID must
+        # never be killed. No global CIM query, which can stall the installer.
+        self.assertIn("NoProcessFoundForGivenId,*", script)
+        self.assertIn("Get-ExactProcessOrNull -TargetPid $pidValue", script)
+        self.assertIn("$handle.StartTime.ToUniversalTime().Ticks", script)
+        self.assertIn("Get-Process -Id $TargetPid -ErrorAction Stop", script)
         self.assertNotIn("Stop-Process -Name", script)
         self.assertNotIn("taskkill", script)
         self.assertNotIn("SilentlyContinue", script)
