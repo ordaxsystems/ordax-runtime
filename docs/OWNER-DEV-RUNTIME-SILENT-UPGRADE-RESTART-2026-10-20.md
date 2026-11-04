@@ -21,3 +21,15 @@ The reported manual recovery predates the fix. This record does not claim that t
 ## Version metadata
 
 The Runtime package and compatibility contract move from 0.4.7 to 0.4.8 so the next Runtime build identifies the installer recovery fix. This version change does not itself create or publish a release artifact.
+
+## Historical scope (2026-11-04)
+
+This incident describes the **older Studio/Owner installer** and its post-install
+launch fix. It is not the current lifetime contract for the separately packaged
+**OrdaX MCP** product. The independent Windows MCP now uses the canonical
+per-user Scheduled Task and a verified upgrade handoff that survives quiescing
+its launcher; see [Windows MCP distribution and physical recovery](ORDAX-MCP-WINDOWS-DISTRIBUTION.md)
+(PRs [#313](https://github.com/ordaxsystems/ordax-runtime/pull/313) and
+[#314](https://github.com/ordaxsystems/ordax-runtime/pull/314)).
+Neither the historical Studio test nor a current local heartbeat is proof of
+public MCP action authorization.

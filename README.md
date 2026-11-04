@@ -120,6 +120,16 @@ with a verified canonical UUID/credential, bounded receipts and a total deadline
 It rejects inherited account authentication. The normal legacy heartbeat is not
 rewired automatically; production cutover remains a separate coordinated gate.
 
+The independent **Windows OrdaX MCP** installer now registers one per-user
+Scheduled Task to recover the same singleton launcher without a new logon.
+Verified upgrades use a staged, journaled installer handoff outside the
+Runtime's own process job. Direct self-update from within the Runtime is
+rejected before quiesce. Read the [canonical Windows distribution and
+lifecycle contract](docs/ORDAX-MCP-WINDOWS-DISTRIBUTION.md)
+for owners, physical recovery receipts, security limits and the distinction
+between local heartbeat, public-session authorization and actual MCP dispatch.
+This is a private validation candidate, not a signed public release.
+
 Native OS composition can call `ordax_dev_agent.main.run(config,
 device_credential_provider=identity_store.read_enrolled_credential)` in the owning
 process's main thread. `config` is an explicit `AgentConfig` supplied by the OS;

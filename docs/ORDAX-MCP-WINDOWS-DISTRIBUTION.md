@@ -149,32 +149,163 @@ janela de autorização. O Runtime único continua supervisionado pelo
 mesmo launcher. Isso não substitui a aplicação completa de gerenciamento
 de conexões e revogação, que segue pendente.
 
-### Inicialização e reativação — Windows sem OrdaX OS
+### Inicialização, supervisão e reconexão — Windows sem OrdaX OS
 
-O instalador independente registra **uma única** inicialização automática no
-`HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run`, apontando para
-`ORDAX Runtime.exe`. O menu Iniciar deve oferecer sempre **Iniciar ou reativar
-OrdaX MCP**, e o assistente oferece **OrdaX MCP** na Área de Trabalho como
-tarefa opcional, selecionada por padrão. O atalho principal **OrdaX MCP**
-(Área de Trabalho e menu Iniciar) abre o diagnóstico já existente no Python
-privado, sem iniciar outro agente ou solicitar OAuth. **Iniciar ou reativar
-OrdaX MCP** permanece separado e usa o launcher canônico.
+**Contrato vigente desde as PRs [#313](https://github.com/ordaxsystems/ordax-runtime/pull/313) e [#314](https://github.com/ordaxsystems/ordax-runtime/pull/314).**
+A instalação canônica permanece em `%LOCALAPPDATA%\\Programs\\OrdaX MCP`,
+com um único `ORDAX Runtime.exe` e o mutex `Local\\ORDAXRuntime`.
+`packaging/windows/ordax-mcp.iss` registra **uma tarefa por usuário** no
+Agendador do Windows, chamada `OrdaX MCP`, com início no logon, manutenção
+periódica de um minuto, execução interativa limitada ao usuário atual e
+`MultipleInstances=IgnoreNew`. A tarefa aciona
+`scripts/windows/ordax-mcp-lifecycle.ps1 -Operation Launch` e acompanha
+o **mesmo launcher**; não cria agente, identidade, grants nem credenciais
+novas. A entrada antiga `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run`
+é removida **depois** do registro validado da tarefa, para evitar dois
+owners de inicialização. A desinstalação retira a tarefa.
 
-O launcher protege a instância com `Local\\ORDAXRuntime`; uma segunda
-invocação não inicia outro processo supervisionado. O filho Native já tem
-recuperação com espera progressiva no próprio launcher (sem adicionar outro
-watchdog, serviço ou tarefa agendada). Os atalhos principais não fazem
-cadastro, concessão de acesso, escolha de sessão nem afirmam prontidão remota.
-As ações administrativas deliberadas continuam em entradas distintas.
-A UI de conexão Owner permanece independente; a prova de funcionamento
-ainda requer chamada MCP real com recibo, no dispositivo correto.
+O launcher continua responsável pelo mutex e pelo restart progressivo do
+Python. O watchdog Windows já existente em
+`scripts/windows/ordax-agent-watchdog.ps1` é reutilizado no pacote e
+aponta para a tarefa `OrdaX MCP`; antes de parar um processo, confere PID,
+instante de criação e caminho do executável para impedir ação sobre PID
+reutilizado. A tarefa recupera o **launcher** quando ele encerra, inclusive
+sem novo logon. Enquanto um instalador canônico estiver substituindo os
+arquivos, o supervisor não deve concorrer com o upgrade. Não há segundo
+Runtime ou serviço permanente adicional.
 
-Esse modo Windows não exige OrdaX OS/USB nem o aplicativo Studio.
-O host `ordax-desktop` e o USB seguem seus próprios supervisores e
-identidades de dispositivo, consumindo o Runtime canônico, sem copiar
-as credenciais de uma instalação Windows independente.
+O menu Iniciar mantém **Iniciar ou reativar OrdaX MCP** (launcher canônico).
+O atalho **OrdaX MCP** (menu Iniciar e Área de Trabalho, quando selecionada)
+abre apenas o diagnóstico no Python privado; não cadastra dispositivo nem
+concede acesso. A UI Owner é separada. O host `ordax-desktop` e o USB têm
+seus próprios supervisores/identidades; **não** reutilizam a credencial
+da instalação Windows independente.
 
-## Teste físico de entrada Windows — 2026-11-01
+**Disponibilidade:** nenhuma implementação impede fisicamente um intervalo
+de desconexão durante reinicialização de processo, atualização de binário,
+ausência de rede ou indisponibilidade da Platform. O requisito é recuperar
+automaticamente quando as condições voltarem, sem pedido de novo login ou
+nova instalação. `online` e heartbeat de presença não equivalem a sessão
+central autorizada ou ação despachável: verificar também
+`product_dispatch_ready`, grant, sessão e recibo MCP independente.
+
+### Atualização segura a partir do próprio MCP
+
+O instalador Inno detecta a marca herdada
+`ORDAX_RUNTIME_SUPERVISED=1` e **recusa antes do quiesce** uma
+autossubstituição disparada de dentro do Job Object do Runtime. Esse
+caminho poderia matar o próprio instalador quando o agente encerrasse.
+Não retirar a marca, forçar `SendInput`, usar outro agente nem executar
+um segundo setup paralelo para contornar a recusa.
+
+O handoff existente, `scripts/windows/ordax-mcp-lifecycle.ps1` com
+`-Operation Upgrade`, exige `-InstallerPath`, `-InstallerSha256` e
+`-ExpectedCommit`. O operador/fluxo que o chama deve validar antes a
+**origem autorizada do artefato**: a igualdade do hash enviado pelo
+chamador, sozinha, não autentica um executável de terceiro. O script
+restringe o nome/formato e tamanho do pacote, os metadados exatos
+`ORDAX`/`OrdaX MCP` (removendo apenas padding de VERSIONINFO),
+compara SHA-256 antes e depois do staging e cria um journal na raiz
+`%LOCALAPPDATA%\\OrdaX\\updates\\mcp\\<transactionId>`.
+
+O executor copiado para a transação passa para a **tarefa temporária**
+`OrdaX MCP Verified Upgrade`, fora do Job Object do Runtime. A tarefa
+revalida o journal e o SHA, executa o setup pelo PID exato (espera limitada,
+sem aguardar o Runtime permanente lançado pelo Inno), verifica o
+`runtime_source_commit` instalado e consulta a prontidão local antes
+de registrar `committed`. A escrita do journal usa substituição atômica
+compatível com Windows PowerShell 5.1 e caminho explícito de backup.
+As fases observáveis são `staged`, `applying`, `committed` ou
+`recovery-required` em caso de falha; **não** interpretar
+`recovery-required` como rollback concluído. Uma transação concluída
+não pode ser repetida. A tarefa temporária só deve ser removida após
+confirmar o estado terminal; a tarefa permanente `OrdaX MCP` permanece.
+
+A instalação deve preservar a identidade/dispositivo/grants e retornar
+a `ready/connected` **sem intervenção humana**. O fluxo e os bloqueios
+são de **candidato de validação privado**, não equivalem a assinatura
+Authenticode nem permitem publicação pública. O gateway/contrato
+`computer_type` da Platform e qualquer `central_session_pending`
+exigem homologação própria.
+
+Esse ciclo é específico do Windows independente; não altera os
+supervisores Native de `ordax-os` nem cria contrato de coexistência
+com o Studio legado.
+
+## Prova física de supervisão e atualização — 2026-11-04
+
+A investigação e os recibos estão na
+[issue #311](https://github.com/ordaxsystems/ordax-runtime/issues/311).
+A [PR #313](https://github.com/ordaxsystems/ordax-runtime/pull/313)
+introduziu o supervisor, o handoff e o watchdog no Runtime; a
+[PR #314](https://github.com/ordaxsystems/ordax-runtime/pull/314)
+corrigiu o padding `VERSIONINFO` do Inno e a substituição de journal no
+Windows PowerShell 5.1. Ambas estão integradas à `main`. Revisão
+canônica após a segunda integração:
+`ad032bcebb14cb10f8e8de84ddfee5d0b422a189`.
+
+No Windows físico `DESKTOP-4UFL03B` (Windows 10 x64), o instalador
+privado da `main` anterior (`0ffb1ccec57efb0e9a931c12970fc5a09d20d14a`)
+foi obtido do run oficial
+[`41861204113`](https://github.com/ordaxsystems/ordax-runtime/actions/runs/41861204113):
+ZIP SHA-256 `63b5ca38c1809bdd28ecde783bf9e3f78628fba0101959e8894e4f7c94c63b0f`;
+setup SHA-256
+`1820924d9e5624d6a8dad182b3daa0c2c22f16031ee3704216258d18a4c45404`.
+A instalação única terminou com código 0, manifesto no SHA esperado,
+tarefa `OrdaX MCP` registrada com dois gatilhos e
+entrada antiga de autostart ausente.
+
+**Crash controlado:** launcher PID `17444` encerrado apenas quando o
+Runtime estava ocioso; o mesmo supervisor iniciou automaticamente
+launcher PID `13552`, sem reinício do computador, nova identidade,
+re-enrollment, grants ou uso do teclado/mouse global.
+O estado voltou a `ready`, `paired=true`,
+`transport_state=connected` e `product_dispatch_ready=true`.
+Essa é uma prova de recuperação em máquina real, não de sessão pública
+permanente ou disponibilidade sem interrupções.
+
+**Upgrade independente:** a transação
+`7fcf126e230746238c65b73811f65a7d` avançou
+`staged → applying → committed`, com o instalador fora do Job Object
+que estava sendo atualizado; a sessão local retornou a
+`ready/connected/true`. A tarefa temporária foi removida **após**
+o recibo `committed`; permaneceu um launcher canônico e a tarefa
+permanente `Running`. As duas correções de compatibilidade da PR #314
+foram aplicadas ao script físico para concluir o teste. Ao final dessa
+prova, **o manifesto binário ainda apontava para `0ffb1cce`**;
+o script do lifecycle já incluía as correções incorporadas depois na
+`ad032bce`. Essa primeira prova **não** comprovava que a instalação inteira estava
+reempacotada no novo commit; o alinhamento posterior está registrado abaixo.
+
+**Alinhamento físico concluído na `ad032bce` (mesmo dia):**
+o run oficial da `main`
+[`41872593233`](https://github.com/ordaxsystems/ordax-runtime/actions/runs/41872593233)
+passou nos jobs Windows de contrato e instalador. O ZIP
+`ordax-mcp-windows-candidate-ad032bcebb14cb10f8e8de84ddfee5d0b422a189` foi verificado no Windows
+com SHA-256 `bf3234d482369eb2bc4b762cda3611ded1fbc549fa30fbcb95b87c6cfe29babc`;
+o setup `OrdaX-MCP-Setup-0.4.8-x64.exe` tinha SHA-256
+`b7cde178f3399dda53374a78e4d1b7f5e0ab4d19e30272f9d5f43db050ac3b4c`.
+O handoff independente criou a transação
+`2a61d375339540149965c4077d270dc7`, que encerrou em
+`committed`. A checagem física final confirmou
+`runtime_source_commit=ad032bcebb14cb10f8e8de84ddfee5d0b422a189`,
+`ready/connected/product_dispatch_ready=true`, tarefa permanente
+`OrdaX MCP` em `Running`, exatamente um launcher, nenhuma
+entrada `HKCU Run` antiga e remoção da tarefa temporária após
+o recibo. Não foi preciso reativar o dispositivo manualmente.
+Esta prova alinha **binário e script** ao commit consolidado, mas
+não substitui a homologação pública de ferramentas e grants.
+
+**Gates separados:** o controle remoto independente permaneceu
+disponível como observador, mas a presença do dispositivo ou o endpoint
+local `/status` não atestam `central_session_pending`, grant,
+capacidade pública ou o esquema publicado de `computer_type`.
+Validar esses fatores de ponta a ponta pela Platform e pelo
+MCP público, sem transformar heartbeat em autorização.
+O instalador segue privado/não assinado e não deve ser anunciado
+como release pública.
+
+## Histórico: primeiro teste físico de entrada Windows — 2026-11-01
 
 O teste físico no Windows 10 x64 autorizado usou o **candidato privado
 de CI**, não uma release pública: workflow GitHub Actions
