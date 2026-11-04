@@ -632,6 +632,21 @@ def run(
         base["runtime"] = runtime_status_snapshot()
         return base
 
+    def readiness_payload() -> dict:
+        # Same Runtime for Windows and OS Native. No costly agent_status(),
+        # local file scans, remote calls, secrets, or additional supervisor.
+        return {
+            "runtime": {
+                "state": runtime["state"],
+                "transport_state": runtime["transport_state"],
+                **product_dispatch_readiness(
+                    runtime,
+                    action_registry_ready=registry is not None,
+                    remote_control_configured=remote_control_configured,
+                ),
+            },
+        }
+
     def health_payload() -> dict:
         # A watchdog probe must not enumerate projects, integrations or actions.
         return {
@@ -644,6 +659,7 @@ def run(
 
     status_server = start_status_server(
         status_payload, port=status_port, health_provider=health_payload,
+        readiness_provider=readiness_payload,
     )
     _startup_log(config, f"STATUS_SERVER_READY port={status_server.server_port}")
 

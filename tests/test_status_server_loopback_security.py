@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import threading
 import unittest
 from pathlib import Path
 
@@ -107,6 +108,78 @@ class LocalRuntimeStatusSecurityTests(unittest.TestCase):
         self.assertEqual(200, code)
         self.assertEqual({"full": 1, "health": 3}, counts)
 
+    def test_readiness_responds_while_optional_full_status_is_blocked(self) -> None:
+        full_started = threading.Event()
+        release_full = threading.Event()
+        calls = {"full": 0, "readiness": 0}
+        transport = {"state": "connected", "dispatch": True}
+
+        def slow_full_status() -> dict:
+            calls["full"] += 1
+            full_started.set()
+            release_full.wait(2.0)
+            return {"runtime": {"state": "ready"}, "projects": ["private"]}
+
+        def cheap_readiness() -> dict:
+            calls["readiness"] += 1
+            return {"runtime": {
+                "state": "ready",
+                "transport_state": transport["state"],
+                "product_dispatch_ready": transport["dispatch"],
+                "product_readiness_code": "ready",
+                "last_transport_error": "SECRET_MUST_NOT_BE_EXPOSED",
+            }}
+
+        server = start_status_server(
+            slow_full_status, port=0, readiness_provider=cheap_readiness,
+        )
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_port
+        result: list[tuple[int, bytes]] = []
+
+        def request(path: str, *, host: str | None = None) -> tuple[int, bytes]:
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+            try:
+                connection.putrequest("GET", path, skip_host=True)
+                connection.putheader("Host", host or f"127.0.0.1:{port}")
+                connection.endheaders()
+                response = connection.getresponse()
+                return response.status, response.read()
+            finally:
+                connection.close()
+
+        worker = threading.Thread(target=lambda: result.append(request("/status")))
+        worker.start()
+        try:
+            self.assertTrue(full_started.wait(1.0))
+            code, content = request("/readiness")
+            self.assertEqual(200, code)
+            self.assertEqual({
+                "local_dispatch_ready": True,
+                "runtime": {
+                    "state": "ready",
+                    "transport_state": "connected",
+                    "product_dispatch_ready": True,
+                    "product_readiness_code": "ready",
+                },
+                "client_authorization": "not_verified_by_local_readiness",
+            }, json.loads(content))
+            self.assertNotIn(b"SECRET_MUST_NOT_BE_EXPOSED", content)
+            self.assertEqual(1, calls["full"])
+            transport.update(state="reconnecting", dispatch=False)
+            code, content = request("/readiness")
+            self.assertEqual(200, code)
+            self.assertFalse(json.loads(content)["local_dispatch_ready"])
+            forbidden, _ = request("/readiness", host="attacker.example")
+            self.assertEqual(403, forbidden)
+            self.assertEqual({"full": 1, "readiness": 2}, calls)
+        finally:
+            release_full.set()
+            worker.join(timeout=3.0)
+            self.assertFalse(worker.is_alive())
+        self.assertEqual(200, result[0][0])
+
     def test_watchdog_uses_lightweight_health_without_cim(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "scripts" / "windows"
                   / "ordax-agent-watchdog.ps1").read_text(encoding="utf-8")
@@ -130,7 +203,7 @@ class LocalRuntimeStatusSecurityTests(unittest.TestCase):
             [f"127.0.0.1:{self.port}", f"127.0.0.1:{self.port}"],
         ]
         for hosts in cases:
-            for path in ("/", "/health", "/status", "/capabilities"):
+            for path in ("/", "/health", "/status", "/capabilities", "/readiness"):
                 with self.subTest(hosts=hosts, path=path):
                     old_calls = self.calls
                     status, headers, body = self.request(path, hosts)
