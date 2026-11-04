@@ -71,6 +71,16 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
         })
         self.assertNotIn("terminal.exec", reported["implemented_actions"])
         self.assertNotIn("process.start", reported["implemented_actions"])
+        self.assertEqual(
+            reported["registered_computer_actions"],
+            sorted(name for name in self.registry.names if name.startswith("computer.")),
+        )
+        self.assertEqual(
+            reported["registered_computer_action_count"],
+            len(reported["registered_computer_actions"]),
+        )
+        self.assertIn("computer.screen_info", reported["registered_computer_actions"])
+        self.assertNotIn("terminal.exec", reported["registered_computer_actions"])
 
         # No fake availability: the report reflects the live action registry.
         self.registry._actions.pop("computer.process_start")
@@ -79,12 +89,37 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
             "computer.process_start",
             second.data["runtime_capabilities"]["implemented_actions"],
         )
+        self.assertNotIn(
+            "computer.process_start",
+            second.data["runtime_capabilities"]["registered_computer_actions"],
+        )
 
         blocked = self.registry.execute(
             "computer.file_stat", {"path": str(self.outside)}
         )
         self.assertFalse(blocked.ok)
         self.assertIn("outside local ORDAX computer access roots", blocked.summary)
+
+    def test_registered_catalog_respects_native_graphics_and_host_allowlist(self):
+        native = ActionRegistry(self.registry.config, computer_adapter={})
+        reported = native.execute("computer.access_status", {}).data["runtime_capabilities"]
+        self.assertNotIn("computer.click", reported["registered_computer_actions"])
+        self.assertNotIn("computer.screen_info", reported["registered_computer_actions"])
+        self.assertIn("computer.terminal_exec", reported["registered_computer_actions"])
+        self.assertEqual(len(reported["registered_computer_actions"]), reported["registered_computer_action_count"])
+
+        restricted = ActionRegistry(
+            self.registry.config,
+            computer_adapter={},
+            allowed_action_names=frozenset({"computer.access_status", "computer.terminal_exec"}),
+        )
+        actual = restricted.execute("computer.access_status", {}).data["runtime_capabilities"]
+        self.assertEqual(
+            ["computer.access_status", "computer.terminal_exec"],
+            actual["registered_computer_actions"],
+        )
+        self.assertEqual(2, actual["registered_computer_action_count"])
+        self.assertNotIn("computer.process_start", actual["implemented_actions"])
 
     def test_missing_allowed_paths_return_bounded_structured_errors(self):
         # A missing path must remain a normal negative result. No absolute

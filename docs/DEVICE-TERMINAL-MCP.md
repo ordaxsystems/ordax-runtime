@@ -77,3 +77,18 @@ pela conversa ChatGPT. A ausência da ação revela Runtime desatualizado.
 Identidade do agente incrementada de 1.30.3 para 1.31.0; a versão de produto
 Windows e a revisão do catálogo MCP continuam indicadores **independentes**,
 não devem ser confundidos com a versão do executor instalado.
+
+## Catálogo local real de Computer Control (Windows e OrdaX Native)
+
+`computer.access_status` preserva `runtime_capabilities.implemented_actions` como
+a lista histórica das sete ações de terminal/processos. **Não é o catálogo completo.**
+O mesmo objeto agora inclui `registered_computer_actions` (lista ordenada) e
+`registered_computer_action_count`, derivados do **ActionRegistry final** do host,
+sem duplicar listas de ações. No Windows refletem as ações `computer.*` realmente
+registradas; no OS Native, somente os handlers de tela/janela/entrada entregues
+pelo OS aparecem, e allowlists do host são aplicadas antes da descoberta.
+
+Esses campos indicam **registro local de implementação**, não grants OAuth,
+consentimento, prontidão, autoridade de despacho, acesso remoto nem execução
+comprovada. A Platform continua sendo SSOT de grants Device/Space e o OS segue
+owner de políticas/handlers Native. Não habilitar ações em função da lista.
