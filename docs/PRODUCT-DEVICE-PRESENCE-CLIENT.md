@@ -28,9 +28,12 @@ A su?te `tests.test_product_device_control_plane` cobre heartbeat, claim/start c
 ## Presença durante ociosidade (01/11/2026)
 
 O `product_wake_enabled` permanece desativado por padrão até a validação
-do protocolo de wake. A fila de ações é consultada no máximo no prazo
+do protocolo de wake. Em 04/11/2026, um teste físico no Windows com e sem
+credencial de dispositivo terminou em timeout no handshake WSS; isso não
+comprova a implantação nem a indisponibilidade geral do servidor e não
+justifica ligar o wake ou ampliar o intervalo de claims no dispositivo. A fila de ações é consultada no máximo no prazo
 `next_claim_due`, cuja espera conservadora aumenta para 30–60 segundos;
-com wake conectado, a reconciliação de jobs é de até 300 segundos.
+com wake conectado **e entrega de um sinal `wake` verificada na mesma conexão**, a reconciliação de jobs é de até 300 segundos. Conexão silenciosa, sem prova de entrega, preserva o intervalo limitado de 30–60 segundos.
 
 **Heartbeat não é claim.** O mesmo loop canônico agora espera sempre o
 menor prazo entre `next_claim_due` e `next_heartbeat`, **independente

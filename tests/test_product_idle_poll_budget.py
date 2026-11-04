@@ -47,6 +47,16 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             product_idle_claim_delay_seconds(0, 12)
 
+    def test_silent_wake_socket_cannot_extend_fallback_to_five_minutes(self):
+        # Connection without an actual authenticated notification is not
+        # permission to replace the safe bounded claim polling budget.
+        self.assertEqual(product_idle_claim_delay_seconds(60, 12), 30.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=False), 30.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=True), 300.0)
+        self.assertEqual(product_idle_claim_delay_seconds(1, 12, verified_wake=True), 300.0)
+        with self.assertRaises(ValueError):
+            product_idle_claim_delay_seconds(60, 12, verified_wake=1)
+
     def test_presence_heartbeat_is_independent_of_idle_claim_budget(self):
         # Default Product wake is off; the long idle claim wait must not
         # suppress the independently scheduled 20-second heartbeat.

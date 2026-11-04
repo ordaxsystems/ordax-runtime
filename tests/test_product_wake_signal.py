@@ -95,6 +95,71 @@ class ProductWakeTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             listener.start()  # never duplicate listeners
 
+    def test_authenticated_handshake_without_wake_does_not_verify_delivery(self):
+        stop = threading.Event()
+        handshake_seen = threading.Event()
+        class SilentSocket:
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return False
+            def recv(self, *, timeout):
+                handshake_seen.set()
+                stop.wait(0.04)
+                raise TimeoutError()
+        control = SimpleNamespace(
+            base_http_url="https://mcp.ordax.com.br",
+            device_id="900943fd-8397-471e-bf05-c66ba4de7884",
+            device_token="s" * 64,
+            _trusted_ingress=TrustedProductIngress("https://mcp.ordax.com.br"),
+        )
+        listener = ProductWakeListener(
+            control, stop, connect_websocket=lambda *_a, **_k: SilentSocket(),
+        )
+        listener.start()
+        try:
+            self.assertTrue(handshake_seen.wait(3))
+            self.assertTrue(listener.connected.is_set())
+            self.assertFalse(listener.delivered.is_set())
+        finally:
+            stop.set()
+            listener.close()
+        self.assertFalse(listener.delivered.is_set())
+
+    def test_real_wake_verifies_only_the_current_connection(self):
+        stop = threading.Event()
+        class WakeSocket:
+            calls = 0
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return False
+            def recv(self, *, timeout):
+                self.calls += 1
+                if self.calls == 1:
+                    return WAKE_MESSAGE
+                stop.wait(0.04)
+                raise TimeoutError()
+        control = SimpleNamespace(
+            base_http_url="https://mcp.ordax.com.br",
+            device_id="900943fd-8397-471e-bf05-c66ba4de7884",
+            device_token="s" * 64,
+            _trusted_ingress=TrustedProductIngress("https://mcp.ordax.com.br"),
+        )
+        listener = ProductWakeListener(
+            control, stop, connect_websocket=lambda *_a, **_k: WakeSocket(),
+        )
+        listener.start()
+        try:
+            self.assertTrue(listener.delivered.wait(3))
+            self.assertTrue(listener.connected.is_set())
+            self.assertTrue(listener.wake.is_set())
+        finally:
+            stop.set()
+            listener.close()
+        self.assertFalse(listener.connected.is_set())
+        self.assertFalse(listener.delivered.is_set())
+
     def test_primary_tcp_connect_failure_uses_existing_restricted_same_worker_ingress(self):
         stop = threading.Event()
         received = threading.Event()
