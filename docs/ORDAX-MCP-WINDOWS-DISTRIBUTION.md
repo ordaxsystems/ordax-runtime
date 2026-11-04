@@ -221,6 +221,14 @@ As fases observáveis são `staged`, `applying`, `committed` ou
 não pode ser repetida. A tarefa temporária só deve ser removida após
 confirmar o estado terminal; a tarefa permanente `OrdaX MCP` permanece.
 
+A verificação de retomada agora consulta `http://127.0.0.1:8765/readiness`,
+em vez do `/status` completo, que poderia bloquear ao inspecionar
+aplicativos/adapters opcionais mesmo com o Runtime saudável. O endpoint
+leve retorna `local_dispatch_ready` e o motivo da prontidão local sem
+credenciais ou grants. A mesma implementação em Python é usada pelo OrdaX
+Native; o Supervisor OS permanece responsável pelo ciclo de vida.
+Ver [contrato canônico de Device](PRODUCT-DEVICE-PRESENCE-CLIENT.md).
+
 A instalação deve preservar a identidade/dispositivo/grants e retornar
 a `ready/connected` **sem intervenção humana**. O fluxo e os bloqueios
 são de **candidato de validação privado**, não equivalem a assinatura

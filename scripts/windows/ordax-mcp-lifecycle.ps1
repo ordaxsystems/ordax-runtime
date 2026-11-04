@@ -239,8 +239,11 @@ switch ($Operation) {
             $healthy = $false
             for ($i = 0; $i -lt 60; $i++) {
                 try {
-                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/status' -TimeoutSec 2
-                    if ($status.runtime.state -eq 'ready' -and
+                    # O(1) Portable readiness, not the optional app/dashboard
+                    # status provider which may block on filesystem or adapters.
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    if ($status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -eq 'ready' -and
                         $status.runtime.transport_state -eq 'connected' -and
                         $status.runtime.product_dispatch_ready -eq $true) {
                         $healthy = $true

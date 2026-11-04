@@ -166,6 +166,9 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn('MultipleInstances IgnoreNew', lifecycle)
         self.assertIn('OrdaX MCP Verified Upgrade', lifecycle)
         self.assertIn('WaitForExit(900000)', lifecycle)
+        self.assertIn("http://127.0.0.1:8765/readiness", lifecycle)
+        self.assertIn("$status.local_dispatch_ready -eq $true", lifecycle)
+        self.assertNotIn("http://127.0.0.1:8765/status", lifecycle)
         self.assertIn('Installer changed during staging', lifecycle)
         # Real Windows Inno metadata contains right-padded strings (60 chars).
         # It must be normalized before comparing exact canonical company/product.

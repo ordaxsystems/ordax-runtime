@@ -235,6 +235,7 @@ def start_status_server(
     port: int = 8765,
     *,
     health_provider: Callable[[], dict] | None = None,
+    readiness_provider: Callable[[], dict] | None = None,
 ) -> ThreadingHTTPServer:
     # This service returns device/project paths and Runtime metadata. Never
     # expose it on an external interface, even when explicitly misconfigured.
@@ -312,6 +313,39 @@ def start_status_server(
                         "last_job_id": runtime.get("last_job_id"),
                     }
                 body = json.dumps(payload).encode("utf-8")
+                self._headers("application/json; charset=utf-8", len(body))
+                self.wfile.write(body)
+                return
+
+            if path == "/readiness" and readiness_provider is not None:
+                # Portable O(1) local dispatch readiness. Never call the full
+                # status provider here: it probes optional desktop apps and
+                # filesystem components and can hang during an MCP upgrade.
+                # A ready Runtime is NOT a client grant or central-session proof.
+                status = readiness_provider()
+                runtime = status.get("runtime", {}) if isinstance(status, dict) else {}
+                if not isinstance(runtime, dict):
+                    runtime = {}
+                state = runtime.get("state")
+                transport = runtime.get("transport_state")
+                code = runtime.get("product_readiness_code")
+                ready = (
+                    runtime.get("product_dispatch_ready") is True
+                    and code == "ready"
+                    and state in {"ready", "busy"}
+                    and transport == "connected"
+                )
+                payload = {
+                    "local_dispatch_ready": ready,
+                    "runtime": {
+                        "state": state,
+                        "transport_state": transport,
+                        "product_dispatch_ready": ready,
+                        "product_readiness_code": code,
+                    },
+                    "client_authorization": "not_verified_by_local_readiness",
+                }
+                body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
                 self._headers("application/json; charset=utf-8", len(body))
                 self.wfile.write(body)
                 return

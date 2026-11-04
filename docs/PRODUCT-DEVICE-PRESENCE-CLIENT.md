@@ -42,3 +42,30 @@ sempre sob a autoridade Product; não concede execução ou permissões.
 O teste `tests.test_product_idle_poll_budget` cobre wake desligado por
 padrão, heartbeat de 20s durante claims a cada 60s/300s, prioridades dos
 prazos, tratamento de deadline vencido e limites de consultas PostgreSQL.
+
+## Prontidão local portátil e de baixo custo (Windows / OS Native)
+
+O status completo `GET /status` pode inspecionar aplicativos e componentes
+opcionais; isso **não** deve bloquear um Supervisor Native nem uma atualização
+Windows. `ordax_dev_agent/status_server.py` oferece `GET /readiness` no
+**mesmo** servidor loopback e no mesmo processo canônico, sem novos agentes,
+filas, threads de polling ou autoridade. `ordax_dev_agent/main.py` calcula a
+resposta em memória via `product_dispatch_readiness`, sem varredura de
+arquivos, chamadas remotas ou `agent_status`. O port é o mesmo `status_port`
+do Runtime; o OS pode escolher `status_port=0` e usar a porta retornada pelo
+seu próprio Supervisor (não assumir porta 8765 no Native).
+
+`local_dispatch_ready=true` exige estado `ready/busy`, transporte
+`connected`, heartbeat ainda válido, registry local e identidade confirmada.
+É **somente prontidão local**: `client_authorization` permanece
+`not_verified_by_local_readiness`. Não atesta grant de cliente, seleção de
+sessão, `capability_digest`, capacidade publicada no gateway nem autorização
+para despachar. Se o controle remoto falhar, não inventar sucesso nem repetir
+POST de ação; consultar recibo por `request_id` e preservar a execução única.
+
+Este caminho não substitui `GET /health` (liveness O(1) do watchdog),
+`GET /status` (diagnóstico completo opcional), nem o Product PostgreSQL
+(única autoridade de claims e execução). A regra é a mesma no Windows e no
+OrdaX OS Native; no Native, o Supervisor do OS continua sendo o owner de
+restart, e o Windows continua com sua tarefa única. Não publicar essa porta
+fora de loopback nem transformar o endpoint numa ferramenta MCP pública.
