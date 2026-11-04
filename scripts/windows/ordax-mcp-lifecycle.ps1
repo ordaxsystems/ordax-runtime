@@ -141,8 +141,13 @@ switch ($Operation) {
             $source.Length -lt 1000000 -or $source.Length -gt 500000000) {
             throw 'Installer path or size is unsafe'
         }
-        if ($source.VersionInfo.CompanyName -cne 'ORDAX' -or
-            $source.VersionInfo.ProductName -cne 'OrdaX MCP') {
+        # Inno Setup pads VERSIONINFO string values with spaces on Windows.
+        # Compare normalized human-readable metadata, never accept a different
+        # product, and still bind the exact installer bytes through SHA-256.
+        if ([string]::IsNullOrWhiteSpace($source.VersionInfo.CompanyName) -or
+            [string]::IsNullOrWhiteSpace($source.VersionInfo.ProductName) -or
+            $source.VersionInfo.CompanyName.Trim() -cne 'ORDAX' -or
+            $source.VersionInfo.ProductName.Trim() -cne 'OrdaX MCP') {
             throw 'Installer product metadata does not identify OrdaX MCP'
         }
         if ((Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash -ine $InstallerSha256) {
