@@ -668,6 +668,7 @@ def run(
     status_server = start_status_server(
         status_payload, port=status_port, health_provider=health_payload,
         readiness_provider=readiness_payload,
+        capabilities_provider=lambda: registry.names if registry is not None else [],
     )
     _startup_log(config, f"STATUS_SERVER_READY port={status_server.server_port}")
 

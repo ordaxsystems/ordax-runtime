@@ -60,6 +60,53 @@ class LocalRuntimeStatusSecurityTests(unittest.TestCase):
                     if path == "/capabilities":
                         self.assertTrue(body.startswith(b"{"))
 
+    def test_registered_capabilities_do_not_evaluate_full_status(self) -> None:
+        # Discovery reads the already-filtered local registry. It must not
+        # scan apps or files simply to return the Product capability schema.
+        from ordax_dev_agent.capability_snapshot import device_capability_snapshot
+
+        counts = {"full": 0, "registry": 0}
+        registered = ["projects.list", "computer.windows"]
+
+        def expensive_status() -> dict:
+            counts["full"] += 1
+            raise AssertionError("capabilities must not inspect the full status")
+
+        def registered_actions() -> list[str]:
+            counts["registry"] += 1
+            return list(registered)
+
+        fast = start_status_server(
+            expensive_status, port=0, capabilities_provider=registered_actions,
+        )
+        self.addCleanup(fast.server_close)
+        self.addCleanup(fast.shutdown)
+        port = fast.server_port
+
+        def get(host: str) -> tuple[int, bytes]:
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+            try:
+                connection.putrequest("GET", "/capabilities", skip_host=True)
+                connection.putheader("Host", host)
+                connection.endheaders()
+                response = connection.getresponse()
+                return response.status, response.read()
+            finally:
+                connection.close()
+
+        status, body = get(f"127.0.0.1:{port}")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), device_capability_snapshot(registered))
+        self.assertEqual({"full": 0, "registry": 1}, counts)
+        registered.clear()
+        status, body = get(f"127.0.0.1:{port}")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), device_capability_snapshot([]))
+        self.assertEqual("degraded", json.loads(body)["state"])
+        status, body = get("attacker.example")
+        self.assertEqual((403, b""), (status, body))
+        self.assertEqual({"full": 0, "registry": 2}, counts)
+
     def test_lightweight_health_does_not_evaluate_full_status(self) -> None:
         counts = {"full": 0, "health": 0}
 

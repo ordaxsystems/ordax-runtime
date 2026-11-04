@@ -236,6 +236,7 @@ def start_status_server(
     *,
     health_provider: Callable[[], dict] | None = None,
     readiness_provider: Callable[[], dict] | None = None,
+    capabilities_provider: Callable[[], list[str]] | None = None,
 ) -> ThreadingHTTPServer:
     # This service returns device/project paths and Runtime metadata. Never
     # expose it on an external interface, even when explicitly misconfigured.
@@ -351,10 +352,15 @@ def start_status_server(
                 return
 
             if path == "/capabilities":
-                # The shared request gate covers *every* path, including
-                # public health and private status/capability metadata.
-                status = status_provider()
-                actions = status.get("actions") if isinstance(status, dict) else []
+                # The same loopback request gate covers all local endpoints.
+                # Capability discovery must not run the full agent_status()
+                # scanner: it can block on unrelated apps/files for seconds.
+                # The live ActionRegistry is the only source of action names.
+                if capabilities_provider is not None:
+                    actions = capabilities_provider()
+                else:
+                    status = status_provider()  # legacy callers only
+                    actions = status.get("actions") if isinstance(status, dict) else []
                 snapshot = device_capability_snapshot(
                     actions if isinstance(actions, list) else []
                 )
