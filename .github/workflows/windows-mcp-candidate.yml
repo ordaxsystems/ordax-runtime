@@ -204,7 +204,7 @@ jobs:
               $shortcut.Arguments -cne '-m ordax_dev_agent.owner_device_connect_gui') {
             throw 'One-click shortcut does not use the canonical private Owner onboarding'
           }
-          $diagnosticShortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\OrdaX MCP\Verificar conexão.lnk'
+          $diagnosticShortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\OrdaX MCP\OrdaX MCP.lnk'
           if (-not (Test-Path -LiteralPath $diagnosticShortcutPath)) {
             throw 'Private read-only MCP network diagnostic shortcut missing'
           }

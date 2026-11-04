@@ -7,12 +7,24 @@ The unsigned validation candidate must not be offered as a public release.
 from __future__ import annotations
 
 import argparse
+import http.client
+from datetime import datetime, timezone
+import json
+import os
+import re
 import sys
 from collections.abc import Callable
 from typing import Any
 
-from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code
+from ordax_core.owner_oauth import OwnerOAuthError, browser_authorization_code, exchange_owner_code
+from ordax_connector.owner_grants import (
+    require_owner_mcp_device_identity,
+    select_consented_owner_mcp_client,
+)
+from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.device_setup import SetupError
+from ordax_dev_agent.owner_grants_cli import parse_args as owner_cli_args, perform as owner_cli_perform
+from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 from ordax_dev_agent.owner_device_connect_cli import enroll_owner_device
 from ordax_dev_agent.product_ingress import inspect_pinned_https_ingress
 
@@ -114,10 +126,59 @@ def _format_ingress_observation(label: str, record: object) -> str:
     raise ValueError("Untrusted ingress diagnostic result")
 
 
+def inspect_local_runtime_status() -> dict[str, object]:
+    """Read only the fixed loopback health endpoint; never infer remote authority.
+
+    No OAuth token, device credential, cookie, custom URL or command is sent.
+    A forged or invalid local HTTP response cannot claim an attested MCP session.
+    """
+    unavailable = {"responded": False, "healthy": None, "state": None, "version": None}
+    connection = http.client.HTTPConnection("127.0.0.1", 8765, timeout=1.5)
+    try:
+        connection.request("GET", "/health", headers={"Accept": "application/json"})
+        response = connection.getresponse()
+        if response.status != 200 or not response.getheader("Content-Type", "").lower().startswith("application/json"):
+            return unavailable
+        raw = response.read(4097)
+        if len(raw) > 4096:
+            return unavailable
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, dict) or type(data.get("ok")) is not bool:
+            return unavailable
+        state = data.get("state")
+        version = data.get("version")
+        if not isinstance(state, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", state):
+            return unavailable
+        if not isinstance(version, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", version):
+            return unavailable
+        return {"responded": True, "healthy": data["ok"], "state": state, "version": version}
+    except (OSError, ValueError, UnicodeError, http.client.HTTPException):
+        return unavailable
+    finally:
+        connection.close()
+
+
+def _format_local_observation(record: object) -> str:
+    if not isinstance(record, dict) or set(record) != {"responded", "healthy", "state", "version"}:
+        raise ValueError("Invalid local observation")
+    if record["responded"] is False and all(record[key] is None for key in ("healthy", "state", "version")):
+        return "Estado local: porta de diagnostico indisponivel ou resposta invalida."
+    if (record["responded"] is not True or type(record["healthy"]) is not bool
+            or not isinstance(record["state"], str)
+            or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", record["state"])
+            or not isinstance(record["version"], str)
+            or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", record["version"])):
+        raise ValueError("Invalid local observation")
+    condition = "sem erro reportado" if record["healthy"] else "com alerta reportado"
+    return (f"Estado local: porta de diagnostico respondeu ({condition}; "
+            f"v{record['version']}; {record['state']}).")
+
+
 def diagnose_with_dialogs(
     *,
     show: Callable[[str, int], int] = _show_message,
     inspect: Callable[[], dict[str, object]] = inspect_pinned_https_ingress,
+    inspect_local: Callable[[], dict[str, object]] = inspect_local_runtime_status,
 ) -> int:
     """User-invoked diagnostics only; never mutate identity or suggest grants."""
     try:
@@ -140,11 +201,16 @@ def diagnose_with_dialogs(
         )
         return 1
 
+    try:
+        local = _format_local_observation(inspect_local())
+    except Exception:
+        local = "Estado local: nao foi possivel validar."
+
     show(
-        "Diagnostico de rede do OrdaX MCP\n\n"
-        + primary + "\n" + restricted + "\n\n"
-        "Esta verificacao apenas observa respostas HTTPS. "
-        "Ela nao comprova cadastro, login, prontidao do MCP ou autorizacao "
+        "Diagnostico do OrdaX MCP\n\n"
+        + primary + "\n" + restricted + "\n" + local + "\n\n"
+        "As verificacoes observam HTTPS e a porta de estado local. "
+        "A resposta local nao comprova cadastro, login, prontidao do MCP ou autorizacao "
         "para controlar o computador.\n\n"
         "Se o servidor principal falhar, consulte sua conexao de rede "
         "antes de tentar conectar o dispositivo.",
@@ -153,17 +219,190 @@ def diagnose_with_dialogs(
     return 0 if result["primary"]["transport"] == "https_responded" else 1
 
 
+
+def list_local_owner_session_candidates(
+    remote: ProductRemoteClient, token: str, config: AgentConfig,
+    *, now: datetime | None = None,
+) -> list[dict[str, str]]:
+    """Read pending Owner tickets for THIS enrolled Windows device only.
+
+    The Control Plane owns every grant/eligibility decision; this is a
+    presentation projection and cannot create a binding or infer attestation.
+    """
+    device_id = ProductRemoteClient._uuid(config.device_id, "device_id")
+    authority = remote.owner_remote_authority(token, device_id=device_id)
+    require_owner_mcp_device_identity(authority, device_id=device_id)
+    clients = authority["clients"]
+    if not clients or len(clients) > 25:
+        raise ValueError("owner_gui_client_inventory_invalid")
+    seen_clients: set[str] = set()
+    candidates: list[dict[str, str]] = []
+    clock = now or datetime.now(timezone.utc)
+    if clock.tzinfo is None:
+        raise ValueError("owner_gui_clock_invalid")
+
+    for item in clients:
+        client_id = select_consented_owner_mcp_client(
+            authority, device_id=device_id, requested_client_id=item.get("client_id"),
+        )
+        if client_id in seen_clients:
+            raise ValueError("owner_gui_duplicate_oauth_client")
+        seen_clients.add(client_id)
+        # An idle client has no Owner decision to make. Avoid a second
+        # canonical SQL projection for each consented but inactive client.
+        pending = remote.owner_central_session_selections(token, client_id=client_id)
+        if not pending["pending_selections"]:
+            continue
+        targets = remote.owner_central_session_targets(token, client_id=client_id)
+        if not any(target.get("device_id", "").lower() == device_id
+                   for target in targets["targets"]):
+            continue
+        for ticket in pending["pending_selections"]:
+            try:
+                expiration = datetime.fromisoformat(
+                    ticket["expires_at"].replace("Z", "+00:00")
+                )
+            except ValueError as exc:
+                raise ValueError("owner_gui_ticket_expiry_invalid") from exc
+            if expiration.tzinfo is None:
+                raise ValueError("owner_gui_ticket_expiry_invalid")
+            if expiration <= clock:
+                continue
+            name = item.get("client_name")
+            safe_name = re.sub(r"[^A-Za-z0-9 ._-]", "", name)[:64] \
+                if isinstance(name, str) else ""
+            candidates.append({
+                "device_id": device_id,
+                "client_id": client_id,
+                "client_name": safe_name or "Cliente OAuth",
+                "challenge_id": ticket["challenge_id"],
+                "expires_at": expiration.isoformat(),
+            })
+            if len(candidates) > 8:
+                # Never make the Owner click through an unbounded queue.
+                raise ValueError("owner_gui_too_many_pending_tickets")
+    if len({item["challenge_id"] for item in candidates}) != len(candidates):
+        raise ValueError("owner_gui_duplicate_pending_ticket")
+    return candidates
+
+
+def select_session_with_dialogs(
+    *,
+    show: Callable[[str, int], int] = _show_message,
+    authorize: Callable[[], tuple[str, str]] = _browser_authorization,
+    exchange: Callable[[str, str], str] = exchange_owner_code,
+    config_provider: Callable[[], AgentConfig] = AgentConfig.from_env,
+    remote_factory: Callable[[str], ProductRemoteClient] = ProductRemoteClient,
+    select: Callable[..., dict[str, Any]] = owner_cli_perform,
+) -> int:
+    """Native Windows UI over the canonical CLI Owner selection authority.
+
+    The Owner picks an exact pending challenge, device and OAuth client.
+    This never creates grants or dispatches work. The selected Runtime must
+    subsequently attest the session using its own Native device credential.
+    """
+    accepted = show(
+        "Selecionar ESTE computador para uma sessao OrdaX pendente?\n\n"
+        "A conta Owner sera autenticada no navegador. A escolha de cada "
+        "solicitacao exigira confirmacao separada, sem conceder "
+        "permissoes ou executar comandos.",
+        _MB_YESNO | _MB_ICONQUESTION,
+    )
+    if accepted != _IDYES:
+        return 2
+
+    try:
+        # This Start-menu UI belongs to standalone Windows MCP. OrdaX Desktop
+        # has its own Product Device/OS Supervisor and must use its Native UI.
+        if os.environ.get("ORDAX_RUNTIME_HOST_PROFILE") is not None:
+            raise ValueError("owner_gui_standalone_windows_only")
+        config = config_provider()
+        code, verifier = authorize()
+        token = exchange(code, verifier)  # Owner token exists only in memory
+        with remote_factory(config.product_mcp_url) as remote:
+            candidates = list_local_owner_session_candidates(remote, token, config)
+            if not candidates:
+                show(
+                    "Nenhuma solicitacao pendente para este computador.\n"
+                    "Inicie uma acao pelo cliente MCP e tente novamente.",
+                    _MB_ICONINFORMATION,
+                )
+                return 2
+            for candidate in candidates:
+                answer = show(
+                    "O proprietario confirma esta escolha exata?\n\n"
+                    "Computador: ESTE Windows\n"
+                    f"Dispositivo: {candidate['device_id']}\n"
+                    f"Cliente: {candidate['client_name']} ({candidate['client_id']})\n"
+                    f"Solicitacao: {candidate['challenge_id']}\n"
+                    f"Expira: {candidate['expires_at']}\n\n"
+                    "Compare o ID da solicitacao com o apresentado no cliente.\n"
+                    "Sim apenas para a solicitacao desejada. "
+                    "Nenhum grant sera criado ou ampliado.",
+                    _MB_YESNO | _MB_ICONQUESTION,
+                )
+                if answer != _IDYES:
+                    continue
+                args = owner_cli_args([
+                    "central-select", "--device", candidate["device_id"],
+                    "--client", candidate["client_id"],
+                    "--challenge", candidate["challenge_id"], "--confirm",
+                ])
+                result = select(args, token, remote, config=config)
+                if (not isinstance(result, dict)
+                        or result.get("status") != "pending"
+                        or result.get("attested") is not False
+                        or result.get("dispatch_authorized") is not False
+                        or result.get("challenge_id") != candidate["challenge_id"]
+                        or result.get("device_id") != candidate["device_id"]):
+                    raise ValueError("owner_gui_selection_not_verified")
+                show(
+                    "Escolha registrada na Platform.\n\n"
+                    "A sessao ainda aguarda a confirmacao do Runtime "
+                    "nativo deste dispositivo. Nenhum grant foi alterado.",
+                    _MB_ICONINFORMATION,
+                )
+                return 0
+    except OwnerOAuthError as error:
+        show(_OAUTH_ERRORS.get(error.code, "Autorizacao Owner nao concluida."),
+             _MB_ICONERROR)
+        return 1
+    except (ProductRemoteError, ValueError, OSError, TypeError):
+        # A lost POST response may be ambiguous: never replay an Owner choice.
+        show(
+            "Nao foi possivel comprovar a selecao.\n"
+            "Verifique novamente as solicitacoes antes de repetir. "
+            "Nenhuma acao MCP foi iniciada por esta interface.",
+            _MB_ICONERROR,
+        )
+        return 1
+    except Exception:
+        # pythonw has no stderr. Never surface tokens, paths or raw errors.
+        show("A selecao nao foi comprovada. Consulte o estado da Platform.",
+             _MB_ICONERROR)
+        return 1
+    show("Nenhuma solicitacao foi selecionada.", _MB_ICONINFORMATION)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ordax-mcp-connect")
-    parser.add_argument(
+    options = parser.add_mutually_exclusive_group()
+    options.add_argument(
         "--verificar-rede", action="store_true",
-        help="verificar somente HTTPS sem autorizar ou conectar dispositivos",
+        help="verificar HTTPS e estado local sem autorizar ou conectar dispositivos",
+    )
+    options.add_argument(
+        "--selecionar-sessao", action="store_true",
+        help="confirmar uma solicitacao Owner pendente neste computador",
     )
     args = parser.parse_args(argv)
     if sys.platform != "win32":
         return 1
     if args.verificar_rede:
         return diagnose_with_dialogs()
+    if args.selecionar_sessao:
+        return select_session_with_dialogs()
     return connect_with_dialogs()
 
 

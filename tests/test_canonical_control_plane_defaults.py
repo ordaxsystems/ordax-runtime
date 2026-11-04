@@ -45,7 +45,8 @@ class CanonicalControlPlaneDefaultsTests(unittest.TestCase):
         example = json.loads(
             Path("config/product-mcp.example.json").read_text(encoding="utf-8")
         )
-        env = example["mcpServers"]["ordax-studio"]["env"]
+        self.assertEqual(set(example["mcpServers"]), {"ordax-mcp"})
+        env = example["mcpServers"]["ordax-mcp"]["env"]
         self.assertNotIn("ORDAX_PRODUCT_CONTROL_PLANE_URL", env)
         self.assertIn("ORDAX_PRODUCT_ACCESS_TOKEN", env)
 

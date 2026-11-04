@@ -1,5 +1,7 @@
 """Independent Windows OrdaX MCP distribution contracts (no Studio product authority)."""
 import re
+import subprocess
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -24,11 +26,17 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn('Name: "{group}\\\\Conectar dispositivo"', installer)
         self.assertIn('Filename: "{app}\\\\runtime\\\\pythonw.exe"', installer)
         self.assertIn('Parameters: "-m ordax_dev_agent.owner_device_connect_gui"', installer)
-        self.assertIn('Name: "{group}\\\\Verificar conexão"', installer)
+        self.assertIn('Name: "{group}\\\\OrdaX MCP"', installer)
         self.assertIn(
             'Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"',
             installer,
         )
+        self.assertIn('Name: "{group}\\\\Selecionar dispositivo para sessão"', installer)
+        self.assertIn(
+            'Parameters: "-m ordax_dev_agent.owner_device_connect_gui --selecionar-sessao"',
+            installer,
+        )
+        self.assertIn("Canonical Owner session device selection UI missing", builder)
         self.assertIn("Private Windows GUI host missing", builder)
         self.assertIn("ordax_dev_agent.owner_device_connect_gui", builder)
         self.assertNotIn("irm ", installer)
@@ -46,6 +54,88 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn("Remove-Item $stage -Recurse -Force", builder)
         self.assertNotIn("presentation\\ORDAX Studio.exe", installer)
         self.assertNotIn("ORDAX Studio.exe\"; Flags: nowait", installer)
+
+    def test_clean_windows_install_has_manual_reactivation_shortcuts_without_second_agent(self):
+        installer = INNO.read_text(encoding="utf-8")
+        launcher = (ROOT / "packaging/windows/ordax_launcher.c").read_text(encoding="utf-8")
+        self.assertEqual(
+            installer.count('Name: "{group}\\\\Iniciar ou reativar OrdaX MCP"'), 1
+        )
+        self.assertIn('Name: "{userdesktop}\\\\OrdaX MCP"', installer)
+        self.assertIn(
+            'Name: "{userdesktop}\\\\OrdaX MCP"; Filename: "{app}\\\\runtime\\\\pythonw.exe"; '
+            'Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"',
+            installer,
+        )
+        self.assertNotIn('Name: "{group}\\\\Verificar conexão"', installer)
+        self.assertIn('Name: "desktopicon"', installer)
+        self.assertIn("Tasks: desktopicon", installer)
+        self.assertIn('Filename: "{app}\\\\{#RuntimeExe}"', installer)
+        self.assertIn('ValueName: "OrdaX MCP"', installer)
+        self.assertIn('Local\\\\ORDAXRuntime', launcher)
+        self.assertIn('ERROR_ALREADY_EXISTS', launcher)
+        self.assertIn('run_python_child(', launcher)
+        self.assertIn('backoff_ms', launcher)
+        self.assertIn('ORDAX_RUNTIME_LAUNCHER ? L"OrdaX MCP" : L"ORDAX Studio"', launcher)
+        self.assertIn("O runtime privado do OrdaX MCP", launcher)
+        # Existing launcher and Runtime own restart/mutex; no extra watchdog.
+        self.assertNotIn("Register-ScheduledTask", installer)
+        self.assertNotIn("ordax-agent-watchdog", installer)
+
+    def test_local_candidate_requires_clean_sources_and_supports_user_inno(self):
+        builder = BUILDER.read_text(encoding="utf-8")
+        self.assertIn(
+            "git -C $root status --porcelain --untracked-files=all -- . ':(exclude).ordax/platform'", builder,
+        )
+        self.assertIn(
+            'if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0)', builder,
+        )
+        self.assertIn("Runtime source must be clean for candidate packaging", builder)
+        self.assertIn('Join-Path $root "pyproject.toml"', builder)
+        self.assertNotIn("open('pyproject.toml','rb')", builder)
+        self.assertIn('Programs\\Inno Setup 6\\ISCC.exe', builder)
+        self.assertIn('Test-Path -LiteralPath $_ -PathType Leaf', builder)
+        self.assertIn('MSVC and Windows SDK developer environment required', builder)
+        self.assertLess(builder.index('foreach ($nativeTool'), builder.index('Remove-Item $stage'))
+        self.assertNotIn(
+            '$env:GITHUB_ACTIONS -eq "true" -and $dirty.Count', builder,
+        )
+
+    def test_locked_nested_platform_checkout_is_only_source_status_exclusion(self):
+        # Reproduce the CI layout without downloading or rebuilding the Platform.
+        # Every other untracked file and every tracked mutation must still fail.
+        with tempfile.TemporaryDirectory(prefix="ordax-mcp-git-") as temporary:
+            repo = Path(temporary) / "runtime"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            tracked = repo / "tracked.py"
+            tracked.write_text("original\n", encoding="utf-8")
+            subprocess.run(["git", "add", "tracked.py"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "-c", "user.name=OrdaX Test",
+                 "-c", "user.email=test@ordax.invalid", "commit", "-qm", "init"],
+                cwd=repo, check=True,
+            )
+            platform = repo / ".ordax" / "platform"
+            platform.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=platform, check=True)
+            (platform / "reference.txt").write_text("pinned checkout\n", encoding="utf-8")
+
+            command = [
+                "git", "status", "--porcelain", "--untracked-files=all",
+                "--", ".", ":(exclude).ordax/platform",
+            ]
+
+            def dirty() -> str:
+                return subprocess.check_output(command, cwd=repo, text=True)
+
+            self.assertEqual(dirty(), "", "only the pinned checkout is excluded")
+            extra = repo / "unexpected-source.py"
+            extra.write_text("must block\n", encoding="utf-8")
+            self.assertIn("unexpected-source.py", dirty())
+            extra.unlink()
+            tracked.write_text("modified\n", encoding="utf-8")
+            self.assertIn("tracked.py", dirty())
 
     def test_no_duplicate_agent_or_clobber_of_existing_studio_installation(self):
         installer = INNO.read_text(encoding="utf-8")

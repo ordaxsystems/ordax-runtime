@@ -21,8 +21,13 @@ if ($LASTEXITCODE -ne 0 -or $sourceCommit -cnotmatch '^[0-9a-f]{40}$') {
 if ($env:GITHUB_ACTIONS -eq "true" -and $env:GITHUB_SHA -and $env:GITHUB_SHA -cne $sourceCommit) {
   throw "GitHub build must use exact Runtime commit"
 }
-$dirty = @(& git -C $root status --porcelain --untracked-files=no)
-if ($LASTEXITCODE -ne 0 -or ($env:GITHUB_ACTIONS -eq "true" -and $dirty.Count -ne 0)) {
+# Every installer must identify the exact packaged commit. A local dirty
+# checkout would otherwise label modified bytes with the older HEAD SHA.
+# CI checks out the immutable Platform pin under .ordax/platform;
+# that nested Git repository is NOT Runtime package source. Exclude only
+# its exact root. Tracked changes and any other untracked source still fail.
+$dirty = @(& git -C $root status --porcelain --untracked-files=all -- . ':(exclude).ordax/platform')
+if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
   throw "Runtime source must be clean for candidate packaging"
 }
 $lock = Get-Content (Join-Path $root "control-plane-source.lock.json") -Raw | ConvertFrom-Json
@@ -40,9 +45,18 @@ $endpointJson = & python (Join-Path $root "scripts\windows\resolve-control-plane
 if ($LASTEXITCODE -ne 0) { throw "Canonical Product MCP provenance validation failed" }
 $endpoint = ($endpointJson -join "`n") | ConvertFrom-Json
 if ($endpoint.schema -ne "ordax.control-plane-endpoint-provenance/1") { throw "Unexpected provenance schema" }
-$packageVersion = (& python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])").Trim()
-if ($LASTEXITCODE -ne 0 -or $packageVersion -notmatch '^\d+\.\d+\.\d+$') {
+# Resolve metadata from the canonical source root, regardless of caller cwd.
+$packageVersion = & python -c "import sys,tomllib; print(tomllib.load(open(sys.argv[1],'rb'))['project']['version'])" (Join-Path $root "pyproject.toml")
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($packageVersion) -or $packageVersion -notmatch '^\d+\.\d+\.\d+$') {
   throw "Invalid canonical Runtime distribution version"
+}
+$packageVersion = $packageVersion.Trim()
+# Fail before deleting a prior stage or downloading private Python/dependencies.
+# The canonical CI uses the same MSVC/SDK environment, not a fallback C toolchain.
+foreach ($nativeTool in @("cl.exe", "rc.exe")) {
+  if (-not (Get-Command $nativeTool -ErrorAction SilentlyContinue)) {
+    throw "MSVC and Windows SDK developer environment required: $nativeTool"
+  }
 }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $root "dist\mcp-windows" }
 $build = Join-Path $root "build\mcp-windows"
@@ -75,6 +89,10 @@ if ($LASTEXITCODE -ne 0) { throw "Owner device enrollment CLI missing" }
 if (-not (Test-Path -LiteralPath (Join-Path $runtime "pythonw.exe"))) { throw "Private Windows GUI host missing" }
 & $privatePython -c "import ordax_dev_agent.owner_device_connect_gui as gui; assert callable(gui.main)"
 if ($LASTEXITCODE -ne 0) { throw "Canonical Owner device onboarding presentation missing" }
+$ownerGuiHelp = @(& $privatePython -m ordax_dev_agent.owner_device_connect_gui --help)
+if ($LASTEXITCODE -ne 0 -or (($ownerGuiHelp -join " ") -notmatch '--selecionar-sessao')) {
+  throw "Canonical Owner session device selection UI missing"
+}
 & $privatePython -c "from ordax_dev_agent.desktop_host_main import DESKTOP_OS_ACTIONS; from ordax_dev_agent.product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS; assert DESKTOP_OS_ACTIONS == frozenset({'agent.status', 'computer.access_status'}) | NATIVE_SURFACE_DEVICE_ACTIONS; assert NATIVE_SURFACE_DEVICE_ACTIONS == frozenset({'ordax.surface.open', 'ordax.surface.status'})"
 if ($LASTEXITCODE -ne 0) { throw "OrdaX Desktop host action scope missing from canonical runtime package" }
 & $privatePython -c "import importlib.metadata as m; assert m.version('ordax-runtime') == '$packageVersion'"
@@ -137,11 +155,17 @@ $manifest = [ordered]@{
 }
 $manifest | ConvertTo-Json -Depth 9 | Set-Content (Join-Path $stage "product-manifest.json") -Encoding UTF8
 if (Test-Path (Join-Path $stage "presentation")) { throw "Studio presentation leaked into independent MCP distribution" }
-$inno = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
-if (-not $inno) {
-  $inno = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-}
-if (-not (Test-Path $inno)) { throw "Inno Setup 6 required" }
+# Accept official machine-wide or user-scoped Inno Setup installations.
+# Never substitute a downloaded compiler or an unverified executable.
+$innoCandidates = @(
+  (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+  (Join-Path "${env:ProgramFiles(x86)}" "Inno Setup 6\ISCC.exe")
+  (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+)
+$inno = $innoCandidates | Where-Object {
+  $_ -and (Test-Path -LiteralPath $_ -PathType Leaf)
+} | Select-Object -First 1
+if (-not $inno) { throw "Inno Setup 6 required" }
 & $inno "/DStageDir=$stage" "/DAppVersion=$packageVersion" "/DOutputDir=$OutputDirectory" (Join-Path $root "packaging\windows\ordax-mcp.iss")
 if ($LASTEXITCODE -ne 0) { throw "OrdaX MCP candidate Inno packaging failed" }
 $installer = Join-Path $OutputDirectory "OrdaX-MCP-Setup-$packageVersion-x64.exe"
