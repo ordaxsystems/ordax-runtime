@@ -13,6 +13,94 @@ A referência arquitetural canônica fica em `ordaxsystems/ordax-platform/docs/O
 
 Túnel e URL não são conceitos opostos: um MCP direto por dispositivo pode futuramente usar uma URL HTTPS estável publicada por um túnel/conexão segura iniciado pelo Runtime. Já clientes do modo Central normalmente usam conexões outbound HTTPS/WebSocket; se a própria Central estiver em uma máquina privada, um único túnel nela pode publicar o serviço.
 
+## Capability Fabric, Aura e Product MCP — SSOT de execução (04/11/2026)
+
+**Estado exato:** o Runtime não é a autoridade da instalação de apps
+OrdaX nem o mecanismo de inferência da Aura. Os owners continuam
+separados, sem segundo catálogo de execução:
+
+- **OrdaX OS**: Native Store `CURRENT`, identidade/versão de
+  componente instalado, semântica viva de Application Actions e
+  descoberta `ordax.capability-discovery/1` do Fabric, sem
+  authority de execução.
+- **ordax-apps**: `app.json`, `ai/manifest.json`,
+  `actions/manifest.json`, providers, compatibilidade e UI semântica
+  quando houver; nenhum app precisa registrar ferramentas MCP próprias.
+- **Runtime (este repositório)**:
+  `ordax_dev_agent/product_gateway.py` é o catálogo de ações Product
+  admitidas. No `main` observado, `PRODUCT_ACTIONS` possui **93 IDs
+  declarados**; isso não representa 93 tools MCP habilitadas.
+  `ordax_dev_agent/actions.py` registra as ações locais e aplica
+  `allowed_action_names` de host confiável e adaptadores existentes.
+  `ordax_dev_agent/capability_snapshot.py` anuncia somente a
+  interseção entre Product Actions e ações locais realmente
+  suportadas, **máximo 64** por snapshot de Device
+  (`ordax.device-agent-capabilities/1`).
+- **ordax-platform**: única autoridade remota de Device, OAuth,
+  grants, leases e revogação. `capability_digest` não é a
+  revisão de sessão do Fabric. A autorização do cliente MCP nunca
+  decorre do manifesto do app ou da escolha do modelo local.
+
+### Dois catálogos diferentes: evitar falso “sincronizado”
+
+`ordax_dev_agent/application_intelligence_actions.py` implementa
+`intelligence.app_catalog` e `intelligence.app_detail`, que leem
+`ordax_studio/app_intelligence_registry.json` **na inicialização**.
+O registro, quando fornecido no pacote/ambiente, contém
+proveniência/manifestos, não comprova instalação **atual** no OS
+Native. **Não há esse arquivo versionado na árvore source atual do
+Runtime**, e o teste `tests/test_application_intelligence_actions.py`
+prova que sua ausência retorna `available=false` (sem inventar
+aplicativos). Um build específico pode trazer o arquivo, mas isso
+exige verificação do artefato instalado.
+
+A Aura usa no OS `live-verified-app-semantics.mjs` e a Store
+`CURRENT`, que mudam com instalação/remoção. Portanto, não tratar
+o registry empacotado do Runtime como cópia viva do Fabric nem
+atualizá-lo por segundo watcher/scan. Se uma futura tool Product
+afirmar “aplicativo instalado/agora disponível”, deverá observar
+o **port Native OS autenticado** com Device, app ID, versão, revisão,
+slot e revogação atuais. Quando essa fonte não existir, a tool
+pode expor **catálogo informativo estático** com indicação clara
+ou `unavailable`, nunca `installed=true` inferido.
+
+### Gates para a próxima integração (não estão homologados)
+
+1. Consultar quantas ações **efetivamente** constam da
+   `ActionRegistry.names` do Device após os filtros de host;
+   comparar com `PRODUCT_ACTIONS` e o snapshot publicado. Não
+   comparar as 93 ações globais com a UI do usuário.
+2. O limite atual `MAX_DEVICE_CAPABILITIES=64` lança erro se
+   a interseção habilitada ultrapassar 64. Na leitura estática do
+   source, cerca de 90 IDs Product correspondem aos registros
+   padrão da ActionRegistry **antes dos filtros de host**;
+   isso é **risco condicional**, não prova de falha no Device.
+   Se ocorrer, resolver no **contrato proprietário** com
+   atestação e versão/escopo compatíveis; não truncar
+   silenciosamente, ampliar apenas neste repositório ou anunciar
+   sucesso apesar de snapshot inválido.
+3. Provar `intelligence.app_catalog/detail` com e sem registro,
+   depois com instalação/atualização/remoção Native real, sem
+   confundir metadado empacotado com `CURRENT`; testar token
+   inválido e Device errado.
+4. Provar uma Action Product real com grant e receipt, seguida de
+   revogação. O modelo local Aura usa consentimento próprio do
+   Personal/OS; **não** reutilizar grant OAuth como permissão da Aura.
+5. Reaproveitar as PRs/owners existentes: a ponte Desktop Native
+   está na [OS #2400](https://github.com/ordaxsystems/ordax-os/pull/2400);
+   o gateway Conta [OS #2405](https://github.com/ordaxsystems/ordax-os/pull/2405)
+   **não é dependência do MCP DEV**, pois exige release coordenado.
+   Não criar outra ponte nem habilitar deploys ou grants para
+   fechar um gate documental.
+
+**Referência canônica de arquitetura/aceite:**
+[Capability Fabric — SSOT e matriz operacional](https://github.com/ordaxsystems/ordax-os/blob/main/docs/CAPABILITY-FABRIC.md).
+A entrada documentada aqui não implementa a ponte nem torna
+as tools Product executáveis pela Aura. Os testes de source
+`tests/test_device_capability_snapshot.py` e
+`tests/test_application_intelligence_actions.py` não substituem
+testes E2E no Device autenticado.
+
 ## OrdaX Intelligence transversal — decisão 2026-10-10
 
 O [handoff do OS](https://github.com/ordaxsystems/ordax-os/blob/main/INTELLIGENCE-HANDOFF.md) fixa a fronteira: Runtime possui o host do dispositivo, execução/política local e adapters host autorizados; **não** passa a ser owner do Intelligence, de inferência global, do plugin Product MCP ou do Studio. A [PR #63](https://github.com/ordaxsystems/ordax-runtime/pull/63) é um experimento DEV de bridge ChatGPT Web: testes fake de loopback não autorizam ativação nem provam login real. O plugin externo (Platform) e o chat OrdaX (OS/provider) são fluxos distintos. Nenhuma mudança nesta documentação ativa provider, serviço, grant ou conexão.
