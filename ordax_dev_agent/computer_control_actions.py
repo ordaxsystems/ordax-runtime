@@ -701,20 +701,25 @@ class ComputerControlActions:
                 )
 
     def computer_type(self, payload: dict[str, Any]) -> ActionResult:
+        """Targeted background text only; never route a missing target to user input.
+
+        The legacy global SendInput path is intentionally not an implicit
+        fallback: if the Owner switches to a browser, typing must not follow.
+        """
+        from .computer_background_input import (
+            UnsupportedBackgroundTarget,
+            type_to_background_edit,
+        )
+
         try:
-            self._windows_only()
-        except ValueError as error:
-            return ActionResult(False, str(error))
-        text = payload.get("text")
-        if not isinstance(text, str):
-            return ActionResult(False, "text must be a string")
-        if not text or len(text.encode("utf-8")) > 64 * 1024:
-            return ActionResult(False, "text must contain 1..65536 UTF-8 bytes")
-        try:
-            self._send_unicode(text)
-        except OSError as error:
-            return ActionResult(False, f"desktop typing failed: {error}")
-        return ActionResult(True, "desktop text sent", {"characters": len(text)})
+            data = type_to_background_edit(payload)
+        except UnsupportedBackgroundTarget as error:
+            return ActionResult(False, str(error), {
+                "error_code": str(error),
+                "mode": "background",
+                "action_dispatched": False,
+            })
+        return ActionResult(True, "background target text verified", data)
 
     def computer_hotkey(self, payload: dict[str, Any]) -> ActionResult:
         try:
