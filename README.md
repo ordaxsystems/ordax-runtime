@@ -41,6 +41,22 @@ separados, sem segundo catálogo de execução:
   revisão de sessão do Fabric. A autorização do cliente MCP nunca
   decorre do manifesto do app ou da escolha do modelo local.
 
+**Checkpoint DEV de continuidade (04/11/2026):**
+a [Platform #291](https://github.com/ordaxsystems/ordax-platform/issues/291)
+está **CLOSED**: o MCP executou ferramentas com recibos no Windows
+físico, e cinco identidades DEV obsoletas foram revogadas. **Não**
+reabrir a missão de enrollment/limpeza/grants sem regressão nova.
+A integração diferente entre **Aura/Store `CURRENT` do OrdaX
+Desktop Native** e as consultas Product continua pendente;
+[`OS #2400`](https://github.com/ordaxsystems/ordax-os/pull/2400)
+permaneceu aberta/com conflito na checagem. O plano de Owner
+[`OS #2405`](https://github.com/ordaxsystems/ordax-os/pull/2405)
+não é dependência do MCP DEV e mantém gates próprios de release.
+O handoff atual está no
+[`ordax-os`](https://github.com/ordaxsystems/ordax-os/blob/main/INTELLIGENCE-HANDOFF.md);
+não implementar novamente missões concluídas nem tratar este
+texto como autorização de deploy.
+
 ### Dois catálogos diferentes: evitar falso “sincronizado”
 
 `ordax_dev_agent/application_intelligence_actions.py` implementa
