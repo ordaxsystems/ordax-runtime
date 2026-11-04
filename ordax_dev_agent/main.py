@@ -62,7 +62,9 @@ def _transport_retry_delay(consecutive_failures: int) -> float:
     return min(30.0, 5.0 * (2 ** min(consecutive_failures - 1, 3)))
 
 
-def product_idle_claim_delay_seconds(idle_misses: int, configured_ceiling: float) -> float:
+def product_idle_claim_delay_seconds(
+    idle_misses: int, configured_ceiling: float, *, verified_wake: bool = False,
+) -> float:
     """Bounded idle polling that preserves the daily PostgreSQL query budget.
 
     A claim against an empty queue still consumes PostgreSQL queries. The
@@ -74,6 +76,12 @@ def product_idle_claim_delay_seconds(idle_misses: int, configured_ceiling: float
         raise ValueError("idle_misses must be positive")
     if not math.isfinite(configured_ceiling):
         raise ValueError("configured_ceiling must be finite")
+    if type(verified_wake) is not bool:
+        raise ValueError("verified_wake must be a boolean")
+    # A connected socket that has never delivered a real wake signal is not
+    # evidence of push availability. Keep the budgeted 30-60s claim fallback.
+    if verified_wake:
+        return 300.0
     # poll_seconds controls active connectivity, not the cost of repeatedly
     # claiming an empty PostgreSQL queue. The previous 8–12s idle ceiling
     # can exhaust Hyperdrive Free when several devices are enrolled.
@@ -856,14 +864,17 @@ def run(
                     idle_claim_misses += 1
                     # Stay very responsive during interactive work, then ease
                     # toward the configured ceiling while the agent is idle.
+                    # Only a connection with a verified wake message may
+                    # reduce SQL reconciliation to five minutes. A silent
+                    # socket must not make new actions stall for five minutes.
                     idle_delay = product_idle_claim_delay_seconds(
                         idle_claim_misses, config.poll_seconds,
+                        verified_wake=(
+                            wake_listener is not None
+                            and wake_listener.connected.is_set()
+                            and wake_listener.delivered.is_set()
+                        ),
                     )
-                    # When the nonauthoritative wake channel is connected,
-                    # reconcile a lost message every five minutes. Heartbeats
-                    # still occur on their normal independent 20-second clock.
-                    if wake_listener is not None and wake_listener.connected.is_set():
-                        idle_delay = 300.0
                     next_claim_due = time.monotonic() + idle_delay
                     _wait_for_native_access(
                         product_idle_wait_seconds(

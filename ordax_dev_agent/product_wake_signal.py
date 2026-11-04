@@ -59,6 +59,9 @@ class ProductWakeListener:
         }
         self.wake = threading.Event()
         self.connected = threading.Event()
+        # A WebSocket handshake alone is not delivery proof. Never enter the
+        # five-minute SQL fallback until this connection delivered a real wake.
+        self.delivered = threading.Event()
         self._stop = stop_requested
         self._local_access_enabled = local_access_enabled
         self._connect = connect_websocket
@@ -118,6 +121,7 @@ class ProductWakeListener:
                     if not self._credential_is_current():
                         return
                     connection_started = time.monotonic()
+                    self.delivered.clear()
                     self.connected.set()
                     self.wake.set()  # reconcile a job accepted during reconnect
                     while not self._stop.is_set() and self._local_allowed():
@@ -131,6 +135,7 @@ class ProductWakeListener:
                             # No remote instruction may be accepted over signals.
                             socket.close(code=1008, reason="invalid_product_wake")
                             break
+                        self.delivered.set()
                         self.wake.set()
             except Exception:
                 # No token, URL, exception payload or untrusted websocket
@@ -138,6 +143,7 @@ class ProductWakeListener:
                 pass
             finally:
                 self.connected.clear()
+                self.delivered.clear()
                 self.wake.set()  # revert immediately to budgeted SQL reconciliation
                 if (connection_started is not None
                         and time.monotonic() - connection_started
@@ -150,5 +156,6 @@ class ProductWakeListener:
     def close(self) -> None:
         # No other thread owns the Runtime transport or its credentials.
         self.connected.clear()
+        self.delivered.clear()
         if self._thread is not None:
             self._thread.join(timeout=4.0)
