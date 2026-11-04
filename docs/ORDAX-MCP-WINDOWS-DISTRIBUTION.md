@@ -17,6 +17,14 @@ de capacidades e o CLI de autorizacao Owner. Nao empacota Electron,
 `presentation` ou source `ordax-apps`. O processo visivel ao sistema
 continua `ORDAX Runtime.exe`; o produto apresentado e `OrdaX MCP`.
 
+O comando Python `ordax-mcp` e o exemplo `config/product-mcp.example.json`
+apontam somente para `ordax_dev_agent.product_mcp_server:main`, com
+identidade MCP `ordax-mcp`. As aliases de servidor remoto com nomes
+`ordax-product-mcp` e `ordax-studio-remote-mcp` foram retiradas. Isso
+nao muda a autoridade de grants na Platform, nem reinicia o Runtime
+instalado. Os comandos opcionais do Studio devem ser migrados com seus
+consumidores antes da retirada do restante do pacote Studio.
+
 ## Perfil de host do OrdaX Desktop (fonte, sem ativacao)
 
 O Desktop Windows do OrdaX OS e um host do **mesmo produto OrdaX**,

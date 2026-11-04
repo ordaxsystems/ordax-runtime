@@ -14,7 +14,7 @@ from .product_mcp import PRODUCT_MCP_TOOLS
 # The executable Product MCP is composed here. The large handler module remains
 # transport-neutral implementation during migration; this file owns the MCP
 # contract and therefore owns the device-vs-project scope visible to clients.
-mcp = FastMCP("ordax-studio-remote")
+mcp = FastMCP("ordax-mcp")
 
 # Kept patchable for focused unit tests and local embedding. Delegated handlers
 # synchronize this reference immediately before use.

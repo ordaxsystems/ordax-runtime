@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "ordax-studio": {
-      "command": "ordax-product-mcp",
+    "ordax-mcp": {
+      "command": "ordax-mcp",
       "env": {
         "ORDAX_PRODUCT_ACCESS_TOKEN": "<provide-at-runtime-do-not-commit>"
       }
