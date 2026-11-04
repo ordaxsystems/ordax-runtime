@@ -264,7 +264,7 @@ class ProductDeviceControlPlane:
         self._remote_heartbeat_recorded = status != "offline"
         if status != "offline":
             try:
-                self.product_central_session.tick()
+                self.product_central_session.schedule_tick()
             except Exception:
                 # Session attestation never weakens device transport health.
                 pass

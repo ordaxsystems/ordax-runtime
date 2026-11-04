@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import unittest
 
 import httpx
@@ -283,6 +285,74 @@ class ProductCentralSessionClientTests(unittest.TestCase):
         self.assertEqual(calls, 1)
         client.tick(now=30.0)
         self.assertEqual(calls, 2)
+
+    def test_slow_central_session_runs_without_blocking_canonical_heartbeat(self):
+        token = ["a" * 64]
+        entered = threading.Event()
+        release = threading.Event()
+        count = []
+
+        def handler(request):
+            count.append((request.method, request.url.path))
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("test central session was not released")
+            return httpx.Response(200, json={"ok": True, "pending": False})
+
+        client = self.make_client(token, handler)
+        started = time.monotonic()
+        self.assertTrue(client.schedule_tick())
+        self.assertLess(time.monotonic() - started, 0.2)
+        try:
+            self.assertTrue(entered.wait(2), "one central HTTP request must start")
+            self.assertFalse(client.schedule_tick(), "never duplicate an in-flight poll")
+            self.assertFalse(client.status.checked)
+        finally:
+            release.set()
+        for _ in range(100):
+            if client.status.checked:
+                break
+            time.sleep(0.01)
+        self.assertTrue(client.status.checked)
+        self.assertIsNone(client.status.last_error)
+        self.assertFalse(client.schedule_tick(), "preserve original poll budget")
+        self.assertEqual(count, [("GET", "/v3/product/device/central-session")])
+        client.close()
+        self.assertFalse(client.schedule_tick(), "closed client must not restart the poll")
+
+    def test_closing_does_not_confirm_inflight_old_challenge(self):
+        token = ["a" * 64]
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def handler(request):
+            calls.append(request.method)
+            if request.method == "GET":
+                entered.set()
+                if not release.wait(3):
+                    raise RuntimeError("test central session was not released")
+                return httpx.Response(200, json={
+                    "ok": True, "pending": True, "challenge_id": CHALLENGE_ID,
+                })
+            return httpx.Response(200, json={
+                "ok": True, "status": "bound", "device_id": DEVICE_ID,
+            })
+
+        client = self.make_client(token, handler)
+        self.assertTrue(client.schedule_tick())
+        self.assertTrue(entered.wait(2))
+        started = time.monotonic()
+        client.close()
+        self.assertLess(time.monotonic() - started, 0.7)
+        release.set()
+        for _ in range(100):
+            thread = client._tick_thread
+            if thread is not None and not thread.is_alive():
+                break
+            time.sleep(0.01)
+        self.assertEqual(calls, ["GET"], "closing must prevent a stale POST")
+        self.assertFalse(client.status.confirmed)
 
     def test_default_cadence_reuses_existing_five_second_heartbeat(self):
         token = ["a" * 64]

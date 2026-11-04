@@ -72,3 +72,26 @@ Este caminho não substitui `GET /health` (liveness O(1) do watchdog),
 OrdaX OS Native; no Native, o Supervisor do OS continua sendo o owner de
 restart, e o Windows continua com sua tarefa única. Não publicar essa porta
 fora de loopback nem transformar o endpoint numa ferramenta MCP pública.
+
+## Heartbeat Product versus sessao central (04/11/2026)
+
+A confirmacao de `POST /v3/device/transport/heartbeat` e a prova de
+conectividade do dispositivo. A verificacao adicional de
+`/v3/product/device/central-session` nao e requisito sincrono para
+`claim`, nem pode prender um heartbeat `busy` ou o relatorio terminal:
+a resposta desse endpoint opcional pode levar ate 8 segundos por
+requisicao. O mesmo heartbeat ja existente agora **agenda** uma
+verificacao na propria instancia de `ProductCentralSessionClient`,
+em no maximo uma thread daemon de curta duracao por vez, sem timer,
+daemon externo, fila de comandos, identidade ou token duplicado.
+A cadencia minima anterior de consultas e o conteudo da autoridade
+permanecem iguais, inclusive a revalidacao da identidade Native.
+A verificacao nao chama `claim` e nao substitui grants Device/Space.
+
+Em shutdown, a instancia impede novos polls e nao confirma challenges
+antigos depois de iniciar o fechamento. A resposta publica permanece
+uma observacao assincrona historica
+(`central_session.last_confirmation_observed`), nao um grant atual
+nem uma autorizacao de despacho. Testes:
+`tests/test_product_central_session.py` e
+`tests/test_product_device_control_plane.py`.
