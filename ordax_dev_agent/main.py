@@ -360,12 +360,13 @@ def _start_local_watchdog(
     if type(health_port) is not int or not 1 <= health_port <= 65535:
         raise ValueError("watchdog health port is invalid")
 
-    repo_root = Path(__file__).resolve().parents[1]
-    script = (
-        repo_root
-        / "scripts"
-        / "windows"
-        / "ordax-agent-watchdog.ps1"
+    # Packaged MCP has one canonical root, not a source checkout. Reuse the
+    # existing watchdog against that exact package; the legacy DevAgent keeps
+    # its repository script and scheduled-task name.
+    packaged_root = os.environ.get('ORDAX_PACKAGED_ROOT', '').strip()
+    repo_root = Path(packaged_root) if packaged_root else Path(__file__).resolve().parents[1]
+    script = (repo_root / 'ordax-agent-watchdog.ps1') if packaged_root else (
+        repo_root / 'scripts' / 'windows' / 'ordax-agent-watchdog.ps1'
     )
     if not script.is_file():
         print(f"local watchdog script missing: {script}", file=sys.stderr)
@@ -383,6 +384,8 @@ def _start_local_watchdog(
         "-HealthPort",
         str(health_port),
     ]
+    if packaged_root:
+        command.extend(['-RestartTaskName', 'OrdaX MCP'])
     try:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         process = subprocess.Popen(

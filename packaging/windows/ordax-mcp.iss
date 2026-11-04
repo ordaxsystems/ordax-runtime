@@ -54,8 +54,8 @@ Name: "{group}\\Selecionar dispositivo para sessão"; Filename: "{app}\\runtime\
 ; A read-only network check. Never launches OAuth or issues grants.
 Name: "{group}\\OrdaX MCP"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 
-[Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OrdaX MCP"; ValueData: """{app}\{#RuntimeExe}"""; Flags: uninsdeletevalue
+; The single per-user Scheduled Task (registered after install) supersedes
+; HKCU Run: it restarts the same singleton launcher after unexpected exits.
 
 [Run]
 ; Keep the one supervised Runtime silent and installed once; never use a
@@ -74,6 +74,15 @@ Filename: "{app}\runtime\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_dev
 function InitializeSetup(): Boolean;
 begin
   Result := True;
+  // Prevent self-update from terminating the process tree that spawned setup.
+  // The verified upgrade handoff uses an independent Windows scheduled task.
+  if GetEnv('ORDAX_RUNTIME_SUPERVISED') = '1' then
+  begin
+    Log('ORDAX_MCP_UNSAFE_SELF_UPGRADE_BLOCKED');
+    SuppressibleMsgBox('Atualizacao iniciada dentro do OrdaX MCP. Use o handoff verificado por tarefa independente; esta tentativa nao encerrou o agente.', mbError, MB_OK, IDOK);
+    Result := False;
+    Exit;
+  end;
   if FileExists(ExpandConstant('{localappdata}\Programs\ORDAX\ORDAX Studio.exe')) or
      FileExists(ExpandConstant('{localappdata}\Programs\ORDAX\ORDAX Runtime.exe')) then
   begin
@@ -105,6 +114,30 @@ begin
     Log('ORDAX_MCP_QUIESCE_FAILED exit=' + IntToStr(Code));
 end;
 
+function RunMcpLifecycle(const Operation, Root: String): Boolean;
+var
+  Code: Integer;
+  Script: String;
+begin
+  Script := AddBackslash(Root) + 'ordax-mcp-lifecycle.ps1';
+  Code := -1;
+  Result := FileExists(Script) and Exec(
+    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+      Script + '" -Operation ' + Operation,
+    '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := Result and (Code = 0);
+  if not Result then
+    Log('ORDAX_MCP_LIFECYCLE_FAILED operation=' + Operation + ' exit=' + IntToStr(Code));
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    if not RunMcpLifecycle('Install', ExpandConstant('{app}')) then
+      RaiseException('Falha ao registrar recuperacao automatica do OrdaX MCP.');
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
@@ -114,7 +147,9 @@ end;
 
 function InitializeUninstall(): Boolean;
 begin
-  Result := QuiesceOwnedRuntime(ExpandConstant('{app}'));
+  Result := RunMcpLifecycle('Uninstall', ExpandConstant('{app}'));
+  if Result then
+    Result := QuiesceOwnedRuntime(ExpandConstant('{app}'));
   if not Result then
     SuppressibleMsgBox('O Runtime nao foi encerrado. A desinstalacao foi bloqueada para preservar a instalacao.', mbError, MB_OK, IDOK);
 end;

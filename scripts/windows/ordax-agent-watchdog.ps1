@@ -17,6 +17,25 @@ $stateDir = Join-Path $env:LOCALAPPDATA "OrdaX\DevAgent"
 $logPath = Join-Path $stateDir "watchdog.log"
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 
+# Bind the watched PID to its original creation time and executable. PID reuse
+# must never terminate an unrelated user's process after the agent exits.
+$original = Get-Process -Id $AgentPid -ErrorAction SilentlyContinue
+if (-not $original) { exit 0 }
+try {
+    $originalStartUtc = $original.StartTime.ToUniversalTime().Ticks
+    $originalPath = [IO.Path]::GetFullPath([string]$original.Path)
+    if (-not $originalPath) { exit 0 }
+} catch { exit 0 }
+
+function Same-AgentProcess {
+    param($Process)
+    if (-not $Process) { return $false }
+    try {
+        return $Process.StartTime.ToUniversalTime().Ticks -eq $originalStartUtc -and
+            [IO.Path]::GetFullPath([string]$Process.Path) -ieq $originalPath
+    } catch { return $false }
+}
+
 function Write-WatchdogLog([string]$Message) {
     $stamp = [DateTime]::UtcNow.ToString("o")
     Add-Content -Path $logPath -Value "$stamp $Message" -Encoding UTF8
@@ -25,7 +44,12 @@ function Write-WatchdogLog([string]$Message) {
 function Stop-AgentForRecovery([string]$Reason) {
     Write-WatchdogLog "RECOVERY $Reason pid=$AgentPid"
     try {
-        Stop-Process -Id $AgentPid -Force -ErrorAction Stop
+        $current = Get-Process -Id $AgentPid -ErrorAction Stop
+        if (-not (Same-AgentProcess $current)) {
+            Write-WatchdogLog "RECOVERY_ABORT identity changed pid=$AgentPid"
+            return $false
+        }
+        Stop-Process -InputObject $current -Force -ErrorAction Stop
         Write-WatchdogLog "AGENT_STOPPED pid=$AgentPid"
         return $true
     } catch {
@@ -59,7 +83,9 @@ function Request-AgentRestartIfNeeded {
         # No healthy successor yet; continue with the scheduled-task state.
     }
 
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    # The packaged Python registry/control plane can take longer than 20s to
+    # initialize. Avoid killing the new launcher during its legitimate startup.
+    $deadline = [DateTime]::UtcNow.AddSeconds(90)
     while ([DateTime]::UtcNow -lt $deadline) {
         $task = Get-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
         if (-not $task) {
@@ -115,8 +141,8 @@ $busySince = $null
 
 while ($true) {
     $process = Get-Process -Id $AgentPid -ErrorAction SilentlyContinue
-    if (-not $process) {
-        Write-WatchdogLog "EXIT parent process ended pid=$AgentPid"
+    if (-not (Same-AgentProcess $process)) {
+        Write-WatchdogLog "EXIT parent process ended or changed identity pid=$AgentPid"
         Request-AgentRestartIfNeeded
         exit 0
     }
