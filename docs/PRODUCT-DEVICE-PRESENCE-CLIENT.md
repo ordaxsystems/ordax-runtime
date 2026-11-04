@@ -95,3 +95,21 @@ uma observacao assincrona historica
 nem uma autorizacao de despacho. Testes:
 `tests/test_product_central_session.py` e
 `tests/test_product_device_control_plane.py`.
+
+## Descoberta local de capacidades sem varredura (04/11/2026)
+
+O endpoint `GET /capabilities` no **mesmo** servidor loopback,
+protegido pelo mesmo controle de Host, usa diretamente os nomes
+registrados em `ActionRegistry.names` (já filtrados pelas restrições
+do host e pelos adaptadores reais). Continua aplicando o contrato
+`device_capability_snapshot`, que só publica capacidades previamente
+expostas em `PRODUCT_ACTIONS`: não concede grants nem anuncia
+handlers gráficos ausentes no Native. Durante inicialização, com
+registry ainda indisponível, devolve a lista vazia/degraded.
+
+Antes, a mesma rota chamava `agent_status`, com sondagens de apps
+e arquivos sem relação com a descoberta. Medição física no Windows
+antes da alteração: `/readiness` = 211 ms e `/capabilities` expirou
+após 12,6 s. O diagnóstico detalhado permanece em `GET /status`;
+clientes que só precisam de ferramentas não dependem dele. Sem novo
+serviço, thread, cache, lista duplicada ou consulta ao banco.
