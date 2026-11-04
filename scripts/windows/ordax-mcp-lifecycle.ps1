@@ -62,7 +62,17 @@ function Save-Journal {
     $encoded = $Journal | ConvertTo-Json -Depth 6 -Compress
     [IO.File]::WriteAllText($tmp, $encoded, [Text.UTF8Encoding]::new($false))
     if (Test-Path -LiteralPath $Path) {
-        [IO.File]::Replace($tmp, $Path, $null)
+        # Windows PowerShell 5.1 / .NET Framework rejects a null backup path.
+        # Use a unique sibling backup so the destination replacement remains
+        # atomic even if the updater is interrupted between journal phases.
+        $backup = Join-Path (Split-Path $Path -Parent) ('journal.' + [guid]::NewGuid().ToString('N') + '.previous')
+        try {
+            [IO.File]::Replace($tmp, $Path, $backup)
+        } finally {
+            if (Test-Path -LiteralPath $backup) {
+                Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+            }
+        }
     } else {
         [IO.File]::Move($tmp, $Path)
     }

@@ -172,6 +172,8 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn("$source.VersionInfo.CompanyName.Trim() -cne 'ORDAX'", lifecycle)
         self.assertIn("$source.VersionInfo.ProductName.Trim() -cne 'OrdaX MCP'", lifecycle)
         self.assertNotIn('-PassThru -Wait -ErrorAction Stop', lifecycle)
+        self.assertIn('[IO.File]::Replace($tmp, $Path, $backup)', lifecycle)
+        self.assertNotIn('[IO.File]::Replace($tmp, $Path, $null)', lifecycle)
         self.assertIn('Filename: "{app}\\{#RuntimeExe}"; Flags: nowait runhidden', installer)
         self.assertNotIn("OrdaX Dev Agent.lnk", installer)
         self.assertNotIn("Register-ScheduledTask", installer)
