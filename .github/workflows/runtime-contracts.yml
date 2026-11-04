@@ -9,7 +9,54 @@ permissions:
   contents: read
 
 jobs:
+  # Keep the existing required checks; only proven documentation edits skip
+  # expensive Linux and Windows contract suites. Unknown diffs fail closed.
+  change-impact:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact documentation-only diff
+        id: scope
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          # No valid base, missing Git history or diff error -> run every suite.
+          if [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] &&
+             [[ ! "$BASE_SHA" =~ ^0{40}$ ]] &&
+             git fetch --no-tags --depth=1 origin "$BASE_SHA" &&
+             git diff --name-status -z --no-renames "$BASE_SHA" HEAD > "$RUNNER_TEMP/changed-status"; then
+            python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import sys
+          from pathlib import Path
+
+          raw = (Path(os.environ["RUNNER_TEMP"]) / "changed-status").read_bytes()
+          parts = raw.split(b"\0")
+          if parts[-1:] == [b""]:
+              parts.pop()
+          entries = list(zip(parts[::2], parts[1::2])) if len(parts) % 2 == 0 else []
+          docs_only = bool(entries) and all(
+              status == b"M" and path in {b"AGENTS.md", b"README.md"}
+              for status, path in entries
+          )
+          print(f"docs_only={str(docs_only).lower()}")
+          print(f"Runtime contract impact: {entries!r}; docs_only={docs_only}", file=sys.stderr)
+          PY
+          else
+            echo 'docs_only=false' >> "$GITHUB_OUTPUT"
+            echo 'Unproven documentation-only diff; full Runtime Contracts applies'
+          fi
+
   native-runtime-composition:
+    needs: change-impact
+    if: needs.change-impact.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -46,6 +93,8 @@ jobs:
           tests.test_ordax_device_agent_alias
 
   product-mcp-minimum-sdk:
+    needs: change-impact
+    if: needs.change-impact.outputs.docs_only != 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -58,6 +107,8 @@ jobs:
         run: python -m unittest tests.test_product_action_recovery tests.test_product_remote_client tests.test_product_mcp_server tests.test_device_mcp_headless_files
 
   runtime-contracts:
+    needs: change-impact
+    if: needs.change-impact.outputs.docs_only != 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
