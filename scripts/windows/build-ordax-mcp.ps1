@@ -23,7 +23,10 @@ if ($env:GITHUB_ACTIONS -eq "true" -and $env:GITHUB_SHA -and $env:GITHUB_SHA -cn
 }
 # Every installer must identify the exact packaged commit. A local dirty
 # checkout would otherwise label modified bytes with the older HEAD SHA.
-$dirty = @(& git -C $root status --porcelain --untracked-files=normal)
+# CI checks out the immutable Platform pin under .ordax/platform;
+# that nested Git repository is NOT Runtime package source. Exclude only
+# its exact root. Tracked changes and any other untracked source still fail.
+$dirty = @(& git -C $root status --porcelain --untracked-files=all -- . ':(exclude).ordax/platform')
 if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
   throw "Runtime source must be clean for candidate packaging"
 }

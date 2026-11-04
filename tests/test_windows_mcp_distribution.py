@@ -1,5 +1,7 @@
 """Independent Windows OrdaX MCP distribution contracts (no Studio product authority)."""
 import re
+import subprocess
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -83,7 +85,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
     def test_local_candidate_requires_clean_sources_and_supports_user_inno(self):
         builder = BUILDER.read_text(encoding="utf-8")
         self.assertIn(
-            "git -C $root status --porcelain --untracked-files=normal", builder,
+            "git -C $root status --porcelain --untracked-files=all -- . ':(exclude).ordax/platform'", builder,
         )
         self.assertIn(
             'if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0)', builder,
@@ -98,6 +100,42 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertNotIn(
             '$env:GITHUB_ACTIONS -eq "true" -and $dirty.Count', builder,
         )
+
+    def test_locked_nested_platform_checkout_is_only_source_status_exclusion(self):
+        # Reproduce the CI layout without downloading or rebuilding the Platform.
+        # Every other untracked file and every tracked mutation must still fail.
+        with tempfile.TemporaryDirectory(prefix="ordax-mcp-git-") as temporary:
+            repo = Path(temporary) / "runtime"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            tracked = repo / "tracked.py"
+            tracked.write_text("original\n", encoding="utf-8")
+            subprocess.run(["git", "add", "tracked.py"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "-c", "user.name=OrdaX Test",
+                 "-c", "user.email=test@ordax.invalid", "commit", "-qm", "init"],
+                cwd=repo, check=True,
+            )
+            platform = repo / ".ordax" / "platform"
+            platform.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=platform, check=True)
+            (platform / "reference.txt").write_text("pinned checkout\n", encoding="utf-8")
+
+            command = [
+                "git", "status", "--porcelain", "--untracked-files=all",
+                "--", ".", ":(exclude).ordax/platform",
+            ]
+
+            def dirty() -> str:
+                return subprocess.check_output(command, cwd=repo, text=True)
+
+            self.assertEqual(dirty(), "", "only the pinned checkout is excluded")
+            extra = repo / "unexpected-source.py"
+            extra.write_text("must block\n", encoding="utf-8")
+            self.assertIn("unexpected-source.py", dirty())
+            extra.unlink()
+            tracked.write_text("modified\n", encoding="utf-8")
+            self.assertIn("tracked.py", dirty())
 
     def test_no_duplicate_agent_or_clobber_of_existing_studio_installation(self):
         installer = INNO.read_text(encoding="utf-8")
