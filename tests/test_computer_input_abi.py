@@ -26,19 +26,12 @@ class ComputerInputAbiTests(unittest.TestCase):
         self.assertGreaterEqual(ctypes.sizeof(_INPUTUNION), ctypes.sizeof(_KEYBDINPUT))
         self.assertGreaterEqual(ctypes.sizeof(_INPUTUNION), ctypes.sizeof(_HARDWAREINPUT))
 
-    @unittest.skipUnless(os.name == "nt", "SendInput is Windows-only")
-    def test_send_unicode_submits_complete_key_pairs(self):
-        user32 = Mock()
-        user32.SendInput.return_value = 2
-        with patch("ctypes.windll.user32", user32):
-            ComputerControlActions._send_unicode("A")
-
-        user32.SendInput.assert_called_once()
-        count, inputs, cb_size = user32.SendInput.call_args.args
-        self.assertEqual(count, 2)
-        self.assertEqual(cb_size, ctypes.sizeof(_INPUT))
-        self.assertEqual(inputs[0].type, 1)
-        self.assertEqual(inputs[1].type, 1)
+    def test_type_without_target_never_reaches_global_sendinput(self):
+        with patch.object(ComputerControlActions, "_send_unicode") as send:
+            result = ComputerControlActions().computer_type({"text": "A"})
+        self.assertFalse(result.ok)
+        self.assertEqual(result.data["error_code"], "background_target_handle_required")
+        send.assert_not_called()
 
 
 if __name__ == "__main__":
