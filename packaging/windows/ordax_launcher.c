@@ -467,6 +467,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
             result = 0;
         }
     } else {
+        // All action children inherit this marker. The Inno installer must
+        // refuse an in-job self-upgrade and demand the independent Task Scheduler
+        // handoff, otherwise quiesce kills its own installer before completion.
+        SetEnvironmentVariableW(L"ORDAX_RUNTIME_SUPERVISED", L"1");
         DWORD backoff_ms = 1000;
         for (;;) {
             if (WaitForSingleObject(shutdown_event, 0) == WAIT_OBJECT_0) {

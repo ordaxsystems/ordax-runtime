@@ -12,6 +12,8 @@ on:
       - "packaging/windows/ordax_launcher.c"
       - "scripts/windows/assert-runtime-package-capabilities.ps1"
       - "scripts/windows/ordax-upgrade-quiesce.ps1"
+      - "scripts/windows/ordax-mcp-lifecycle.ps1"
+      - "scripts/windows/ordax-agent-watchdog.ps1"
       - "tests/test_windows_mcp_distribution.py"
       # This installer pip-installs the exact Runtime project source, not a
       # hand-picked set of entrypoints. Keep these package roots byte-for-byte
@@ -63,7 +65,9 @@ jobs:
             'scripts/windows/build-ordax-mcp.ps1',
             'scripts/windows/assert-runtime-package-capabilities.ps1',
             'scripts/windows/get-locked-embedded-python.ps1',
-            'scripts/windows/ordax-upgrade-quiesce.ps1'
+            'scripts/windows/ordax-upgrade-quiesce.ps1',
+            'scripts/windows/ordax-mcp-lifecycle.ps1',
+            'scripts/windows/ordax-agent-watchdog.ps1'
           )) {
             $tokens = $null
             $errors = $null
@@ -166,6 +170,15 @@ jobs:
               $manifest.runtime_source_commit -cne $env:GITHUB_SHA) {
             throw 'Candidate provenance, ownership or release status invalid'
           }
+          # The existing singleton launcher must have one OS-owned recovery task.
+          $supervisor = Get-ScheduledTask -TaskName 'OrdaX MCP' -ErrorAction Stop
+          if (@($supervisor.Actions).Count -ne 1 -or
+              $supervisor.Actions[0].Arguments -notlike '*ordax-mcp-lifecycle.ps1* -Operation Launch*') {
+            throw 'The sole MCP recovery task was not registered by the installer'
+          }
+          if (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue) {
+            throw 'Legacy MCP autorun duplicates the scheduled recovery owner'
+          }
           & .\scripts\windows\assert-runtime-package-capabilities.ps1 -PrivatePython $privatePython -RuntimeRoot (Join-Path $root 'runtime') -Phase installed
           if ($LASTEXITCODE -ne 0) { throw 'Installed Runtime capability proof failed' }
           & $privatePython -m ordax_dev_agent.owner_grants_cli --help | Out-Null
@@ -225,6 +238,7 @@ jobs:
             throw
           }
           if (Test-Path (Join-Path $root 'ORDAX Runtime.exe')) { throw 'Standalone MCP Runtime remained after uninstall' }
+          if (Get-ScheduledTask -TaskName 'OrdaX MCP' -ErrorAction SilentlyContinue) { throw 'MCP recovery task leaked after uninstall' }
           if (Test-Path -LiteralPath $shortcutPath) { throw 'MCP connect shortcut remained after uninstall' }
           if (Test-Path -LiteralPath $diagnosticShortcutPath) { throw 'MCP network diagnostic shortcut remained after uninstall' }
           Write-Host "ORDAX_MCP_STANDALONE_INSTALL_SMOKE=PASS SHA256=$hash"

@@ -123,7 +123,8 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertIn("function Request-AgentRestartIfNeeded", watchdog)
         self.assertIn("function Stop-AgentForRecovery", watchdog)
         self.assertIn("function Recover-Agent", watchdog)
-        self.assertIn("Stop-Process -Id $AgentPid -Force", watchdog)
+        self.assertIn("Stop-Process -InputObject $current -Force", watchdog)
+        self.assertIn("Same-AgentProcess $current", watchdog)
         self.assertIn("Invoke-RestMethod -Uri $healthUrl", watchdog)
         self.assertIn(
             "Start-ScheduledTask -TaskName $RestartTaskName",

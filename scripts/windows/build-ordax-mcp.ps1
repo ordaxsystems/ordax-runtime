@@ -141,6 +141,8 @@ try {
 } finally { Pop-Location }
 if (-not (Test-Path $launcher)) { throw "Runtime launcher missing" }
 Copy-Item (Join-Path $root "scripts\windows\ordax-upgrade-quiesce.ps1") (Join-Path $stage "ordax-upgrade-quiesce.ps1")
+Copy-Item (Join-Path $root "scripts\windows\ordax-mcp-lifecycle.ps1") (Join-Path $stage "ordax-mcp-lifecycle.ps1")
+Copy-Item (Join-Path $root "scripts\windows\ordax-agent-watchdog.ps1") (Join-Path $stage "ordax-agent-watchdog.ps1")
 $manifest = [ordered]@{
   schema = "ordax.mcp-windows-candidate/1"
   product = "OrdaX MCP"
