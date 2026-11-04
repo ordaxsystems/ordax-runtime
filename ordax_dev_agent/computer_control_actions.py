@@ -56,57 +56,11 @@ for _ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789":
     _VK[_ch.lower()] = ord(_ch)
 
 _KEYEVENTF_KEYUP = 0x0002
-_KEYEVENTF_UNICODE = 0x0004
-_INPUT_KEYBOARD = 1
 _WS_EX_TOOLWINDOW = 0x00000080
 _WS_EX_APPWINDOW = 0x00040000
 _GWL_EXSTYLE = -20
 
-
 _ULONG_PTR = ctypes.c_size_t
-
-
-class _MOUSEINPUT(ctypes.Structure):
-    _fields_ = [
-        ("dx", wintypes.LONG),
-        ("dy", wintypes.LONG),
-        ("mouseData", wintypes.DWORD),
-        ("dwFlags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
-        ("dwExtraInfo", _ULONG_PTR),
-    ]
-
-
-class _KEYBDINPUT(ctypes.Structure):
-    _fields_ = [
-        ("wVk", wintypes.WORD),
-        ("wScan", wintypes.WORD),
-        ("dwFlags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
-        ("dwExtraInfo", _ULONG_PTR),
-    ]
-
-
-class _HARDWAREINPUT(ctypes.Structure):
-    _fields_ = [
-        ("uMsg", wintypes.DWORD),
-        ("wParamL", wintypes.WORD),
-        ("wParamH", wintypes.WORD),
-    ]
-
-
-class _INPUTUNION(ctypes.Union):
-    _fields_ = [
-        ("mi", _MOUSEINPUT),
-        ("ki", _KEYBDINPUT),
-        ("hi", _HARDWAREINPUT),
-    ]
-
-
-class _INPUT(ctypes.Structure):
-    _anonymous_ = ("union",)
-    _fields_ = [("type", wintypes.DWORD), ("union", _INPUTUNION)]
-
 
 _TH32CS_SNAPPROCESS = 0x00000002
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -675,46 +629,26 @@ class ComputerControlActions:
         user32.mouse_event(flag, 0, 0, int(amount * 120), 0)
         return ActionResult(True, "desktop scroll sent", {"amount": amount, "horizontal": horizontal})
 
-    @staticmethod
-    def _send_unicode(text: str) -> None:
-        user32 = ctypes.windll.user32
-        send_input = user32.SendInput
-        send_input.argtypes = [wintypes.UINT, ctypes.POINTER(_INPUT), ctypes.c_int]
-        send_input.restype = wintypes.UINT
-        units = text.encode("utf-16-le")
-        for index in range(0, len(units), 2):
-            scan = int.from_bytes(units[index:index + 2], "little")
-            inputs = (_INPUT * 2)(
-                _INPUT(
-                    type=_INPUT_KEYBOARD,
-                    ki=_KEYBDINPUT(0, scan, _KEYEVENTF_UNICODE, 0, 0),
-                ),
-                _INPUT(
-                    type=_INPUT_KEYBOARD,
-                    ki=_KEYBDINPUT(0, scan, _KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP, 0, 0),
-                ),
-            )
-            sent = send_input(len(inputs), inputs, ctypes.sizeof(_INPUT))
-            if sent != len(inputs):
-                raise OSError(
-                    f"Windows accepted {sent}/{len(inputs)} unicode keyboard events"
-                )
-
     def computer_type(self, payload: dict[str, Any]) -> ActionResult:
+        """Targeted background text only; never route a missing target to user input.
+
+        The legacy global SendInput path is intentionally not an implicit
+        fallback: if the Owner switches to a browser, typing must not follow.
+        """
+        from .computer_background_input import (
+            UnsupportedBackgroundTarget,
+            type_to_background_edit,
+        )
+
         try:
-            self._windows_only()
-        except ValueError as error:
-            return ActionResult(False, str(error))
-        text = payload.get("text")
-        if not isinstance(text, str):
-            return ActionResult(False, "text must be a string")
-        if not text or len(text.encode("utf-8")) > 64 * 1024:
-            return ActionResult(False, "text must contain 1..65536 UTF-8 bytes")
-        try:
-            self._send_unicode(text)
-        except OSError as error:
-            return ActionResult(False, f"desktop typing failed: {error}")
-        return ActionResult(True, "desktop text sent", {"characters": len(text)})
+            data = type_to_background_edit(payload)
+        except UnsupportedBackgroundTarget as error:
+            return ActionResult(False, str(error), {
+                "error_code": str(error),
+                "mode": "background",
+                "action_dispatched": False,
+            })
+        return ActionResult(True, "background target text verified", data)
 
     def computer_hotkey(self, payload: dict[str, Any]) -> ActionResult:
         try:
