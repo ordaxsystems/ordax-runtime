@@ -8,6 +8,7 @@ already verified by the canonical Product device heartbeat.
 from __future__ import annotations
 
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -100,12 +101,40 @@ class ProductCentralSessionClient:
         self._min_poll_seconds = float(min_poll_seconds)
         self._next_poll_at = 0.0
         self._status = ProductCentralSessionStatus(False, False, None, None, None)
+        self._tick_lock = threading.Lock()
+        self._tick_thread: threading.Thread | None = None
+        self._closing = threading.Event()
 
     @property
     def status(self) -> ProductCentralSessionStatus:
         return self._status
 
+    def schedule_tick(self) -> bool:
+        """Run the existing attestation check off the heartbeat/claim path.
+
+        The heartbeat is the only trigger: no extra timer, daemon process,
+        credential store, or concurrent session polls. A stalled optional
+        attestation cannot hold the authoritative Product device heartbeat.
+        """
+        with self._tick_lock:
+            if (self._closing.is_set()
+                    or time.monotonic() < self._next_poll_at
+                    or (self._tick_thread is not None and self._tick_thread.is_alive())):
+                return False
+            self._tick_thread = threading.Thread(
+                target=self.tick,
+                name="ordax-product-central-session",
+                daemon=True,
+            )
+            self._tick_thread.start()
+            return True
+
     def close(self) -> None:
+        with self._tick_lock:
+            self._closing.set()
+            active = self._tick_thread
+        if active is not None and active.is_alive():
+            active.join(timeout=0.25)
         if self._owns_http:
             self._http.close()
 
@@ -134,6 +163,8 @@ class ProductCentralSessionClient:
         return value
 
     def tick(self, *, now: float | None = None) -> ProductCentralSessionStatus:
+        if self._closing.is_set():
+            return self._status
         current = time.monotonic() if now is None else float(now)
         if current < self._next_poll_at:
             return self._status
@@ -165,6 +196,11 @@ class ProductCentralSessionClient:
             ):
                 raise RuntimeError("product_central_session_response_invalid")
 
+            # Do not confirm an old challenge while shutdown/revocation is in
+            # progress. The next accepted heartbeat can schedule a fresh poll.
+            if self._closing.is_set():
+                return self._status
+            credential = self._credential(self._credential_provider())
             confirmed = self._trusted_ingress.request(
                 "/v3/product/device/central-session",
                 lambda url: self._http.post(

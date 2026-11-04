@@ -40,7 +40,7 @@ def token(root: Path) -> None:
 
 class Central:
     def __init__(self): self.ticks = 0
-    def tick(self): self.ticks += 1
+    def schedule_tick(self): self.ticks += 1
 
 
 class ProductDeviceControlPlaneTests(unittest.TestCase):
