@@ -549,11 +549,21 @@ class ComputerFilesystemActions:
             "computer.process_stop",
         )
         registered = getattr(self, "_actions", {})
+        # The legacy implemented_actions field describes the portable
+        # device-terminal/process family only. Do not mistake its seven
+        # entries for the complete Computer Control catalog.
+        # The final registry already applies host/Native adapter boundaries;
+        # deriving from it avoids advertising Win32 actions on OrdaX Native.
+        registered_computer_actions = sorted(
+            name for name in registered if name.startswith("computer.")
+        )
         status["runtime_capabilities"] = {
             "agent_version": __version__,
             "implemented_actions": [
                 name for name in device_actions if name in registered
             ],
+            "registered_computer_actions": registered_computer_actions,
+            "registered_computer_action_count": len(registered_computer_actions),
         }
         return ActionResult(True, "computer access policy ready", status)
 
