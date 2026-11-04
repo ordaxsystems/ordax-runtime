@@ -24,7 +24,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn('Name: "{group}\\\\Conectar dispositivo"', installer)
         self.assertIn('Filename: "{app}\\\\runtime\\\\pythonw.exe"', installer)
         self.assertIn('Parameters: "-m ordax_dev_agent.owner_device_connect_gui"', installer)
-        self.assertIn('Name: "{group}\\\\Verificar conexão"', installer)
+        self.assertIn('Name: "{group}\\\\OrdaX MCP"', installer)
         self.assertIn(
             'Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"',
             installer,
@@ -60,6 +60,12 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             installer.count('Name: "{group}\\\\Iniciar ou reativar OrdaX MCP"'), 1
         )
         self.assertIn('Name: "{userdesktop}\\\\OrdaX MCP"', installer)
+        self.assertIn(
+            'Name: "{userdesktop}\\\\OrdaX MCP"; Filename: "{app}\\\\runtime\\\\pythonw.exe"; '
+            'Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"',
+            installer,
+        )
+        self.assertNotIn('Name: "{group}\\\\Verificar conexão"', installer)
         self.assertIn('Name: "desktopicon"', installer)
         self.assertIn("Tasks: desktopicon", installer)
         self.assertIn('Filename: "{app}\\\\{#RuntimeExe}"', installer)

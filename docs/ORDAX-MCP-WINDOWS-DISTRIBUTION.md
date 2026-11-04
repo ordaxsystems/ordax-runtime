@@ -147,14 +147,17 @@ O instalador independente registra **uma única** inicialização automática no
 `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run`, apontando para
 `ORDAX Runtime.exe`. O menu Iniciar deve oferecer sempre **Iniciar ou reativar
 OrdaX MCP**, e o assistente oferece **OrdaX MCP** na Área de Trabalho como
-tarefa opcional, selecionada por padrão. Ambos apontam para o **mesmo
-launcher instalado**, não para um script, ambiente virtual ou segundo agente.
+tarefa opcional, selecionada por padrão. O atalho principal **OrdaX MCP**
+(Área de Trabalho e menu Iniciar) abre o diagnóstico já existente no Python
+privado, sem iniciar outro agente ou solicitar OAuth. **Iniciar ou reativar
+OrdaX MCP** permanece separado e usa o launcher canônico.
 
 O launcher protege a instância com `Local\\ORDAXRuntime`; uma segunda
 invocação não inicia outro processo supervisionado. O filho Native já tem
 recuperação com espera progressiva no próprio launcher (sem adicionar outro
-watchdog, serviço ou tarefa agendada). Os atalhos não fazem cadastro,
-concessão de acesso, escolha de sessão nem afirmam prontidão remota.
+watchdog, serviço ou tarefa agendada). Os atalhos principais não fazem
+cadastro, concessão de acesso, escolha de sessão nem afirmam prontidão remota.
+As ações administrativas deliberadas continuam em entradas distintas.
 A UI de conexão Owner permanece independente; a prova de funcionamento
 ainda requer chamada MCP real com recibo, no dispositivo correto.
 

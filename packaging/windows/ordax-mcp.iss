@@ -44,7 +44,7 @@ Name: "desktopicon"; Description: "Criar atalho do OrdaX MCP na Área de Trabalh
 ; Activation always targets the same singleton launcher and never enrolls or grants access.
 Name: "{group}\\Iniciar ou reativar OrdaX MCP"; Filename: "{app}\\{#RuntimeExe}"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 ; The desktop shortcut is an explicit installer choice, checked by default.
-Name: "{userdesktop}\\OrdaX MCP"; Filename: "{app}\\{#RuntimeExe}"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"; Tasks: desktopicon
+Name: "{userdesktop}\\OrdaX MCP"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"; Tasks: desktopicon
 ; This shortcut only opens the existing Owner PKCE enrollment flow in the
 ; packaged, private Python. It does not launch another Runtime or issue grants.
 Name: "{group}\\Conectar dispositivo"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
@@ -52,7 +52,7 @@ Name: "{group}\\Conectar dispositivo"; Filename: "{app}\\runtime\\pythonw.exe"; 
 ; authenticated canonical Owner selection API, never issuing grants or actions.
 Name: "{group}\\Selecionar dispositivo para sessão"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --selecionar-sessao"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 ; A read-only network check. Never launches OAuth or issues grants.
-Name: "{group}\\Verificar conexão"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
+Name: "{group}\\OrdaX MCP"; Filename: "{app}\\runtime\\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_device_connect_gui --verificar-rede"; WorkingDir: "{app}"; IconFilename: "{app}\\{#RuntimeExe}"
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OrdaX MCP"; ValueData: """{app}\{#RuntimeExe}"""; Flags: uninsdeletevalue
