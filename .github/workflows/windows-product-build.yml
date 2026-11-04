@@ -16,14 +16,45 @@ permissions:
 jobs:
   packaging-contracts:
     runs-on: windows-latest
+    outputs:
+      docs_only: ${{ steps.impact.outputs.docs_only }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Classify exact docs-only change (fail closed)
+        id: impact
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $docsOnly = $false
+          $base = $env:BASE_SHA
+          # Tags, manual releases and unknown revisions always use the full gates.
+          if (($env:GITHUB_EVENT_NAME -eq 'pull_request' -or $env:GITHUB_EVENT_NAME -eq 'push') -and
+              $env:GITHUB_REF -notlike 'refs/tags/*' -and
+              $base -cmatch '^[0-9a-f]{40}$' -and
+              $base -cnotmatch '^0{40}$') {
+            git fetch --no-tags --depth=1 origin $base
+            if ($LASTEXITCODE -eq 0) {
+              $paths = @(git diff --name-only --no-renames $base HEAD)
+              if ($LASTEXITCODE -eq 0 -and $paths.Count -gt 0) {
+                # Never skip contracts, workflow edits, packaging or executable source.
+                $allowed = @('AGENTS.md', 'README.md')
+                $docsOnly = @($paths | Where-Object { $_ -notin $allowed }).Count -eq 0
+              }
+            }
+          }
+          "docs_only=$($docsOnly.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          Write-Host "Docs-only Windows impact: $docsOnly"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        if: steps.impact.outputs.docs_only != 'true'
         with:
           python-version: "3.12"
       - name: Run packaging contract tests
+        if: steps.impact.outputs.docs_only != 'true'
         run: python -m unittest tests.test_windows_product_packaging tests.test_control_plane_endpoint_provenance tests.test_windows_runtime_provenance_packaging_gate tests.test_release_provenance tests.test_release_signer_identity tests.test_release_signing_contract tests.test_release_main_ancestry tests.test_studio_host_transport_boundary tests.test_studio_presentation_handoff_contract tests.test_product_update_bootstrap_guard tests.test_windows_product_install_root_contract tests.test_windows_embedded_python_source
       - name: Reject PowerShell syntax errors before expensive Windows packaging
+        if: steps.impact.outputs.docs_only != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -54,12 +85,13 @@ jobs:
           }
 
       - name: Prove updater accepts only the installed ORDAX runtime listener
+        if: steps.impact.outputs.docs_only != 'true'
         shell: pwsh
         run: .\scripts\windows\test-ordax-update-runtime-health.ps1
 
   build-installer:
     # Development PRs run fast contracts; full installers only on main, tags or manual dispatch.
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && needs.packaging-contracts.outputs.docs_only != 'true'
     needs: packaging-contracts
     runs-on: windows-latest
     timeout-minutes: 20
