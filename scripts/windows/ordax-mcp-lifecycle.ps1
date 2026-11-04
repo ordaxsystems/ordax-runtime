@@ -62,7 +62,17 @@ function Save-Journal {
     $encoded = $Journal | ConvertTo-Json -Depth 6 -Compress
     [IO.File]::WriteAllText($tmp, $encoded, [Text.UTF8Encoding]::new($false))
     if (Test-Path -LiteralPath $Path) {
-        [IO.File]::Replace($tmp, $Path, $null)
+        # Windows PowerShell 5.1 / .NET Framework rejects a null backup path.
+        # Use a unique sibling backup so the destination replacement remains
+        # atomic even if the updater is interrupted between journal phases.
+        $backup = Join-Path (Split-Path $Path -Parent) ('journal.' + [guid]::NewGuid().ToString('N') + '.previous')
+        try {
+            [IO.File]::Replace($tmp, $Path, $backup)
+        } finally {
+            if (Test-Path -LiteralPath $backup) {
+                Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+            }
+        }
     } else {
         [IO.File]::Move($tmp, $Path)
     }
@@ -141,8 +151,13 @@ switch ($Operation) {
             $source.Length -lt 1000000 -or $source.Length -gt 500000000) {
             throw 'Installer path or size is unsafe'
         }
-        if ($source.VersionInfo.CompanyName -cne 'ORDAX' -or
-            $source.VersionInfo.ProductName -cne 'OrdaX MCP') {
+        # Inno Setup pads VERSIONINFO string values with spaces on Windows.
+        # Compare normalized human-readable metadata, never accept a different
+        # product, and still bind the exact installer bytes through SHA-256.
+        if ([string]::IsNullOrWhiteSpace($source.VersionInfo.CompanyName) -or
+            [string]::IsNullOrWhiteSpace($source.VersionInfo.ProductName) -or
+            $source.VersionInfo.CompanyName.Trim() -cne 'ORDAX' -or
+            $source.VersionInfo.ProductName.Trim() -cne 'OrdaX MCP') {
             throw 'Installer product metadata does not identify OrdaX MCP'
         }
         if ((Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash -ine $InstallerSha256) {

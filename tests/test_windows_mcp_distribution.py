@@ -167,7 +167,13 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn('OrdaX MCP Verified Upgrade', lifecycle)
         self.assertIn('WaitForExit(900000)', lifecycle)
         self.assertIn('Installer changed during staging', lifecycle)
+        # Real Windows Inno metadata contains right-padded strings (60 chars).
+        # It must be normalized before comparing exact canonical company/product.
+        self.assertIn("$source.VersionInfo.CompanyName.Trim() -cne 'ORDAX'", lifecycle)
+        self.assertIn("$source.VersionInfo.ProductName.Trim() -cne 'OrdaX MCP'", lifecycle)
         self.assertNotIn('-PassThru -Wait -ErrorAction Stop', lifecycle)
+        self.assertIn('[IO.File]::Replace($tmp, $Path, $backup)', lifecycle)
+        self.assertNotIn('[IO.File]::Replace($tmp, $Path, $null)', lifecycle)
         self.assertIn('Filename: "{app}\\{#RuntimeExe}"; Flags: nowait runhidden', installer)
         self.assertNotIn("OrdaX Dev Agent.lnk", installer)
         self.assertNotIn("Register-ScheduledTask", installer)
