@@ -21,6 +21,7 @@ from ordax_core.owner_oauth import (
 )
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.device_setup import SetupError, configure as configure_device
+from ordax_dev_agent.identity import desktop_machine_binding
 
 
 def enroll_owner_device(
@@ -55,6 +56,7 @@ def enroll_owner_device(
         # OS Desktop enrollment; the Product authority is this OS profile.
         override["home"] = identity_root / "private-home"
         override["device_name"] = ("OrdaX Desktop (" + socket.gethostname() + ")")[:80]
+        override["binding"] = desktop_machine_binding()
     code, verifier = auth_code()
     access_token = exchange(code, verifier)
     result = configure(
