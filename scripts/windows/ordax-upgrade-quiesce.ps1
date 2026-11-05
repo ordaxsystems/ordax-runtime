@@ -5,7 +5,6 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-
 $root = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
 $rootPrefix = ($root + '\').ToLowerInvariant()
 $ownedExecutables = @(
@@ -16,29 +15,52 @@ $ownedExecutables = @(
     'python.exe',
     'pythonw.exe'
 )
+$ownedProcessNames = @(
+    'ORDAX Studio', 'ORDAX Dev', 'ORDAX Runtime',
+    'ORDAX Workbench', 'python', 'pythonw'
+)
 
 function Get-OrdaxPackagedProcesses {
-    Get-CimInstance Win32_Process |
-        Where-Object {
-            $path = [string]$_.ExecutablePath
-            if (-not $path) { return $false }
-            try {
-                $full = [IO.Path]::GetFullPath($path)
-            } catch {
-                return $false
-            }
-            if (-not $full.ToLowerInvariant().StartsWith($rootPrefix)) {
-                return $false
-            }
-            return $ownedExecutables -contains [IO.Path]::GetFileName($full)
-        } |
-        Select-Object ProcessId, CreationDate, ParentProcessId, Name, ExecutablePath
+    # WMI/CIM can stall for minutes on real Windows hosts. Use the kernel
+    # process handles, then filter by the one canonical installation root.
+    # Do not use names alone: a non-OrdaX Python is NEVER ours to stop.
+    foreach ($candidate in @(Get-Process -Name $ownedProcessNames -ErrorAction Ignore)) {
+        try {
+            $path = [string]$candidate.Path
+            if (-not $path) { continue }
+            $full = [IO.Path]::GetFullPath($path)
+            if (-not $full.ToLowerInvariant().StartsWith($rootPrefix)) { continue }
+            if ($ownedExecutables -notcontains [IO.Path]::GetFileName($full)) { continue }
+            $started = $candidate.StartTime.ToUniversalTime().Ticks
+        } catch {
+            # No executable path/creation proof means no authority to stop it.
+            continue
+        }
+        [pscustomobject]@{
+            ProcessId = [int]$candidate.Id
+            StartTimeTicks = [long]$started
+            Name = [string]$candidate.ProcessName
+            ExecutablePath = $full
+        }
+    }
+}
+
+function Get-ExactProcessOrNull {
+    param([int]$TargetPid)
+    try {
+        return Get-Process -Id $TargetPid -ErrorAction Stop
+    } catch {
+        # Only an explicitly absent PID is a benign race. Permission errors,
+        # unavailable process metadata and unknown failures remain fail-closed.
+        if ($_.FullyQualifiedErrorId -like 'NoProcessFoundForGivenId,*') {
+            return $null
+        }
+        throw
+    }
 }
 
 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSeconds))
-$attempt = 0
 do {
-    $attempt++
     $processes = @(Get-OrdaxPackagedProcesses)
     if (-not $processes.Count) {
         Write-Output "ORDAX_UPGRADE_QUIESCED"
@@ -48,49 +70,30 @@ do {
     foreach ($process in $processes) {
         $pidValue = [int]$process.ProcessId
         if ($pidValue -le 0 -or $pidValue -eq $PID) { continue }
-
-        # Revalidate creation time and executable before stopping an exact PID.
-        # Never terminate a whole tree: an ORDAX parent may have launched an
-        # external Blender, Python or Node process that this installer does not own.
-        $current = Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop
-        if (-not $current) { continue }
-        if ($current.CreationDate -ne $process.CreationDate) { continue }
-        $currentPath = [IO.Path]::GetFullPath([string]$current.ExecutablePath)
-        $expectedPath = [IO.Path]::GetFullPath([string]$process.ExecutablePath)
-        if ($currentPath -ine $expectedPath -or -not $currentPath.ToLowerInvariant().StartsWith($rootPrefix)) {
+        $handle = Get-ExactProcessOrNull -TargetPid $pidValue
+        if ($null -eq $handle) { continue }
+        try {
+            $actualStart = $handle.StartTime.ToUniversalTime().Ticks
+            $actualPath = [IO.Path]::GetFullPath([string]$handle.Path)
+        } catch {
+            if ($null -eq (Get-ExactProcessOrNull -TargetPid $pidValue)) { continue }
+            throw "ORDAX_UPGRADE_PROCESS_PATH_UNVERIFIED pid=$pidValue"
+        }
+        if ($actualStart -ne $process.StartTimeTicks) {
             throw "ORDAX_UPGRADE_IDENTITY_CHANGED pid=$pidValue"
         }
-        # A packaged process can exit between CIM discovery and Get-Process
-        # (or between Get-Process and Stop-Process). Only accept this benign
-        # race if a fresh CIM query confirms the PID is already gone. A reused
-        # or still-live PID must never be assumed stopped.
-        $handle = $null
-        try {
-            $handle = Get-Process -Id $pidValue -ErrorAction Stop
-        } catch {
-            if (-not (Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop)) {
-                continue
-            }
-            throw
-        }
-        $handlePath = [string]$handle.Path
-        if (-not $handlePath -or ([IO.Path]::GetFullPath($handlePath) -ine $expectedPath)) {
-            if (-not (Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop)) {
-                continue
-            }
+        if ($actualPath -ine $process.ExecutablePath -or
+            -not $actualPath.ToLowerInvariant().StartsWith($rootPrefix)) {
             throw "ORDAX_UPGRADE_PROCESS_PATH_UNVERIFIED pid=$pidValue"
         }
         Write-Output ("ORDAX_UPGRADE_STOP pid={0} name={1} path={2}" -f $pidValue, $process.Name, $process.ExecutablePath)
         try {
             Stop-Process -InputObject $handle -Force -ErrorAction Stop
         } catch {
-            if (-not (Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop)) {
-                continue
-            }
+            if ($null -eq (Get-ExactProcessOrNull -TargetPid $pidValue)) { continue }
             throw
         }
     }
-
     Start-Sleep -Milliseconds 250
 } while ([DateTime]::UtcNow -lt $deadline)
 
@@ -99,5 +102,4 @@ if ($remaining.Count) {
     $details = ($remaining | ForEach-Object { "$($_.ProcessId):$($_.ExecutablePath)" }) -join '; '
     throw "ORDAX packaged processes are still running after upgrade quiesce: $details"
 }
-
 Write-Output "ORDAX_UPGRADE_QUIESCED"

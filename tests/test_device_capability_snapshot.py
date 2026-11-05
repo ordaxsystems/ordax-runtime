@@ -6,9 +6,11 @@ from urllib.request import urlopen
 
 from ordax_dev_agent.capability_snapshot import (
     DEVICE_AGENT_CAPABILITIES_SCHEMA,
+    MAX_DEVICE_CAPABILITIES,
     device_capability_snapshot,
 )
 from ordax_dev_agent.status_server import start_status_server
+from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 
 
 class DeviceCapabilitySnapshotTests(unittest.TestCase):
@@ -31,6 +33,36 @@ class DeviceCapabilitySnapshotTests(unittest.TestCase):
         self.assertEqual(["read"], by_id["blender.live_status"]["modes"])
         self.assertNotIn("shell.generic", by_id)
         self.assertNotIn("agent.self_test", by_id)
+
+    def test_complete_product_catalog_fits_bounded_local_snapshot(self):
+        # In production the runtime publishes only locally registered IDs.
+        # This synthetic ceiling check prevents the source catalog from
+        # growing beyond the local schema without an explicit contract review.
+        local_names = [spec.local_action for spec in PRODUCT_ACTIONS.values()]
+        self.assertGreater(len(local_names), 64)
+        self.assertLessEqual(len(local_names), MAX_DEVICE_CAPABILITIES)
+        self.assertLessEqual(MAX_DEVICE_CAPABILITIES, 128)
+        expected = device_capability_snapshot(local_names)
+        self.assertEqual(len(expected["capabilities"]), len(PRODUCT_ACTIONS))
+
+        def forbidden_full_status():
+            raise AssertionError("capability read must not scan full status")
+
+        server = start_status_server(
+            forbidden_full_status, host="127.0.0.1", port=0,
+            capabilities_provider=lambda: local_names,
+        )
+        try:
+            with urlopen(
+                f"http://127.0.0.1:{server.server_port}/capabilities",
+                timeout=3,
+            ) as response:
+                actual = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+            self.assertEqual(actual, expected)
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_snapshot_is_degraded_without_product_capabilities(self):
         snapshot = device_capability_snapshot(["agent.self_test"])

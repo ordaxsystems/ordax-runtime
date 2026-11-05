@@ -113,3 +113,14 @@ antes da alteração: `/readiness` = 211 ms e `/capabilities` expirou
 após 12,6 s. O diagnóstico detalhado permanece em `GET /status`;
 clientes que só precisam de ferramentas não dependem dele. Sem novo
 serviço, thread, cache, lista duplicada ou consulta ao banco.
+
+## Limite real do catalogo Product (04/11/2026)
+
+A `main` declara 93 IDs no `PRODUCT_ACTIONS`; o antigo teto fixo de 64
+causava excecao no `device_capability_snapshot` e fechamento da conexao
+`GET /capabilities` mesmo apos remover a varredura lenta. O teto local
+permanece **limitado**, agora em 128, com teste cobrindo todos os IDs.
+O endpoint continua publicando **somente a intersecao** dos IDs Product
+aprovados com `ActionRegistry.names` realmente registrados no host.
+Nenhuma entrada e grant, consentimento, autorizacao remota ou disponibilidade
+grafica Native; crescimento acima do limite exige revisao explicita.
