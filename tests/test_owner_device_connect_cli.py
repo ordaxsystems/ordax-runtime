@@ -12,6 +12,7 @@ from unittest import mock
 from ordax_core.owner_oauth import OwnerOAuthError
 from ordax_dev_agent.device_setup import SetupError
 from ordax_dev_agent import owner_device_connect_cli as connect
+from ordax_dev_agent.identity import desktop_machine_binding, machine_id
 
 
 class OwnerDeviceConnectCliTests(unittest.TestCase):
@@ -75,6 +76,8 @@ class OwnerDeviceConnectCliTests(unittest.TestCase):
         def capture(state, **kwargs):
             self.assertEqual(state, self.state)
             self.assertEqual(kwargs["home"], self.state / "private-home")
+            self.assertEqual(kwargs["binding"], desktop_machine_binding())
+            self.assertNotEqual(kwargs["binding"], machine_id())
             self.assertTrue(kwargs["device_name"].startswith("OrdaX Desktop ("))
             self.assertEqual(kwargs["product_access_token"], "TOP_SECRET_OWNER_ACCESS_TOKEN")
             self.calls.append("configure")
@@ -82,7 +85,7 @@ class OwnerDeviceConnectCliTests(unittest.TestCase):
         with patch.dict("os.environ", {
             "ORDAX_RUNTIME_HOST_PROFILE": "ordax-desktop",
             "ORDAX_DESKTOP_USER_DATA": str(user_data),
-        }):
+        }), patch("ordax_dev_agent.identity.machine_id", return_value="a" * 64):
             result = connect.enroll_owner_device(config_provider=self.provider,
                 auth_code=self.auth, exchange=self.exchange, configure=capture)
         self.assertTrue(result["ok"])
