@@ -25,6 +25,23 @@ on:
       - "ordax_connector/**"
       - "mcp_blender_unity/**"
   workflow_dispatch:
+    inputs:
+      os_run_id:
+        description: 'Verified OS-private Buildroot workflow run ID'
+        required: true
+        type: string
+      os_run_head_sha:
+        description: 'Exact 40-character OS source commit SHA'
+        required: true
+        type: string
+      os_run_branch:
+        description: 'Exact Buildroot producer branch'
+        required: true
+        type: string
+      os_artifact_name:
+        description: 'Unexpired OS-private Python SDK artifact name'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -46,6 +63,9 @@ jobs:
 
   native-buildroot-offline-agent-probe:
     # Diagnostic only. The OS owns this Buildroot target and private toolchain.
+    # Never assert a private OS artifact from an expired historical run on PRs;
+    # execute explicitly with current immutable provenance when available.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -54,9 +74,10 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       OS_REPO: ordaxsystems/ordax-os
-      OS_RUN_ID: "39882367206"
-      OS_RUN_HEAD_SHA: "b1a260720e8db4dd30ae67b1a4313a56a6e346b4"
-      OS_ARTIFACT_NAME: ordax-independent-python-abi-473aabac980b0bda9b6ea0f4d43987738ea80674
+      OS_RUN_ID: "${{ inputs.os_run_id }}"
+      OS_RUN_HEAD_SHA: "${{ inputs.os_run_head_sha }}"
+      OS_RUN_BRANCH: "${{ inputs.os_run_branch }}"
+      OS_ARTIFACT_NAME: "${{ inputs.os_artifact_name }}"
     steps:
       - name: Checkout canonical Runtime source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -66,13 +87,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$OS_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$OS_RUN_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$OS_RUN_BRANCH" =~ ^[a-zA-Z0-9._/-]+$ ]]
+          [[ "$OS_ARTIFACT_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]
           gh api "repos/$OS_REPO/actions/runs/$OS_RUN_ID" \
             --jq '[.head_sha, .status, .conclusion, .head_branch] | @tsv' > "$RUNNER_TEMP/os-run-provenance"
           IFS=$'\t' read -r head status conclusion branch < "$RUNNER_TEMP/os-run-provenance"
           test "$head" = "$OS_RUN_HEAD_SHA"
           test "$status" = completed
           test "$conclusion" = success
-          test "$branch" = buildroot/private-native-sdk-export-20261022
+          test "$branch" = "$OS_RUN_BRANCH"
           gh api "repos/$OS_REPO/actions/runs/$OS_RUN_ID/artifacts" \
             --jq '.artifacts[] | [.name, .expired] | @tsv' > "$RUNNER_TEMP/os-artifacts"
           grep -Fx -- "$OS_ARTIFACT_NAME"$'\t'false "$RUNNER_TEMP/os-artifacts"

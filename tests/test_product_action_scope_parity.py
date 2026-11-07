@@ -38,7 +38,7 @@ class ProductActionScopeParityTests(unittest.TestCase):
         self.assertEqual(
             DEVICE_SCOPED_ACTIONS,
             frozenset({*COMPUTER_DEVICE_ACTIONS, *APP_INTELLIGENCE_DEVICE_ACTIONS,
-                       *NATIVE_SURFACE_DEVICE_ACTIONS, "orchestrator.app_read"}),
+                       *NATIVE_SURFACE_DEVICE_ACTIONS, "forge.app_read"}),
         )
 
     def test_python_product_mcp_server_must_not_keep_project_bound_computer_tools(self) -> None:

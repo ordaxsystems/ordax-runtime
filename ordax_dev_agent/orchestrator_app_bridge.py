@@ -23,8 +23,8 @@ import uuid
 from typing import Any, BinaryIO, Callable
 
 SCHEMA = "ordax.orchestrator-host/1"
-READ_CAPABILITY = "orchestrator.app_read"
-APP_ID = "br.com.ordax.orchestrator.lab"
+READ_CAPABILITY = "forge.app_read"
+APP_ID = "br.com.ordax.forge"
 LEASE_RENEWAL = "hmac-sha256-key-rotation/1"
 _CONTRACT_BYTES = files("ordax_dev_agent.assets").joinpath("orchestrator_app_contract.json").read_bytes()
 _CONTRACT = json.loads(_CONTRACT_BYTES)
