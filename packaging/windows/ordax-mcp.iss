@@ -34,6 +34,14 @@ VersionInfoVersion={#AppVersion}
 VersionInfoCompany=ORDAX
 VersionInfoDescription=OrdaX MCP standalone Runtime candidate
 
+[InstallDelete]
+; PrepareToInstall first stops the owned Runtime and its scheduled lifecycle.
+; The embedded Python distribution is entirely installer-owned: persistent
+; device identity, grants and sessions live outside the installation folder.
+; Replace the whole payload so upgrades cannot retain removed Python modules,
+; old MCP contract assets or superseded dependencies from a previous build.
+Type: filesandordirs; Name: "{app}\runtime"
+
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

@@ -87,6 +87,17 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertNotIn("Register-ScheduledTask", installer)
         self.assertNotIn("ordax-agent-watchdog", installer)
 
+    def test_upgrade_replaces_only_the_installer_owned_python_runtime(self):
+        installer = INNO.read_text(encoding="utf-8")
+        cleanup = 'Type: filesandordirs; Name: "{app}\\runtime"'
+        self.assertEqual(installer.count("[InstallDelete]"), 1)
+        self.assertEqual(installer.count(cleanup), 1)
+        self.assertLess(installer.index("[InstallDelete]"), installer.index("[Files]"))
+        self.assertIn("PrepareToInstall(var NeedsRestart: Boolean)", installer)
+        self.assertIn("QuiesceOwnedRuntime(ExpandConstant('{app}'))", installer)
+        self.assertNotIn('Type: filesandordirs; Name: "{app}"', installer)
+        self.assertNotIn('Type: filesandordirs; Name: "{localappdata}', installer)
+
     def test_local_candidate_requires_clean_sources_and_supports_user_inno(self):
         builder = BUILDER.read_text(encoding="utf-8")
         self.assertIn(
