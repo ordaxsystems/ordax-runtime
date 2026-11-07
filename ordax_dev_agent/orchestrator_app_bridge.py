@@ -22,11 +22,11 @@ import time
 import uuid
 from typing import Any, BinaryIO, Callable
 
-SCHEMA = "ordax.orchestrator-host/1"
+SCHEMA = "ordax.forge-host/1"
 READ_CAPABILITY = "forge.app_read"
 APP_ID = "br.com.ordax.forge"
 LEASE_RENEWAL = "hmac-sha256-key-rotation/1"
-_CONTRACT_BYTES = files("ordax_dev_agent.assets").joinpath("orchestrator_app_contract.json").read_bytes()
+_CONTRACT_BYTES = files("ordax_dev_agent.assets").joinpath("forge_app_contract.json").read_bytes()
 _CONTRACT = json.loads(_CONTRACT_BYTES)
 READ_OPERATIONS = frozenset(tool["operation"] for tool in _CONTRACT["tools"] if tool["readOnly"])
 CONTRACT_SHA256 = hashlib.sha256(_CONTRACT_BYTES).hexdigest()
