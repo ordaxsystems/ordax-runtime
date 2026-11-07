@@ -7,7 +7,7 @@ Absence of installation provenance is an explicit failure, not a live registry.
 from .models import ActionResult
 from .orchestrator_app_launcher import launch_verified_orchestrator, validate_orchestrator_installation
 
-CAPABILITY = 'orchestrator.app_read'
+CAPABILITY = 'forge.app_read'
 
 
 def execute_orchestrator_app_status(control, job, *, installation_provider=None,
@@ -25,7 +25,7 @@ def execute_orchestrator_app_status(control, job, *, installation_provider=None,
         if not callable(installation_provider):
             return ActionResult(False, 'Orchestrator Lab installation has not been verified',
                 {'error_code': 'orchestrator_installation_unverified',
-                 'app_id': 'br.com.ordax.orchestrator.lab', 'connected': False})
+                 'app_id': 'br.com.ordax.forge', 'connected': False})
         installation = validate_orchestrator_installation(installation_provider())
         session = launcher(installation=installation, authorize=authorize)
         status = session.read('status', {})
@@ -33,7 +33,7 @@ def execute_orchestrator_app_status(control, job, *, installation_provider=None,
         # returning the Product result as well. Never disclose paths or PID.
         authorize()
         result = ActionResult(True, 'Orchestrator Lab status read from its private service',
-            {'app_id': 'br.com.ordax.orchestrator.lab', 'source': 'app-owned-service',
+            {'app_id': 'br.com.ordax.forge', 'source': 'app-owned-service',
              'read_completed': True, 'status': status})
     except Exception:
         pass

@@ -24,7 +24,7 @@ class InstallationContractTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.expected = ExpectedOrchestratorIdentity('a' * 40, 'b' * 64, 'c' * 64)
-        self.names = ('OrdaX Orchestrator Lab.exe', 'resources/app.asar', 'resources/runtime-build.json')
+        self.names = ('OrdaX Forge.exe', 'resources/app.asar', 'resources/runtime-build.json')
         for name in self.names:
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)

@@ -368,7 +368,7 @@ class ProductDeviceControlPlane:
                             "execution_epoch", "agent_instance_id", "boot_id"})
         def fence():
             if (not isinstance(job, AgentJob) or self._jobs.get(job.id) is not job
-                    or job.action != "orchestrator.app_read" or job.project_slug is not None):
+                    or job.action != "forge.app_read" or job.project_slug is not None):
                 raise OrchestratorBridgeUnavailable("host_product_action_required")
             return {key: value for key, value in self._execution_context(job).items() if key in fields}
         expected_fence = fence()
@@ -385,7 +385,7 @@ class ProductDeviceControlPlane:
             now = int(time.time() * 1000)
             if (reply.get("ok") is not True or type(value) is not dict
                     or set(value) != expected_keys
-                    or value.get("schema") != "ordax.orchestrator-read-authorization/1"
+                    or value.get("schema") != "ordax.forge-read-authorization/1"
                     or value.get("device_id") != expected_device
                     or type(value.get("expires_at_ms")) is not int
                     or value["expires_at_ms"] > now + 300000):

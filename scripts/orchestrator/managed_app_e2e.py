@@ -29,7 +29,7 @@ def run():
     hashes = tuple((f.relative_to(bundle).as_posix(), digest(f))
                    for f in sorted(bundle.rglob('*')) if f.is_file())
     with tempfile.TemporaryDirectory(prefix='ordax-managed-app-ci-') as fresh:
-        profile = str(Path(fresh) / 'OrdaX/OrchestratorLab').lower()
+        profile = str(Path(fresh) / 'OrdaX/Forge').lower()
         expected = ExpectedOrchestratorIdentity(proof['sourceCommit'], proof['contentDigest'], hashlib.sha256(profile.encode()).hexdigest())
         installation = VerifiedOrchestratorInstallation(bundle, hashes, expected)
         authorization = VerifiedOrchestratorReadAuthorization(str(uuid.uuid4()), 'oauth-managed-ci-fixture', str(uuid.uuid4()), str(uuid.uuid4()), int(time.time()*1000)+120000)
@@ -65,12 +65,12 @@ def run():
                 from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
                 from ordax_dev_agent.orchestrator_product_execution import execute_orchestrator_app_status
                 with tempfile.TemporaryDirectory(prefix='ordax-product-app-ci-', ignore_cleanup_errors=True) as product_profile:
-                    fingerprint = hashlib.sha256(str(Path(product_profile) / 'OrdaX/OrchestratorLab').lower().encode()).hexdigest()
+                    fingerprint = hashlib.sha256(str(Path(product_profile) / 'OrdaX/Forge').lower().encode()).hexdigest()
                     product_installation = replace(installation, expected=replace(expected, profile_fingerprint=fingerprint))
                     plane = ProductDeviceControlPlane.__new__(ProductDeviceControlPlane)
                     plane.device_id = str(uuid.uuid4())
                     plane.runtime_kind, plane.agent_version = 'desktop-agent', 'ci-fixture'
-                    job = AgentJob(id=str(uuid.uuid4()), action='orchestrator.app_read',
+                    job = AgentJob(id=str(uuid.uuid4()), action='forge.app_read',
                         effect_id=str(uuid.uuid4()), attempt_id=str(uuid.uuid4()), lease_token=str(uuid.uuid4()),
                         execution_epoch=1, agent_instance_id=str(uuid.uuid4()), boot_id='ci-fixture-boot')
                     plane._jobs = {job.id: job}
@@ -79,10 +79,10 @@ def run():
                     def product_post(operation, body):
                         calls.append(operation)
                         return {'ok': True, 'authorization': {
-                            'schema': 'ordax.orchestrator-read-authorization/1',
+                            'schema': 'ordax.forge-read-authorization/1',
                             'subject_id': subject_id, 'client_id': 'oauth-managed-ci-fixture',
                             'device_id': plane.device_id, 'grant_id': grant_id,
-                            'app_id': 'br.com.ordax.orchestrator.lab', 'capability': 'orchestrator.app_read',
+                            'app_id': 'br.com.ordax.forge', 'capability': 'forge.app_read',
                             'expires_at_ms': int(time.time()*1000)+120000}}
                     plane._post = product_post
                     with patch.dict(os.environ, {'LOCALAPPDATA': product_profile}), patch(

@@ -678,7 +678,7 @@ def run(
                               allowed_action_names=allowed_action_names)
     # Host composition owns App installation provenance; never advertise a
     # capability that this host cannot connect to an installed App.
-    host_actions = sorted({*registry.names, *({"orchestrator.app_read"}
+    host_actions = sorted({*registry.names, *({"forge.app_read"}
         if callable(orchestrator_installation_provider) else set())})
     _startup_log(config, f"ACTION_REGISTRY_READY actions={len(registry.names)}")
 
@@ -948,7 +948,7 @@ def run(
                             # The local switch can be turned off after claim/start.
                             # Report denial, never execute under a stale grant.
                             result = ActionResult(False, "native_local_connector_disabled")
-                        elif job.action == "orchestrator.app_read":
+                        elif job.action == "forge.app_read":
                             from .orchestrator_product_execution import execute_orchestrator_app_status
                             result = execute_orchestrator_app_status(control, job,
                                 installation_provider=orchestrator_installation_provider)

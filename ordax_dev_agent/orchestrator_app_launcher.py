@@ -22,7 +22,7 @@ from .orchestrator_app_bridge import (
 )
 from .orchestrator_windows_pipe import WindowsApi, WindowsOrchestratorPipe
 
-EXE = "OrdaX Orchestrator Lab.exe"
+EXE = "OrdaX Forge.exe"
 _REQUIRED = frozenset({EXE, "resources/app.asar", "resources/runtime-build.json"})
 _HASH = re.compile(r"[a-f0-9]{64}\Z")
 
@@ -142,7 +142,7 @@ def launch_verified_orchestrator(*, installation: VerifiedOrchestratorInstallati
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     if not ntpath.isabs(local_app_data):
         raise OrchestratorBridgeUnavailable("host_profile_binding_required")
-    profile = ntpath.normpath(ntpath.join(local_app_data, "OrdaX", "OrchestratorLab")).lower()
+    profile = ntpath.normpath(ntpath.join(local_app_data, "OrdaX", "Forge")).lower()
     if hashlib.sha256(profile.encode("utf-8")).hexdigest() != receipt.expected.profile_fingerprint:
         raise OrchestratorBridgeUnavailable("host_profile_binding_required")
     pins, pipe = None, None

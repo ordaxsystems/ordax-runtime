@@ -1,6 +1,6 @@
 {
   "schema": "ordax.orchestrator/1",
-  "appId": "br.com.ordax.orchestrator.lab",
+  "appId": "br.com.ordax.forge",
   "authority": "none",
   "tools": [
     {

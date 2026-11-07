@@ -8,11 +8,11 @@ from pathlib import Path
 
 class ProductOrchestratorExecutionTests(unittest.TestCase):
     def setUp(self):
-        self.job = AgentJob('fixture', 'orchestrator.app_read')
+        self.job = AgentJob('fixture', 'forge.app_read')
         self.control = Mock()
         self.authorize = self.control.orchestrator_read_authorizer.return_value
         self.provider = Mock(return_value=VerifiedOrchestratorInstallation(Path('/fixture').resolve(),
-            tuple((n, 'a'*64) for n in ('OrdaX Orchestrator Lab.exe', 'resources/app.asar', 'resources/runtime-build.json')),
+            tuple((n, 'a'*64) for n in ('OrdaX Forge.exe', 'resources/app.asar', 'resources/runtime-build.json')),
             ExpectedOrchestratorIdentity('b'*40, 'c'*64, 'd'*64)))
         self.session = Mock()
         self.session.read.return_value = {'engine': 'app-owned'}

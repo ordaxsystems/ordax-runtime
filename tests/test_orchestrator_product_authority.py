@@ -17,15 +17,15 @@ class ProductOrchestratorAuthorityTests(unittest.TestCase):
         self.plane = ProductDeviceControlPlane.__new__(ProductDeviceControlPlane)
         self.plane.device_id = str(uuid.uuid4())
         self.plane.runtime_kind, self.plane.agent_version = 'desktop-agent', 'fixture-version'
-        self.job = AgentJob(id=str(uuid.uuid4()), action='orchestrator.app_read',
+        self.job = AgentJob(id=str(uuid.uuid4()), action='forge.app_read',
             effect_id=str(uuid.uuid4()), attempt_id=str(uuid.uuid4()), lease_token=str(uuid.uuid4()),
             execution_epoch=1, agent_instance_id=str(uuid.uuid4()), boot_id='fixture-boot',
             payload={'owner_user_id': 'MODEL-FORGED', 'grant_id': 'MODEL-FORGED'})
         self.plane._jobs = {self.job.id: self.job}
-        self.value = dict(schema='ordax.orchestrator-read-authorization/1',
+        self.value = dict(schema='ordax.forge-read-authorization/1',
             subject_id=str(uuid.uuid4()), client_id=str(uuid.uuid4()), device_id=self.plane.device_id,
-            grant_id=str(uuid.uuid4()), app_id='br.com.ordax.orchestrator.lab',
-            capability='orchestrator.app_read', expires_at_ms=self.now + 60000)
+            grant_id=str(uuid.uuid4()), app_id='br.com.ordax.forge',
+            capability='forge.app_read', expires_at_ms=self.now + 60000)
         self.calls = []
         self.plane._post = self.post
 
