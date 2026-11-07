@@ -17,7 +17,7 @@ No product grant is minted by an App role, bootstrap message or ephemeral key.
 
 ## Contract and authority
 
-`ordax.orchestrator-host/1` binds one subject, OAuth client, device and grant to
+`ordax.forge-host/1` binds one subject, OAuth client, device and grant to
 an exact expected App source commit, content digest and profile fingerprint.
 The host must verify installed executable AND packaged ASAR bytes against a
 trusted installation receipt **before** launch. The App's self-reported SHA-256
@@ -43,9 +43,9 @@ This first channel is **read-only**, even if a signed request asks to send.
 
 ## Shared public contract
 
-`ordax_dev_agent/assets/orchestrator_app_contract.json` is the exact exported
+`ordax_dev_agent/assets/forge_app_contract.json` is the exact exported
 projection of the App's `orchestrator-contract.mjs`, pinned by
-`contracts/orchestrator-app.lock.json`. Runtime derives read operations from
+`contracts/forge-app.lock.json`. Runtime derives read operations from
 this metadata instead of owning a second tool catalog or service. The App
 continues to validate every operation with its own canonical schema.
 
