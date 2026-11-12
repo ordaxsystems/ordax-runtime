@@ -440,14 +440,37 @@ class PersistentProcessActions:
         # update and reintroduce a startup race.
         current_raw = self._load_process_state(project, process_id)
         current = self._public_process_state(current_raw)
-        started_ok = bool(
-            current_raw.get("state") == "running"
+        # The detached supervisor can execute and finish a short command
+        # before the startup handshake reads its state. A finished child is
+        # not a launch failure: honor only the supervisor's durable exit
+        # receipt, bound to this exact local launch token and child PID.
+        launched = bool(
+            current_raw.get("token") == token
+            and current_raw.get("manager_ready_at_unix")
             and current_raw.get("child_pid")
             and current_raw.get("running_at_unix")
-            and current.get("ownership_valid")
-            and current.get("running")
         )
-        if not started_ok and manager.poll() is None:
+        finished = bool(
+            launched
+            and current_raw.get("state") in {"exited", "failed"}
+            and type(current_raw.get("returncode")) is int
+        )
+        completed_ok = bool(
+            finished
+            and current_raw.get("state") == "exited"
+            and current_raw["returncode"] == 0
+        )
+        started_ok = bool(
+            (current_raw.get("state") == "running"
+             and current_raw.get("child_pid")
+             and current_raw.get("running_at_unix")
+             and current.get("ownership_valid")
+             and current.get("running"))
+            or completed_ok
+        )
+        # Do not terminate a worker that has already durably reported its
+        # terminal state. This also preserves its exit code and log file.
+        if not started_ok and current_raw.get("state") not in {"exited", "failed", "stopped"} and manager.poll() is None:
             try:
                 if os.name == "nt":
                     subprocess.run(
@@ -470,7 +493,10 @@ class PersistentProcessActions:
             current = self._public_process_state(self._load_process_state(project, process_id))
         return ActionResult(
             started_ok,
-            "persistent process started" if started_ok else "persistent process failed to start",
+            ("persistent process completed" if completed_ok
+             else "persistent process started" if started_ok
+             else "persistent process exited with failure" if finished
+             else "persistent process failed to start"),
             current,
         )
 
