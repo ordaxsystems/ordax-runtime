@@ -940,10 +940,7 @@ def run(
 
                 try:
                     try:
-                        from .product_remote import (
-                            PRODUCT_REMOTE_CAPABILITY,
-                            PRODUCT_REMOTE_LEGACY_CAPABILITY,
-                        )
+                        from .product_remote import PRODUCT_REMOTE_CAPABILITY
                         if not _native_local_access_granted(native_access_enabled):
                             # The local switch can be turned off after claim/start.
                             # Report denial, never execute under a stale grant.
@@ -952,7 +949,7 @@ def run(
                             from .orchestrator_product_execution import execute_orchestrator_app_status
                             result = execute_orchestrator_app_status(control, job,
                                 installation_provider=orchestrator_installation_provider)
-                        elif job.action in {PRODUCT_REMOTE_CAPABILITY, PRODUCT_REMOTE_LEGACY_CAPABILITY}:
+                        elif job.action == PRODUCT_REMOTE_CAPABILITY:
                             from .product_remote import execute_product_invocation
                             result = execute_product_invocation(
                                 registry,

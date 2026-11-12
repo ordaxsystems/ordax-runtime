@@ -5,7 +5,6 @@ import unittest
 from ordax_dev_agent.models import ActionResult
 from ordax_dev_agent.product_remote import (
     PRODUCT_REMOTE_CAPABILITY,
-    PRODUCT_REMOTE_LEGACY_CAPABILITY,
     execute_product_invocation,
     parse_product_invocation,
 )
@@ -53,7 +52,6 @@ def payload():
 class ProductRemoteTests(unittest.TestCase):
     def test_product_capability_is_dedicated(self):
         self.assertEqual(PRODUCT_REMOTE_CAPABILITY, "ordax.product.invoke")
-        self.assertEqual(PRODUCT_REMOTE_LEGACY_CAPABILITY, "ordax.product.read.invoke")
 
     def test_parse_requires_device_bound_grant(self):
         body = payload()
