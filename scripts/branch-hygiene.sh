@@ -241,7 +241,21 @@ delete_branch_if_safe() {
     return 0
   fi
   echo "retire $branch: merged=$merged_commit source=$branch_sha (history preserved)"
-  git push origin --delete "$branch"
+  if git push origin --delete "$branch"; then
+    return 0
+  fi
+  # Another cleanup actor can delete the exact branch after our live-ref
+  # recheck. Absence is a successful idempotent retirement ONLY after the
+  # archive and PR proofs above. A moved ref, permission failure or network
+  # failure must remain an error, not be mistaken for successful cleanup.
+  local post_delete_status=0
+  git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null || post_delete_status=$?
+  if (( post_delete_status == 2 )); then
+    echo "retired $branch concurrently: remote ref already absent (history preserved)"
+    return 0
+  fi
+  echo "refuse $branch: deletion failed and absence was not verified (status=$post_delete_status)" >&2
+  return 1
 }
 
 git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"

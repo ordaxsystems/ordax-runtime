@@ -52,12 +52,21 @@ if args[0] == "ls-remote":
             print(tag.read_text().strip() + "\t" + ref)
         sys.exit(0)
     if ref == "refs/heads/" + branch:
+        if "--exit-code" in args and os.getenv("MOCK_REMOTE_RECHECK_ERROR") == "1":
+            sys.exit(128)
+        if (state / "branch_removed").exists():
+            sys.exit(2 if "--exit-code" in args else 0)
         live = os.getenv("MOCK_LIVE_SHA", sha)
         print(live + "\t" + ref)
         sys.exit(0)
     sys.exit(2)
 if args[0] == "push":
     if args[2] == "--delete":
+        if os.getenv("MOCK_DELETE_RACE") == "1":
+            (state / "branch_removed").write_text(args[3])
+            sys.exit(1)
+        if os.getenv("MOCK_DELETE_FAIL") == "1":
+            sys.exit(1)
         (state / "deleted").write_text(args[3])
         sys.exit(0)
     if args[2].endswith("refs/tags/archive/ordax-runtime/" + branch):
@@ -176,6 +185,27 @@ class BranchHygienePolicyTests(unittest.TestCase):
     def test_archive_failure_or_branch_movement_keeps_branch(self):
         self.assert_no_delete(MOCK_FAIL_ARCHIVE="1")
         self.assert_no_delete(MOCK_LIVE_SHA=OTHER)
+
+    def test_concurrent_deletion_after_archive_is_idempotent(self):
+        result = self.run_cleanup(MOCK_DELETE_RACE="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.dir / "archive_sha").read_text(), SOURCE)
+        self.assertIn("remote ref already absent", result.stdout)
+        self.assertFalse((self.dir / "deleted").exists())
+
+    def test_failed_delete_with_live_branch_stays_an_error(self):
+        result = self.run_cleanup(MOCK_DELETE_FAIL="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("absence was not verified", result.stderr)
+        self.assertFalse((self.dir / "deleted").exists())
+
+    def test_failed_delete_with_unknown_remote_stays_an_error(self):
+        result = self.run_cleanup(
+            MOCK_DELETE_FAIL="1", MOCK_REMOTE_RECHECK_ERROR="1",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("status=128", result.stderr)
+        self.assertFalse((self.dir / "deleted").exists())
 
     def test_already_preserved_commit_can_be_retired(self):
         (self.dir / "archive_sha").write_text(SOURCE)
