@@ -11,7 +11,8 @@ class ProductRuntimeDispatchContractTests(unittest.TestCase):
 
     def test_agent_product_jobs_do_not_execute_directly_in_registry(self):
         self.assertIn("PRODUCT_REMOTE_CAPABILITY", self.main)
-        self.assertIn("PRODUCT_REMOTE_LEGACY_CAPABILITY", self.main)
+        self.assertNotIn("PRODUCT_REMOTE_LEGACY_CAPABILITY", self.main)
+        self.assertNotIn("ordax.product.read.invoke", self.main)
         self.assertIn("execute_product_invocation", self.main)
 
 

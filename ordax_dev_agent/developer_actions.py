@@ -587,7 +587,11 @@ class DeveloperActions:
         """One validated foreground executor shared by project and device scopes."""
         timeout = _bounded_int(
             payload.get("timeout_seconds"),
-            default=900,
+            # Foreground work occupies the one canonical Product dispatch lane.
+            # Long-lived tasks belong to the existing supervised process.start
+            # / computer.process_start actions, not a 15-minute default wait.
+            # Callers may still request a larger explicit timeout when needed.
+            default=60,
             minimum=1,
             maximum=1800,
             name="timeout_seconds",

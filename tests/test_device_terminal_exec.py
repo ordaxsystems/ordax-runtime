@@ -44,6 +44,22 @@ class DeviceTerminalExecTests(unittest.TestCase):
         self.assertEqual(result.data["stdout"], "OK")
         self.assertEqual(runner.call_args.kwargs["timeout"], 15)
 
+    def test_foreground_timeout_defaults_to_one_minute_and_allows_explicit_longer_wait(self):
+        # A Product claim remains single-flight until its foreground process
+        # exits. Long jobs should instead use the existing process supervisor.
+        for requested, expected in (({}, 60), ({"timeout_seconds": 1800}, 1800)):
+            with self.subTest(timeout=expected), patch(
+                "ordax_dev_agent.developer_actions._run",
+                return_value=ActionResult(True, "command completed", {
+                    "stdout": "OK", "stderr": "", "returncode": 0, "timed_out": False,
+                }),
+            ) as runner:
+                result = self.actions.computer_terminal_exec({
+                    "argv": ["python", "--version"], **requested,
+                })
+                self.assertTrue(result.ok)
+                self.assertEqual(runner.call_args.kwargs["timeout"], expected)
+
     def test_local_owner_policy_fails_closed(self):
         with patch(
             "ordax_dev_agent.computer_filesystem_actions.load_computer_access_policy",
