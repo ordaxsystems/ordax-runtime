@@ -110,6 +110,64 @@ class ComputerProcessActionsTests(unittest.TestCase):
                     stopped = registry.execute("computer.process_stop", {"process_id": process_id})
                     self.assertTrue(stopped.ok, stopped.summary)
 
+    def test_quick_device_process_exit_preserves_supervisor_receipt(self):
+        # A detached worker can run, exit and persist its final journal before
+        # process_start checks readiness. This is not a launch failure.
+        class FinishedManager:
+            pid = 4242
+
+            def poll(self):
+                return 0
+
+        registry = self._device_registry()
+        with patch(
+            "ordax_dev_agent.computer_filesystem_actions.load_computer_access_policy",
+            return_value=SimpleNamespace(enabled=True, full_access=True),
+        ):
+            for state, returncode, trusted, expected_ok, expected_summary in (
+                ("exited", 0, True, True, "persistent process completed"),
+                ("failed", 12, True, False, "persistent process exited with failure"),
+                ("exited", 0, False, False, "persistent process failed to start"),
+            ):
+                with self.subTest(state=state, exit=returncode, trusted=trusted):
+                    def persisted_terminal(scope, process_id):
+                        raw = json.loads(registry._process_state_path(
+                            scope, process_id,
+                        ).read_text(encoding="utf-8"))
+                        raw.update(
+                            state=state, returncode=returncode,
+                            manager_pid=4242, manager_ready_at_unix=1.0,
+                            child_pid=4343, running_at_unix=1.0,
+                            ended_at_unix=2.0,
+                        )
+                        if not trusted:
+                            raw["token"] = "untrusted-other-launch"
+                        return raw
+
+                    with patch(
+                        "ordax_dev_agent.persistent_process_actions.subprocess.Popen",
+                        return_value=FinishedManager(),
+                    ) as launcher, patch.object(
+                        registry, "_load_process_state",
+                        side_effect=persisted_terminal,
+                    ), patch.object(
+                        registry, "_pid_running", return_value=False,
+                    ), patch(
+                        "ordax_dev_agent.persistent_process_actions.subprocess.run",
+                    ) as terminator:
+                        result = registry.computer_process_start({
+                            "argv": ["cmd.exe", "/d", "/c", "echo fast"],
+                            "cwd": self.temp.name,
+                            "wait_seconds": 0.1,
+                        })
+                    self.assertEqual(result.ok, expected_ok, result.summary)
+                    self.assertEqual(result.summary, expected_summary)
+                    self.assertEqual(result.data["returncode"], returncode)
+                    self.assertFalse(result.data["running"])
+                    self.assertIn("process_id", result.data)
+                    launcher.assert_called_once()
+                    terminator.assert_not_called()
+
     def test_process_list_is_device_scoped_filtered_and_bounded(self):
         snapshot = [
             {"pid": 10, "parent_pid": 1, "name": "python.exe", "executable": "C:/Python/python.exe"},
