@@ -23,6 +23,7 @@ from ordax_dev_agent.computer_filesystem_actions import (
 )
 from ordax_dev_agent.product_remote_client import ProductRemoteClient, ProductRemoteError
 from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
+from ordax_dev_agent.capability_snapshot import NATIVE_FILE_TRANSFER_ACTION_IDS
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z", re.I)
 # The Control Plane owns the profile catalog and validates each scope.
@@ -97,7 +98,7 @@ _DIAGNOSTIC_ACTIONS = (
     "computer.process_list",
     "computer.text_read",
     "computer.text_write",
-)
+) + tuple(sorted(NATIVE_FILE_TRANSFER_ACTION_IDS))
 
 
 def diagnose_owner_mcp_readiness(
@@ -146,17 +147,21 @@ def diagnose_owner_mcp_readiness(
             access_mode = item.get("access_mode", item.get("accessMode"))
             if isinstance(capability, str) and access_mode in ("read", "write"):
                 allowed.add((capability, access_mode))
+    def required_mode(name: str) -> str | None:
+        if name in NATIVE_FILE_TRANSFER_ACTION_IDS:
+            return "read" if name.endswith("_status") else "write"
+        if name in PRODUCT_ACTIONS:
+            return "read" if PRODUCT_ACTIONS[name].effect == "read" else "write"
+        return None
+
     checks = [
         {
             "capability": name,
-            "requiredAccessMode": (
-                None if name not in PRODUCT_ACTIONS
-                else "read" if PRODUCT_ACTIONS[name].effect == "read" else "write"
-            ),
-            "declaredByInstalledCode": name in PRODUCT_ACTIONS,
+            "requiredAccessMode": required_mode(name),
+            "declaredByInstalledCode": required_mode(name) is not None,
             "clientGranted": (
-                name in PRODUCT_ACTIONS
-                and (name, "read" if PRODUCT_ACTIONS[name].effect == "read" else "write") in allowed
+                required_mode(name) is not None
+                and (name, required_mode(name)) in allowed
             ),
         }
         for name in _DIAGNOSTIC_ACTIONS
@@ -207,8 +212,25 @@ def perform(args: argparse.Namespace, token: str, remote: ProductRemoteClient,
             token, client_id=client, challenge_id=args.challenge, device_id=args.device,
         )
     if args.operation == "diagnose":
-        return diagnose_owner_mcp_readiness(authority, client, policy_checker(
-            config if config is not None else AgentConfig.from_env()))
+        local = config if config is not None else AgentConfig.from_env()
+        if str(getattr(local, "device_id", "") or "").lower() != args.device:
+            # The Owner API can inspect another device's grants, but this
+            # computer cannot attest the other device's local access switch or
+            # installed binary. Never present our policy as that target's.
+            diagnostic = diagnose_owner_mcp_readiness(authority, client, {
+                "enabled": False, "full_access": False,
+            })
+            diagnostic.update({
+                "state": "target_device_local_policy_unverified",
+                "localPolicyEnabled": None, "localFullAccess": None,
+                "localPolicyVerified": False, "missingInstalledCode": None,
+            })
+            for check in diagnostic["capabilities"]:
+                check["declaredByInstalledCode"] = None
+            return diagnostic
+        diagnostic = diagnose_owner_mcp_readiness(authority, client, policy_checker(local))
+        diagnostic["localPolicyVerified"] = True
+        return diagnostic
     if args.operation == "dev-enable":
         # Local opt-in only: an authenticated owner cannot remotely flip the
         # filesystem policy of an unrelated device. Use its own installed Runtime.
@@ -253,9 +275,18 @@ def perform(args: argparse.Namespace, token: str, remote: ProductRemoteClient,
         }
     if args.operation == "authorize":
         if args.profile in {"full-computer-control", "device-native-terminal", "device-native-process"}:
-            policy = policy_checker(config if config is not None else AgentConfig.from_env())
-            if not policy.get("enabled") or not policy.get("full_access"):
-                raise ValueError("local_full_access_required")
+            local = config if config is not None else AgentConfig.from_env()
+            local_device_id = str(getattr(local, "device_id", "") or "").lower()
+            if not _UUID.fullmatch(local_device_id):
+                raise ValueError("local_device_identity_unavailable")
+            if local_device_id == args.device:
+                policy = policy_checker(local)
+                if not policy.get("enabled") or not policy.get("full_access"):
+                    raise ValueError("local_full_access_required")
+            # Authorizing a DIFFERENT owned device is a Platform Owner
+            # decision; the target Runtime independently enforces its own
+            # local switch on every action. Never inspect this host's local
+            # switch as if it belonged to another computer.
         expires = (datetime.now(timezone.utc) + timedelta(days=args.days)).isoformat()
         return remote.replace_owner_remote_grant_group(
             token, client_id=client, device_id=args.device, profile_key=args.profile,

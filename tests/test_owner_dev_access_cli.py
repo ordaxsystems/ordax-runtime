@@ -101,7 +101,7 @@ class OwnerDevelopmentAccessTests(unittest.TestCase):
             "dev-enable", "--device", DEVICE,
             "--client", DESKTOP,
         ])
-        with self.assertRaisesRegex(ValueError, "no consented OAuth client"):
+        with self.assertRaisesRegex(ValueError, "owner_mcp_client_not_consented"):
             self.perform()
         self.assertFalse(self.updates)
 

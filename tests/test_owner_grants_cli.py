@@ -4,6 +4,7 @@ import http.client
 from datetime import datetime, timedelta, timezone
 import threading
 import unittest
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
@@ -42,7 +43,11 @@ class FakeOwner:
 def canonical_diag_grants():
     return [
         {"capability": name,
-         "access_mode": "read" if PRODUCT_ACTIONS[name].effect == "read" else "write"}
+         "access_mode": (
+             "read" if name.endswith("_status") and name.startswith("computer.transfer_")
+             else "read" if name in PRODUCT_ACTIONS and PRODUCT_ACTIONS[name].effect == "read"
+             else "write"
+         )}
         for name in _DIAGNOSTIC_ACTIONS
     ]
 
@@ -63,10 +68,10 @@ class OwnerGrantsCliTests(unittest.TestCase):
         remote = FakeOwner()
         with self.assertRaisesRegex(ValueError, "local_full_access_required"):
             perform(args, "token", remote, policy_checker=lambda _: {"enabled": True, "full_access": False},
-                    config=object())
+                    config=SimpleNamespace(device_id=DEVICE))
         self.assertEqual(len(remote.calls), 1)
         perform(args, "token", remote, policy_checker=lambda _: {"enabled": True, "full_access": True},
-                config=object())
+                config=SimpleNamespace(device_id=DEVICE))
         self.assertEqual(remote.calls[-1][0], "grant")
 
     def test_device_terminal_grant_requires_local_full_access(self):
@@ -77,11 +82,11 @@ class OwnerGrantsCliTests(unittest.TestCase):
         for policy in ({"enabled": False, "full_access": True},
                        {"enabled": True, "full_access": False}):
             with self.assertRaisesRegex(ValueError, "local_full_access_required"):
-                perform(args, "token", remote, policy_checker=lambda _: policy, config=object())
+                perform(args, "token", remote, policy_checker=lambda _: policy, config=SimpleNamespace(device_id=DEVICE))
             self.assertFalse(any(call[0] == "grant" for call in remote.calls))
         result = perform(args, "token", remote,
                          policy_checker=lambda _: {"enabled": True, "full_access": True},
-                         config=object())
+                         config=SimpleNamespace(device_id=DEVICE))
         self.assertTrue(result["ok"])
         self.assertEqual(result["group"]["profile_key"], "device-native-terminal")
         self.assertIsNone(result["group"]["space_id"])
@@ -93,14 +98,53 @@ class OwnerGrantsCliTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "local_full_access_required"):
             perform(args, "token", remote,
                     policy_checker=lambda _: {"enabled": True, "full_access": False},
-                    config=object())
+                    config=SimpleNamespace(device_id=DEVICE))
         self.assertFalse(any(call[0] == "grant" for call in remote.calls))
         result = perform(args, "token", remote,
                          policy_checker=lambda _: {"enabled": True, "full_access": True},
-                         config=object())
+                         config=SimpleNamespace(device_id=DEVICE))
         self.assertTrue(result["ok"])
         self.assertIsNone(result["group"]["space_id"])
         self.assertIsNone(result["group"]["project_id"])
+
+    def test_remote_owner_authorization_never_uses_this_desktops_local_policy(self):
+        remote = FakeOwner()
+        args = parse_args([
+            "authorize", "--device", DEVICE, "--client", CLIENT,
+            "--profile", "full-computer-control",
+        ])
+        def must_not_check_local(_config):
+            self.fail("remote device policy cannot be inferred from this host")
+        result = perform(args, "token", remote,
+                         config=SimpleNamespace(device_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+                         policy_checker=must_not_check_local)
+        self.assertTrue(result["ok"])
+        self.assertEqual([entry[0] for entry in remote.calls], ["authority", "grant"])
+        self.assertEqual(remote.calls[-1][2]["device_id"], DEVICE)
+
+    def test_remote_diagnostic_reports_local_policy_unknown_without_fake_success(self):
+        remote = FakeOwner()
+        remote.authority["grant_groups"] = [{
+            "client_id": CLIENT, "client_consent_active": True,
+            "scope_kind": "device", "device_id": DEVICE,
+            "space_id": None, "project_id": None, "valid_until": None,
+            "capabilities": canonical_diag_grants(),
+        }]
+        args = parse_args(["diagnose", "--device", DEVICE, "--client", CLIENT])
+        def must_not_check_local(_config):
+            self.fail("cannot inspect another device's local policy")
+        result = perform(args, "token", remote,
+                         config=SimpleNamespace(device_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+                         policy_checker=must_not_check_local)
+        self.assertEqual(result["state"], "target_device_local_policy_unverified")
+        self.assertIsNone(result["localPolicyEnabled"])
+        self.assertIsNone(result["localFullAccess"])
+        self.assertIsNone(result["missingInstalledCode"])
+        self.assertFalse(result["localPolicyVerified"])
+        self.assertFalse(result["endToEndProven"])
+        self.assertTrue(all(item["declaredByInstalledCode"] is None for item in result["capabilities"]))
+        self.assertEqual(result["missingClientGrants"], [])
+        self.assertEqual([entry[0] for entry in remote.calls], ["authority"])
 
     def test_project_grants_require_exact_project_scope(self):
         # The CLI validates paired identifiers, while the Control Plane
@@ -175,7 +219,7 @@ class OwnerGrantsCliTests(unittest.TestCase):
                     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
                 )
                 with self.assertRaisesRegex(ValueError, "owner_mcp_device_mismatch"):
-                    perform(parse_args(argv), "token", remote, config=object())
+                    perform(parse_args(argv), "token", remote, config=SimpleNamespace(device_id=DEVICE))
                 self.assertEqual([call[0] for call in remote.calls], ["authority"])
 
     def test_invalid_owner_authority_never_selects_or_grants(self):
@@ -223,13 +267,37 @@ class OwnerGrantsCliTests(unittest.TestCase):
             "capabilities": canonical_diag_grants(),
         }]
         args = parse_args(["diagnose", "--device", DEVICE, "--client", CLIENT])
-        result = perform(args, "token", remote, config=object(),
+        result = perform(args, "token", remote, config=SimpleNamespace(device_id=DEVICE),
                          policy_checker=lambda _: {"enabled": True, "full_access": True})
         self.assertEqual(result["state"], "preflight-ready-unproven")
         self.assertFalse(result["endToEndProven"])
         self.assertFalse(result["grantMutationPerformed"])
         self.assertEqual(result["missingClientGrants"], [])
         self.assertEqual([call[0] for call in remote.calls], ["authority"])
+
+    def test_existing_full_control_grant_does_not_silently_inherit_file_transfer(self):
+        from ordax_dev_agent.capability_snapshot import NATIVE_FILE_TRANSFER_ACTION_IDS
+        old_actions = [item for item in canonical_diag_grants()
+                       if item["capability"] not in NATIVE_FILE_TRANSFER_ACTION_IDS]
+        authority = {"device_id": DEVICE, "grant_groups": [{
+            "client_id": CLIENT, "client_consent_active": True,
+            "scope_kind": "device", "device_id": DEVICE,
+            "space_id": None, "project_id": None, "valid_until": None,
+            "profile_key": "full-computer-control",
+            "capabilities": old_actions,
+        }]}
+        result = diagnose_owner_mcp_readiness(authority, CLIENT, {
+            "enabled": True, "full_access": True,
+        })
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(set(result["missingClientGrants"]),
+                         set(NATIVE_FILE_TRANSFER_ACTION_IDS))
+        self.assertEqual(result["missingInstalledCode"], [])
+        checks = {item["capability"]: item for item in result["capabilities"]}
+        self.assertEqual(checks["computer.transfer_status"]["requiredAccessMode"], "read")
+        self.assertEqual(checks["computer.transfer_commit"]["requiredAccessMode"], "write")
+        self.assertFalse(result["grantMutationPerformed"])
+        self.assertFalse(result["endToEndProven"])
 
     def test_diagnose_skips_scoped_expired_and_other_client_grants(self):
         past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
@@ -258,7 +326,7 @@ class OwnerGrantsCliTests(unittest.TestCase):
         remote = FakeOwner()
         remote.authority["grant_groups"] = []
         result = perform(parse_args(["diagnose", "--device", DEVICE]), "token", remote,
-                         config=object(), policy_checker=lambda _: {
+                         config=SimpleNamespace(device_id=DEVICE), policy_checker=lambda _: {
                              "enabled": True, "full_access": True,
                          })
         self.assertEqual(result["state"], "blocked")
