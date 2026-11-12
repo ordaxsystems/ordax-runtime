@@ -34,6 +34,25 @@ class DeviceCapabilitySnapshotTests(unittest.TestCase):
         self.assertNotIn("shell.generic", by_id)
         self.assertNotIn("agent.self_test", by_id)
 
+    def test_native_transfer_inventory_and_execute_modes_use_real_handlers(self):
+        from ordax_dev_agent.capability_snapshot import NATIVE_FILE_TRANSFER_ACTION_IDS
+        self.assertEqual(NATIVE_FILE_TRANSFER_ACTION_IDS, frozenset({
+            "computer.transfer_begin", "computer.transfer_chunk",
+            "computer.transfer_status", "computer.transfer_commit",
+            "computer.transfer_abort",
+        }))
+        snapshot = device_capability_snapshot([
+            *NATIVE_FILE_TRANSFER_ACTION_IDS, "computer.transfer_unauthorized",
+            "computer.terminal_exec", "process.start",
+        ])
+        modes = {entry["id"]: entry["modes"] for entry in snapshot["capabilities"]}
+        self.assertEqual(modes["computer.transfer_status"], ["read"])
+        self.assertEqual(modes["computer.transfer_commit"], ["write"])
+        self.assertEqual(modes["computer.transfer_chunk"], ["write"])
+        self.assertEqual(modes["computer.terminal_exec"], ["write"])
+        self.assertEqual(modes["process.start"], ["write"])
+        self.assertNotIn("computer.transfer_unauthorized", modes)
+
     def test_complete_product_catalog_fits_bounded_local_snapshot(self):
         # In production the runtime publishes only locally registered IDs.
         # This synthetic ceiling check prevents the source catalog from
