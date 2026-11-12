@@ -1,4 +1,4 @@
-﻿# ORDAX Runtime
+# ORDAX Runtime
 
 Canonical Windows/external-host ORDAX Runtime, device agent and specialized host adapters.
 
@@ -86,8 +86,8 @@ ou `unavailable`, nunca `installed=true` inferido.
    `ActionRegistry.names` do Device após os filtros de host;
    comparar com `PRODUCT_ACTIONS` e o snapshot publicado. Não
    comparar as 93 ações globais com a UI do usuário.
-2. O limite atual `MAX_DEVICE_CAPABILITIES=64` lança erro se
-   a interseção habilitada ultrapassar 64. Na leitura estática do
+2. O limite atual `MAX_DEVICE_CAPABILITIES=128` lança erro se
+   a interseção habilitada ultrapassar 128. Na leitura estática do
    source, cerca de 90 IDs Product correspondem aos registros
    padrão da ActionRegistry **antes dos filtros de host**;
    isso é **risco condicional**, não prova de falha no Device.
