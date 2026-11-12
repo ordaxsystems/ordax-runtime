@@ -30,6 +30,7 @@ from .browser_session_actions import BrowserSessionActions
 from .computer_control_actions import ComputerControlActions
 from .computer_parity_actions import ComputerParityActions
 from .computer_filesystem_actions import ComputerFilesystemActions, load_computer_access_policy
+from .computer_transfer_actions import ComputerTransferActions
 from .computer_activity import ComputerActivityTracker
 from .memory_actions import MemoryActions
 from .application_intelligence_actions import ApplicationIntelligenceActions
@@ -139,6 +140,7 @@ class ActionRegistry(
     ComputerControlActions,
     ComputerParityActions,
     ComputerFilesystemActions,
+    ComputerTransferActions,
     MemoryActions,
     ApplicationIntelligenceActions,
     ComponentActions,
@@ -249,6 +251,11 @@ class ActionRegistry(
             "computer.text_read": self.computer_text_read,
             "computer.text_write": self.computer_text_write,
             "computer.text_patch": self.computer_text_patch,
+            "computer.transfer_begin": self.computer_transfer_begin,
+            "computer.transfer_chunk": self.computer_transfer_chunk,
+            "computer.transfer_status": self.computer_transfer_status,
+            "computer.transfer_commit": self.computer_transfer_commit,
+            "computer.transfer_abort": self.computer_transfer_abort,
             "computer.directory_create": self.computer_directory_create,
             "computer.path_move": self.computer_path_move,
             "computer.path_remove": self.computer_path_remove,
