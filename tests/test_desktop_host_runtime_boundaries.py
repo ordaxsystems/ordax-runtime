@@ -134,7 +134,11 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
             self.assertFalse(status.data["full_filesystem"])
             self.assertEqual(status.data["allowed_roots"], [])
             self.assertEqual(status.data["relative_paths_base"], "")
-            self.assertEqual(status.data["runtime_capabilities"]["implemented_actions"], [])
+            capabilities = status.data["runtime_capabilities"]
+            self.assertEqual(capabilities["implemented_actions"], ["computer.access_status"])
+            self.assertEqual(capabilities["implemented_action_count"], 1)
+            self.assertEqual(capabilities["device_terminal_process_actions"], [])
+            self.assertFalse(capabilities["remote_routing_evaluated"])
             from ordax_dev_agent.computer_filesystem_actions import update_computer_access_policy
             with self.assertRaises(PermissionError):
                 update_computer_access_policy(config, {"enabled": True})
