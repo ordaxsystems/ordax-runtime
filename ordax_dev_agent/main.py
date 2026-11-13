@@ -83,15 +83,14 @@ def product_idle_claim_delay_seconds(
     if type(verified_wake) is not bool:
         raise ValueError("verified_wake must be a boolean")
     # A connected socket that has never delivered a real wake signal is not
-    # evidence of push availability. Keep the budgeted 30-60s claim fallback.
+    # evidence of push availability. Keep a responsive bounded SQL fallback.
     if verified_wake:
         return 300.0
-    # poll_seconds controls active connectivity, not the cost of repeatedly
-    # claiming an empty PostgreSQL queue. The previous 8–12s idle ceiling
-    # can exhaust Hyperdrive Free when several devices are enrolled.
-    # Retain a brief interactive burst, then settle to at least 30 seconds.
-    # Workers Paid is required for sustained usage beyond its service quota.
-    ceiling = min(60.0, max(30.0, configured_ceiling))
+    # The Runtime is an interactive control surface: an idle device must not
+    # wait 30–60 seconds before observing ordinary work. Retain the burst and
+    # cap the fallback at 8–12 seconds. Once authenticated wake is verified,
+    # SQL polling becomes the five-minute reconciliation path above.
+    ceiling = min(12.0, max(8.0, configured_ceiling))
     return min(ceiling, 0.25 * (1.8 ** min(idle_misses - 1, 11)))
 
 
@@ -118,8 +117,8 @@ def product_idle_wait_seconds(
 ) -> float:
     """Wake for the earliest deadline, without turning heartbeat into a claim.
 
-    The Product wake listener is optional and disabled by default. The idle
-    claim budget can be 30–60 seconds (or 300 with advisory wake), while the
+    The Product wake listener is the preferred low-latency path. The idle
+    SQL fallback is bounded to 8–12 seconds (or 300 after verified wake), while the
     independently required presence heartbeat is due every 20 seconds.
     """
     if not all(math.isfinite(value) for value in (now, next_claim_due, next_heartbeat)):
