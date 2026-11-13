@@ -133,3 +133,29 @@ O objeto público nunca contém challenge ID, marcador de sessão, cliente,
 UUID, credencial ou mensagem arbitrária da autoridade. O endpoint local
 permanece protegido pelas regras loopback e não substitui o fluxo OAuth
 Owner nem a verificação de ação MCP real.
+
+
+## Regra canônica do binding Product MCP (13/11/2026)
+
+O Runtime **não** renova sessão Central por heartbeat. Depois que um challenge
+válido é confirmado pelo Device correto, o binding canônico
+`conversa Product MCP -> device_id` pertence à Platform e é persistente até
+um evento explícito de autoridade invalidá-lo.
+
+Portanto:
+
+- heartbeat/presença continuam sendo readiness e disponibilidade de execução;
+- o poll de `/v3/product/device/central-session` serve somente para encontrar
+  challenges pendentes de seleção/atestaçāo;
+- uma fila vazia de challenges não significa sessão expirada;
+- reiniciar o Runtime ou ficar offline não deve apagar nem trocar o target já
+  confirmado;
+- OAuth/grant revogado, device retirado ou binding explicitamente revogado
+  continuam bloqueando fail-closed;
+- não reintroduzir TTL de 30 minutos, lease deslizante, keepalive de binding
+  nem re-atestação periódica no Runtime.
+
+A fonte de verdade dessa semântica é a Platform
+`ordax_open/confirm/resolve_central_device_session_v1`; o Runtime apenas
+confirma challenges com a identidade Native do Device e executa sob grants
+atuais.
