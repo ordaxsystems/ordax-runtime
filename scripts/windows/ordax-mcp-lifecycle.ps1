@@ -243,7 +243,7 @@ switch ($Operation) {
                     # status provider which may block on filesystem or adapters.
                     $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
                     if ($status.local_dispatch_ready -eq $true -and
-                        $status.runtime.state -eq 'ready' -and
+                        $status.runtime.state -in @('ready','busy') -and
                         $status.runtime.transport_state -eq 'connected' -and
                         $status.runtime.product_dispatch_ready -eq $true) {
                         $healthy = $true
