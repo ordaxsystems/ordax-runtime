@@ -131,6 +131,17 @@ for request identity, transport limits, uncertain submission/completion and the
 separate PostgreSQL cutover dependencies. Source version is owned exclusively by
 `pyproject.toml`; source tests do not establish an installed or production release.
 
+
+### Product MCP session binding: persistent routing, not heartbeat lease
+
+For the direct ChatGPT Product MCP path, a confirmed conversation-to-device
+binding is persistent routing owned by `ordax-platform`. Runtime heartbeats
+publish presence/readiness and may schedule checks for a pending short-lived
+challenge, but they do **not** renew the binding and inactivity must not force
+periodic re-attestation. Current OAuth consent and grants remain independently
+revalidated by Platform. Do not add a 30-minute Runtime session TTL, sliding
+lease, target auto-switch, or heartbeat-based authorization.
+
 Device-only presence uses the existing [Product presence client](docs/PRODUCT-DEVICE-PRESENCE-CLIENT.md)
 with a verified canonical UUID/credential, bounded receipts and a total deadline.
 It rejects inherited account authentication. The normal legacy heartbeat is not

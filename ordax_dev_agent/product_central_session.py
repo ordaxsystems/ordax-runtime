@@ -1,8 +1,10 @@
 """Device side of the Product-MCP Central session attestation handshake.
 
 The client owns no scheduler and stores no device credential. The existing
-Cloudflare command heartbeat drives it. A short-lived challenge is polled from
-the canonical Product MCP and confirmed with the same Product device identity
+Cloudflare command heartbeat only schedules checks for short-lived pending
+attestation challenges. It does not renew or keep alive the durable
+conversation -> device binding owned by the canonical Platform. A challenge is
+polled from the Product MCP and confirmed with the same Product device identity
 already verified by the canonical Product device heartbeat.
 """
 from __future__ import annotations
@@ -112,9 +114,12 @@ class ProductCentralSessionClient:
     def schedule_tick(self) -> bool:
         """Run the existing attestation check off the heartbeat/claim path.
 
-        The heartbeat is the only trigger: no extra timer, daemon process,
-        credential store, or concurrent session polls. A stalled optional
-        attestation cannot hold the authoritative Product device heartbeat.
+        The heartbeat is the only trigger for checking pending attestation:
+        no extra timer, daemon process, credential store, or concurrent session
+        polls. This tick is not a session-renewal mechanism; confirmed
+        conversation -> device routing is persistent in Platform until an
+        explicit authority event invalidates it. A stalled optional attestation
+        cannot hold the authoritative Product device heartbeat.
         """
         with self._tick_lock:
             if (self._closing.is_set()
