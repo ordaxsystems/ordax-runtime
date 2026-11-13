@@ -404,7 +404,11 @@ def _execute_claimed_job(
     job_runtime["progress"] = None
     verbose_lifecycle = job.action in _VERBOSE_JOB_LIFECYCLE_EVENTS
     if verbose_lifecycle:
-        control.append_event(job.id, "info", f"starting {job.action}")
+        try:
+            control.append_event(job.id, "info", f"starting {job.action}")
+        except Exception as error:
+            # Progress telemetry is optional and must never strand a leased job.
+            print(f"starting progress event failed: {error}", file=sys.stderr)
     artifact_cache: dict = {}
 
     def publish_observation(observation: dict) -> None:
@@ -1237,6 +1241,11 @@ def run(
                         if len(active_jobs) > 1
                         else "executing"
                     )
+                    first_active_job = len(active_jobs) == 1
+                if first_active_job:
+                    # Advertise busy immediately after the first accepted lease,
+                    # rather than waiting for the ordinary idle heartbeat cadence.
+                    next_heartbeat = 0.0
 
                 future = job_executor.submit(
                     _execute_claimed_job,
