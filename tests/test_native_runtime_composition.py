@@ -24,11 +24,14 @@ DEVICE = "22222222-2222-4222-8222-222222222222"
 
 class NativeRuntimeCompositionTests(unittest.TestCase):
     def setUp(self):
+        # Resolve the OS temp root before intentionally clearing inherited
+        # environment. Otherwise Windows tempfile can fall back to cwd, which
+        # would place this fixture inside the Runtime source tree it must protect.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
         environment = patch.dict(os.environ, {}, clear=True)
         environment.start()
         self.addCleanup(environment.stop)
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.state = self.root / "state"
         self.state.mkdir()
@@ -214,7 +217,12 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         plane.complete.assert_called_once()
 
     def test_native_graphics_register_only_supplied_handlers_under_shared_policy(self):
-        (self.state / "agent-settings.json").write_text(json.dumps({"computer_access": {"enabled": False}}))
+        (self.state / "agent-settings.json").write_text(json.dumps({
+            "computer_access": {
+                "enabled": False,
+                "allowed_roots": [str(self.workspace)],
+            },
+        }))
         handler = Mock(return_value=ActionResult(True, "native screen ready", {"width": 1280}))
         registry = ActionRegistry(self.config, computer_adapter={"computer.screen_info": handler})
         self.assertEqual(COMPUTER_GRAPHICAL_ACTIONS.intersection(registry.names), {"computer.screen_info"})
