@@ -311,21 +311,15 @@ def _end_job_lease(runtime: dict, *, report_committed: bool) -> None:
         lease["lease_expires_at"] = None
 
 
-def _keep_job_alive_tick(
+def _renew_active_job_tick(
     control: object,
     active_job: object,
     stop_event: threading.Event,
-    operation_lock: threading.Lock,
+    lease_lock: threading.Lock,
     runtime: dict,
-    host_actions: object,
-    agent_version: str,
 ) -> None:
-    """Renew an active lease and publish busy status before terminal reporting.
-
-    The lock serializes this pair with the terminal report. Once shutdown is
-    requested, an in-flight renewal must not publish a stale busy heartbeat.
-    """
-    with operation_lock:
+    """Renew only the fenced job lease; a slow renewal must not block presence."""
+    with lease_lock:
         if stop_event.is_set():
             return
         try:
@@ -340,6 +334,18 @@ def _keep_job_alive_tick(
                 f"{runtime.get('job_lease', {}).get('last_error_code')}",
                 file=sys.stderr,
             )
+
+
+def _heartbeat_active_job_tick(
+    control: object,
+    stop_event: threading.Event,
+    presence_lock: threading.Lock,
+    runtime: dict,
+    host_actions: object,
+    agent_version: str,
+) -> None:
+    """Publish live presence independently of lease-renewal network latency."""
+    with presence_lock:
         if stop_event.is_set():
             return
         try:
@@ -357,12 +363,18 @@ def _complete_job_after_stopping_keepalive(
     active_job: object,
     result: object,
     stop_event: threading.Event,
-    operation_lock: threading.Lock,
+    lease_lock: threading.Lock,
+    presence_lock: threading.Lock,
 ) -> None:
-    """Stop renewal and serialize terminal reporting after any in-flight tick."""
+    """Fence terminal reporting after BOTH in-flight keepalive operations.
+
+    Stop first to reject new ticks. Complete only after both network calls
+    finish, so neither renewal nor a late busy heartbeat can follow the report.
+    """
     stop_event.set()
-    with operation_lock:
-        control.complete(active_job, result)
+    with presence_lock:
+        with lease_lock:
+            control.complete(active_job, result)
 
 
 def _agent_metadata(config: AgentConfig) -> dict:
@@ -939,21 +951,32 @@ def run(
                 registry.on_observation = publish_observation
 
                 keepalive_stop = threading.Event()
-                keepalive_operation_lock = threading.Lock()
+                lease_lock = threading.Lock()
+                presence_lock = threading.Lock()
 
-                def _keep_job_alive(active_job=job, stop_event=keepalive_stop) -> None:
+                def _keep_lease(active_job=job, stop_event=keepalive_stop) -> None:
                     while not stop_event.wait(20.0):
-                        _keep_job_alive_tick(
-                            control, active_job, stop_event, keepalive_operation_lock,
+                        _renew_active_job_tick(
+                            control, active_job, stop_event, lease_lock, runtime,
+                        )
+
+                def _keep_presence(stop_event=keepalive_stop) -> None:
+                    while not stop_event.wait(20.0):
+                        _heartbeat_active_job_tick(
+                            control, stop_event, presence_lock,
                             runtime, host_actions, __version__,
                         )
 
-                keepalive_thread = threading.Thread(
-                    target=_keep_job_alive,
-                    name=f"ordax-job-{job.id[:8]}-keepalive",
+                lease_thread = threading.Thread(
+                    target=_keep_lease, name=f"ordax-job-{job.id[:8]}-lease",
                     daemon=True,
                 )
-                keepalive_thread.start()
+                presence_thread = threading.Thread(
+                    target=_keep_presence, name=f"ordax-job-{job.id[:8]}-presence",
+                    daemon=True,
+                )
+                lease_thread.start()
+                presence_thread.start()
 
                 try:
                     try:
@@ -1007,14 +1030,15 @@ def run(
                             # An optional progress event must not block the terminal result.
                             print(f"terminal progress event failed: {error}", file=sys.stderr)
                     _complete_job_after_stopping_keepalive(
-                        control, job, result, keepalive_stop, keepalive_operation_lock,
+                        control, job, result, keepalive_stop, lease_lock, presence_lock,
                     )
                     _end_job_lease(runtime, report_committed=True)
                     runtime["job_timings"]["report_seconds"] = round(time.monotonic() - report_started, 3)
                 finally:
                     registry.on_observation = None
                     keepalive_stop.set()
-                    keepalive_thread.join(timeout=2.0)
+                    lease_thread.join(timeout=2.0)
+                    presence_thread.join(timeout=2.0)
 
                 runtime["job_timings"]["total_seconds"] = round(time.monotonic() - job_started, 3)
                 runtime["job_phase"] = "completed" if result.ok else "failed"
