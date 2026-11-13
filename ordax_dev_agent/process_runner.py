@@ -34,12 +34,14 @@ def run_command(
             {str(key): str(value) for key, value in env.items()} if env else None,
         )
 
+    # Terminal/process output is a UTF-8 text contract. Capture bytes first so
+    # Windows locale/ACP never silently decodes UTF-8 as CP1252/Latin-1.
     process = subprocess.Popen(
         command,
         cwd=str(cwd) if cwd else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        text=False,
         shell=False,
         creationflags=creationflags,
         start_new_session=start_new_session,
@@ -92,25 +94,51 @@ def run_command(
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 pass
-            stdout, stderr = "", ""
+            stdout, stderr = b"", b""
 
+    raw_stdout = stdout or b""
+    raw_stderr = stderr or b""
+    decode_errors: list[dict[str, object]] = []
+
+    def decode_utf8(stream: str, raw: bytes) -> str:
+        try:
+            return raw.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as error:
+            decode_errors.append({
+                "stream": stream,
+                "encoding": "utf-8",
+                "byte_offset": error.start,
+            })
+            return ""
+
+    decoded_stdout = decode_utf8("stdout", raw_stdout)
+    decoded_stderr = decode_utf8("stderr", raw_stderr)
     data = {
         "returncode": process.returncode,
-        "stdout": (stdout or "")[-40000:],
-        "stderr": (stderr or "")[-40000:],
+        "stdout": decoded_stdout[-40000:],
+        "stderr": decoded_stderr[-40000:],
+        "output_encoding": "utf-8",
         "command": command,
         "timed_out": timed_out,
         "timeout_seconds": timeout if timed_out else None,
         # A failed tree kill is not a successful cleanup. Keep the caller
         # informed without exposing another process's path or identity.
         **({"cleanup_unverified": True} if cleanup_unverified else {}),
+        **({
+            "error_code": "process_output_encoding_invalid",
+            "decode_errors": decode_errors,
+        } if decode_errors else {}),
     }
     return ActionResult(
-        ok=(process.returncode == 0 and not timed_out),
+        ok=(process.returncode == 0 and not timed_out and not decode_errors),
         summary=(
             f"command timed out after {timeout}s"
             if timed_out
-            else ("command completed" if process.returncode == 0 else "command failed")
+            else (
+                "command output is not valid UTF-8"
+                if decode_errors
+                else ("command completed" if process.returncode == 0 else "command failed")
+            )
         ),
         data=data,
     )
