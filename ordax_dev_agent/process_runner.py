@@ -21,7 +21,7 @@ def _windows_utf8_launch_command(command: list[str]) -> list[str]:
     """Make legacy Windows PowerShell honor the Runtime UTF-8 output contract."""
     if sys.platform != "win32" or not command:
         return command
-    executable = command[0].replace("\\\\", "/").rsplit("/", 1)[-1].lower()
+    executable = command[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
     if executable not in _WINDOWS_POWERSHELL_NAMES:
         return command
     prepared = list(command)
