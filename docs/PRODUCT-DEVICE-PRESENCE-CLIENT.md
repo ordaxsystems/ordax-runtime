@@ -27,24 +27,28 @@ A su?te `tests.test_product_device_control_plane` cobre heartbeat, claim/start c
 
 ## Presença durante ociosidade (01/11/2026)
 
-O `product_wake_enabled` permanece desativado por padrão até a validação
-do protocolo de wake. Em 04/11/2026, um teste físico no Windows com e sem
-credencial de dispositivo terminou em timeout no handshake WSS; isso não
-comprova a implantação nem a indisponibilidade geral do servidor e não
-justifica ligar o wake ou ampliar o intervalo de claims no dispositivo. A fila de ações é consultada no máximo no prazo
-`next_claim_due`, cuja espera conservadora aumenta para 30–60 segundos;
-com wake conectado **e entrega de um sinal `wake` verificada na mesma conexão**, a reconciliação de jobs é de até 300 segundos. Conexão silenciosa, sem prova de entrega, preserva o intervalo limitado de 30–60 segundos.
+O `product_wake_enabled` é o caminho canônico de baixa latência no Runtime,
+mas continua estritamente **advisory**: PostgreSQL permanece a única autoridade
+de fila, lease e resultado. Uma conexão WSS silenciosa não é prova de entrega.
+Enquanto nenhum sinal `wake` real foi entregue na conexão atual, a fila é
+reconciliada por SQL com fallback limitado a **18 segundos**.
 
-**Heartbeat não é claim.** O mesmo loop canônico agora espera sempre o
-menor prazo entre `next_claim_due` e `next_heartbeat`, **independente
-do wake**. Ao acordar para um heartbeat de 20 segundos, preserva
-`next_claim_due` e não consulta o banco desnecessariamente por uma nova
-ação. Uma notificação wake continua apenas antecipando um claim,
-sempre sob a autoridade Product; não concede execução ou permissões.
+Depois de uma entrega de wake comprovada, o Runtime reduz a frequência de
+polling, mas a reconciliação de sinal perdido é de no máximo **60 segundos**.
+Esse limite é intencionalmente menor que o TTL canônico de **120 segundos** das
+ações Product MCP. Nunca aumentar a reconciliação para além do TTL: nesse caso
+um wake perdido faria a ação expirar antes de o próprio fallback poder recuperá-la.
 
-O teste `tests.test_product_idle_poll_budget` cobre wake desligado por
-padrão, heartbeat de 20s durante claims a cada 60s/300s, prioridades dos
-prazos, tratamento de deadline vencido e limites de consultas PostgreSQL.
+**Heartbeat não é claim.** O loop espera sempre o menor prazo entre
+`next_claim_due` e `next_heartbeat`, independentemente do wake. O heartbeat
+de presença ocorre a cada **30 segundos** e não consulta a fila só por manter
+presença. Uma notificação wake apenas antecipa um claim; não carrega comando,
+grant, challenge ou permissão.
+
+O teste `tests.test_product_idle_poll_budget` e a verificação do pacote Windows
+travam os três contratos atuais: fallback sem wake ≤18 s, reconciliação após
+wake =60 s e heartbeat =30 s, além de exigir que a reconciliação permaneça abaixo
+do TTL de ação Product.
 
 ## Prontidão local portátil e de baixo custo (Windows / OS Native)
 
