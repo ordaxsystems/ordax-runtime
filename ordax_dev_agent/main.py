@@ -115,6 +115,29 @@ def _consume_product_wake(control: object, listener: object | None) -> bool:
     return True
 
 
+def _start_optional_product_wake_listener(
+    *, enabled: bool, control: object, stop_requested: threading.Event,
+    native_access_enabled: Callable[[], bool] | None = None,
+) -> object | None:
+    """Start advisory wake without making it a Runtime startup dependency.
+
+    PostgreSQL claim polling is the canonical fallback. A missing optional
+    package edge, malformed local wake configuration, or listener startup
+    failure must never suppress heartbeat, claims, or the local status server.
+    """
+    if not enabled:
+        return None
+    try:
+        from .product_wake_signal import ProductWakeListener
+        listener = ProductWakeListener(
+            control, stop_requested, native_access_enabled,
+        )
+        listener.start()
+        return listener
+    except Exception:
+        return None
+
+
 def product_idle_wait_seconds(
     *, now: float, next_claim_due: float, next_heartbeat: float,
 ) -> float:
@@ -1081,11 +1104,12 @@ def run(
     )
     job_futures: dict[object, str] = {}
     from .remote_protocol import DeviceAuthorizationError
-    wake_listener = None
-    if config.product_wake_enabled:
-        from .product_wake_signal import ProductWakeListener
-        wake_listener = ProductWakeListener(control, stop_requested, native_access_enabled)
-        wake_listener.start()
+    wake_listener = _start_optional_product_wake_listener(
+        enabled=config.product_wake_enabled,
+        control=control,
+        stop_requested=stop_requested,
+        native_access_enabled=native_access_enabled,
+    )
 
     try:
         while not stop:
