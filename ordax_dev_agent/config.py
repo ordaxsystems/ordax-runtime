@@ -87,6 +87,12 @@ class AgentConfig:
             "ORDAX_CONTROL_PLANE_PROTOCOL",
             settings.get("control_plane_protocol", "cloudflare-v3"),
         )
+        hordax_path_value = (
+            os.environ.get("ORDAX_HORDAX_PATH")
+            or settings.get("hordax_path")
+        )
+        if not hordax_path_value:
+            hordax_path_value = Path.home() / "Documents" / "github" / "HORDAX-game"
         if str(protocol).strip().lower() != "cloudflare-v3":
             raise ValueError(f"Unsupported control-plane protocol: {protocol}")
 
@@ -128,15 +134,7 @@ class AgentConfig:
                     settings.get("agent_repo_path", state_dir / "src"),
                 )
             ),
-            hordax_path=Path(
-                os.environ.get(
-                    "ORDAX_HORDAX_PATH",
-                    settings.get(
-                        "hordax_path",
-                        str(Path.home() / "Documents" / "github" / "HORDAX-game"),
-                    ),
-                )
-            ),
+            hordax_path=Path(hordax_path_value),
             bridge_path=Path(
                 os.environ.get(
                     "ORDAX_BRIDGE_PATH",
