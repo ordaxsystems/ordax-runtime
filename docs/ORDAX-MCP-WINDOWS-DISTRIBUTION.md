@@ -407,6 +407,13 @@ selecionado ainda deve atestar o desafio na Platform. Todas as decisões de
 autorização permanecem no Control Plane; não existe cache de tokens,
 segundo agente, polling automático ou renovação silenciosa.
 
+A expiração mostrada nessa UI pertence **somente ao challenge pendente**.
+Depois da confirmação Native válida, o binding conversa Product MCP →
+dispositivo é persistente na Platform e não deve ser renovado pelo heartbeat,
+pelo instalador, pelo supervisor ou por um temporizador local. Offline/restart
+não escolhem outro target; revogação de OAuth/grant/device continua sendo a
+invalidação autoritativa.
+
 Solicitações vencidas, ausência de alvo elegível, resposta inconsistente
 ou fila excessiva falham fechadas. Se a resposta ao POST for perdida, a
 interface **não repete a seleção**; o usuário deverá consultar novamente.
