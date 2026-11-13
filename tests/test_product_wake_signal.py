@@ -382,7 +382,14 @@ class ProductWakeTests(unittest.TestCase):
             settings_dir = local / "OrdaX" / "DevAgent"
             settings_dir.mkdir(parents=True)
             settings = settings_dir / "agent-settings.json"
-            with patch.dict("os.environ", {"LOCALAPPDATA": str(local)}, clear=True):
+            with patch.dict(
+                "os.environ",
+                {
+                    "LOCALAPPDATA": str(local),
+                    "ORDAX_HORDAX_PATH": str(local / "HORDAX-game"),
+                },
+                clear=True,
+            ):
                 self.assertTrue(AgentConfig.from_env().product_wake_enabled)
                 settings.write_text(json.dumps({"product_wake_enabled": False}), encoding="utf-8")
                 self.assertFalse(AgentConfig.from_env().product_wake_enabled)
