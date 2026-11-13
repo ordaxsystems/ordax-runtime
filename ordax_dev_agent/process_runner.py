@@ -11,6 +11,27 @@ from .models import ActionResult
 from .process_environment import external_process_environment
 
 
+_WINDOWS_POWERSHELL_NAMES = frozenset({"powershell", "powershell.exe"})
+_POWERSHELL_UTF8_PREFIX = (
+    "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); "
+)
+
+
+def _windows_utf8_launch_command(command: list[str]) -> list[str]:
+    """Make legacy Windows PowerShell honor the Runtime UTF-8 output contract."""
+    if sys.platform != "win32" or not command:
+        return command
+    executable = command[0].replace("\\\\", "/").rsplit("/", 1)[-1].lower()
+    if executable not in _WINDOWS_POWERSHELL_NAMES:
+        return command
+    prepared = list(command)
+    for index, argument in enumerate(prepared[:-1]):
+        if argument.lower() in {"-command", "-c"}:
+            prepared[index + 1] = _POWERSHELL_UTF8_PREFIX + prepared[index + 1]
+            break
+    return prepared
+
+
 def run_command(
     command: list[str],
     *,
@@ -29,15 +50,24 @@ def run_command(
         start_new_session = True
 
     process_env = None
-    if env is not None or (getattr(sys, "frozen", False) and sys.platform == "linux"):
+    if env is not None or sys.platform == "win32" or (getattr(sys, "frozen", False) and sys.platform == "linux"):
         process_env = external_process_environment(
             {str(key): str(value) for key, value in env.items()} if env else None,
         )
+        if sys.platform == "win32":
+            # Python otherwise inherits the Windows ANSI code page for redirected
+            # stdio. These are defaults, not overrides: an explicit caller choice
+            # remains visible and strict UTF-8 decoding will fail closed if it
+            # violates the terminal output contract.
+            process_env.setdefault("PYTHONUTF8", "1")
+            process_env.setdefault("PYTHONIOENCODING", "utf-8")
+
+    launch_command = _windows_utf8_launch_command(command)
 
     # Terminal/process output is a UTF-8 text contract. Capture bytes first so
     # Windows locale/ACP never silently decodes UTF-8 as CP1252/Latin-1.
     process = subprocess.Popen(
-        command,
+        launch_command,
         cwd=str(cwd) if cwd else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
