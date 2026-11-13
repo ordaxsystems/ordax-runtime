@@ -130,7 +130,11 @@ static HANDLE create_kill_job(void) {
     }
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
     ZeroMemory(&limits, sizeof(limits));
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // Keep ordinary Runtime children owned by the launcher job, while allowing
+    // the explicitly breakaway persistent-process manager to survive a Runtime
+    // restart and reconcile its durable process receipt afterwards.
+    limits.BasicLimitInformation.LimitFlags =
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
     if (!SetInformationJobObject(
             job,
             JobObjectExtendedLimitInformation,
