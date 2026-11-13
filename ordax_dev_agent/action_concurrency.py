@@ -35,6 +35,25 @@ _GUI_EXCLUSIVE_ACTIONS = frozenset({
     "computer.scroll",
 })
 
+# Observational operations do not mutate device state and must not inherit the
+# conservative global lock used for unknown action domains. They still consume
+# a bounded execution slot, so monitoring cannot starve the Runtime.
+_DEVICE_OBSERVATION_ACTIONS = frozenset({
+    "computer.access_status",
+    "computer.active_window",
+    "computer.activity_status",
+    "computer.clipboard_read",
+    "computer.directory_list",
+    "computer.process_list",
+    "computer.process_logs",
+    "computer.process_status",
+    "computer.processes",
+    "computer.screen_info",
+    "computer.screenshot",
+    "computer.search",
+    "computer.windows",
+})
+
 _DEVICE_FILE_ACTION_FIELDS = {
     "computer.file_stat": ("path",),
     "computer.text_read": ("path",),
@@ -148,6 +167,9 @@ class ActionConcurrencyCoordinator:
 
         if action in _GUI_EXCLUSIVE_ACTIONS:
             return False, ("computer:gui-interactive",)
+
+        if action in _DEVICE_OBSERVATION_ACTIONS:
+            return False, ()
 
         if action in _DESTRUCTIVE_DEVICE_PATH_ACTIONS:
             return False, ("computer:filesystem-destructive",)
