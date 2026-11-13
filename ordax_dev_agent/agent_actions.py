@@ -54,7 +54,7 @@ class AgentActions:
                 "actions": self.names,
                 "projects": [project.public() for project in self.projects.values()],
                 "default_project": self.config.default_project,
-                "busy": self._execution_lock.locked(),
+                "busy": self._concurrency.is_busy(),
                 "versions": component_versions(),
                 "capability_contracts": capability_contracts(),
                 "adapter_contracts": self.adapter_contracts,
