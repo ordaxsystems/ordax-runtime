@@ -32,6 +32,8 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.state = self.root / "state"
         self.state.mkdir()
+        self.workspace = self.root / "workspace"
+        self.workspace.mkdir()
         self.config = AgentConfig(
             agent_name="native-test", poll_seconds=8,
             state_dir=self.state, agent_repo_path=self.root / "runtime-source",
@@ -181,7 +183,8 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         plane = Mock()
         plane.recover_pending_reports.return_value = 0
         plane.pair_if_needed.return_value = False
-        plane.claim_next_job.return_value = job
+        jobs = [job]
+        plane.claim_next_job.side_effect = lambda: jobs.pop(0) if jobs else None
         handlers = {}
         results = []
 
@@ -217,7 +220,12 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         self.assertEqual(COMPUTER_GRAPHICAL_ACTIONS.intersection(registry.names), {"computer.screen_info"})
         self.assertFalse(registry.execute("computer.screen_info", {}).ok)
         handler.assert_not_called()
-        (self.state / "agent-settings.json").write_text(json.dumps({"computer_access": {"enabled": True}}))
+        (self.state / "agent-settings.json").write_text(json.dumps({
+            "computer_access": {
+                "enabled": True,
+                "allowed_roots": [str(self.workspace)],
+            },
+        }))
         self.assertTrue(registry.execute("computer.screen_info", {}).ok)
         handler.assert_called_once_with({})
         self.assertFalse(registry.execute("computer.click", {"x": 1, "y": 1}).ok)
@@ -242,9 +250,12 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         # This is source integration evidence, not a credentialled device E2E.
         for enabled in (True, False):
             with self.subTest(enabled=enabled):
-                path = self.root / ("allowed.txt" if enabled else "denied.txt")
+                path = self.workspace / ("allowed.txt" if enabled else "denied.txt")
                 (self.state / "agent-settings.json").write_text(json.dumps({
-                    "computer_access": {"enabled": enabled, "allowed_roots": [str(self.root)]},
+                    "computer_access": {
+                        "enabled": enabled,
+                        "allowed_roots": [str(self.workspace)],
+                    },
                 }))
                 job = AgentJob("native-file-job", "computer.text_write", {
                     "path": str(path), "content": "native runtime integration\n", "create": True,
@@ -252,7 +263,8 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                 plane = Mock()
                 plane.recover_pending_reports.return_value = 0
                 plane.pair_if_needed.return_value = False
-                plane.claim_next_job.return_value = job
+                jobs = [job]
+                plane.claim_next_job.side_effect = lambda: jobs.pop(0) if jobs else None
                 handlers = {}
                 results = []
 
