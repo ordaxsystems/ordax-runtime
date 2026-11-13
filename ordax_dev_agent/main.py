@@ -67,7 +67,11 @@ def _transport_retry_delay(consecutive_failures: int) -> float:
 
 
 def product_idle_claim_delay_seconds(
-    idle_misses: int, configured_ceiling: float, *, verified_wake: bool = False,
+    idle_misses: int,
+    configured_ceiling: float,
+    *,
+    verified_wake: bool = False,
+    active_jobs: int = 0,
 ) -> float:
     """Bounded idle polling that preserves the daily PostgreSQL query budget.
 
@@ -82,9 +86,14 @@ def product_idle_claim_delay_seconds(
         raise ValueError("configured_ceiling must be finite")
     if type(verified_wake) is not bool:
         raise ValueError("verified_wake must be a boolean")
+    if type(active_jobs) is not int or active_jobs < 0:
+        raise ValueError("active_jobs must be a non-negative integer")
     # A connected socket that has never delivered a real wake signal is not
     # evidence of push availability. Keep a responsive bounded SQL fallback.
-    if verified_wake:
+    if verified_wake and active_jobs == 0:
+        # Slow reconciliation is allowed only when the Runtime is truly idle.
+        # While another job is active, independent new work must remain
+        # discoverable through the responsive fallback even if a wake is lost.
         # Product MCP queue entries currently expire after 120 seconds. A lost
         # advisory wake must be reconciled well before that authority expires,
         # otherwise the fallback cannot recover the queued action at all.
@@ -1227,12 +1236,14 @@ def run(
                     # reconciliation must happen before the Product action TTL.
                     # A silent socket keeps the 18-second fallback.
                     idle_delay = product_idle_claim_delay_seconds(
-                        idle_claim_misses, config.poll_seconds,
+                        idle_claim_misses,
+                        config.poll_seconds,
                         verified_wake=(
                             wake_listener is not None
                             and wake_listener.connected.is_set()
                             and wake_listener.delivered.is_set()
                         ),
+                        active_jobs=len(job_futures),
                     )
                     next_claim_due = time.monotonic() + idle_delay
                     _wait_for_native_access(
