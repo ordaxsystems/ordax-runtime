@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from ordax_dev_agent.config import AgentConfig
-from ordax_dev_agent.main import _consume_product_wake
+from ordax_dev_agent.main import _consume_product_wake, _start_optional_product_wake_listener
 from ordax_dev_agent.product_ingress import TrustedProductIngress
 from ordax_dev_agent.product_wake_signal import (
     ProductWakeListener, WAKE_MESSAGE, trusted_wake_url,
@@ -43,6 +43,34 @@ class MockSocket:
 
 
 class ProductWakeTests(unittest.TestCase):
+    def test_wake_startup_failure_falls_back_without_blocking_runtime(self):
+        stop = threading.Event()
+        control = SimpleNamespace()
+        with patch(
+            "ordax_dev_agent.product_wake_signal.ProductWakeListener",
+            side_effect=RuntimeError("optional wake unavailable"),
+        ):
+            listener = _start_optional_product_wake_listener(
+                enabled=True,
+                control=control,
+                stop_requested=stop,
+                native_access_enabled=lambda: True,
+            )
+        self.assertIsNone(listener)
+        self.assertFalse(stop.is_set())
+
+    def test_disabled_wake_does_not_construct_listener(self):
+        stop = threading.Event()
+        with patch("ordax_dev_agent.product_wake_signal.ProductWakeListener") as factory:
+            listener = _start_optional_product_wake_listener(
+                enabled=False,
+                control=SimpleNamespace(),
+                stop_requested=stop,
+                native_access_enabled=lambda: True,
+            )
+        self.assertIsNone(listener)
+        factory.assert_not_called()
+
     def test_existing_wake_reconciles_session_and_queue_once(self):
         signal = threading.Event()
         checks = []
