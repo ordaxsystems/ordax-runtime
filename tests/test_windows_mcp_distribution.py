@@ -85,6 +85,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn('ORDAX_RUNTIME_SUPERVISED', installer)
         self.assertIn('SetEnvironmentVariableW(L"ORDAX_RUNTIME_SUPERVISED"', launcher)
         self.assertIn("JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK", launcher)
+        self.assertIn('SetEnvironmentVariableW(L"ORDAX_PERSISTENT_BREAKAWAY_ALLOWED", L"1")', launcher)
         self.assertNotIn("Register-ScheduledTask", installer)
         self.assertNotIn("ordax-agent-watchdog", installer)
 
