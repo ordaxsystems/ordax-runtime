@@ -32,7 +32,7 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
             }):
                 default = AgentConfig.from_env()
                 self.assertEqual(default.poll_seconds, 12.0)
-                self.assertFalse(default.product_wake_enabled)
+                self.assertTrue(default.product_wake_enabled)
             with mock.patch.dict(os.environ, {
                 "ORDAX_AGENT_STATE_DIR": location,
                 "ORDAX_AGENT_POLL_SECONDS": "120",
@@ -58,8 +58,8 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
             product_idle_claim_delay_seconds(60, 12, verified_wake=1)
 
     def test_presence_heartbeat_is_independent_of_idle_claim_budget(self):
-        # Default Product wake is off; the long idle claim wait must not
-        # suppress the independently scheduled 20-second heartbeat.
+        # Product wake is the default low-latency path; even its long
+        # reconciliation wait must not suppress the independent heartbeat.
         self.assertEqual(product_idle_wait_seconds(
             now=100.0, next_claim_due=160.0, next_heartbeat=120.0,
         ), 20.0)
