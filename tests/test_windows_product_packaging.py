@@ -579,6 +579,7 @@ class WindowsProductPackagingTests(unittest.TestCase):
         self.assertIn("product_idle_claim_delay_seconds(40, configured_ceiling) != 18.0", probe)
         self.assertIn("product_idle_claim_delay_seconds(40, 12.0, verified_wake=True) != 60.0", probe)
         self.assertIn('verified_wake=True) >= 120.0', probe)
+        self.assertIn("verified_wake=True, active_jobs=1) != 18.0", probe)
         self.assertIn("ORDAX_PACKAGED_PRODUCT_IDLE_BUDGET=PASS", probe)
         self.assertIn("assert-runtime-package-capabilities.ps1", builder)
         self.assertIn("assert-runtime-package-capabilities.ps1", smoke)
