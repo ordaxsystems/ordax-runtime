@@ -179,15 +179,12 @@ class ActionConcurrencyCoordinator:
             values = tuple(_normalized_fragment(payload.get(field)) for field in fields)
             return False, tuple(f"computer:file:{value}" for value in values)
 
-        if action == "computer.terminal_exec":
-            return False, (
-                f"computer:terminal:{_normalized_fragment(payload.get('cwd'))}",
-            )
-
-        if action == "computer.process_start":
-            return False, (
-                f"computer:process-start:{_normalized_fragment(payload.get('cwd'))}",
-            )
+        if action in {"computer.terminal_exec", "computer.process_start"}:
+            # cwd is process context, not an exclusive resource. Each call owns
+            # a distinct child/process manager and is already bounded by the
+            # execution-slot pool. Serializing on cwd turns independent shells
+            # in the same project into a false conflict.
+            return False, ()
         if action in {"computer.process_write_stdin", "computer.process_stop"}:
             return False, (
                 f"computer:process:{payload.get('process_id') or 'unknown'}",
@@ -222,14 +219,11 @@ class ActionConcurrencyCoordinator:
                             f"project:{project}:file:{_normalized_fragment(value)}"
                         )
                 return False, tuple(sorted(set(keys)))
-            if action == "terminal.exec":
-                return False, (
-                    f"project:{project}:terminal:{_normalized_fragment(payload.get('cwd'))}",
-                )
-            if action == "process.start":
-                return False, (
-                    f"project:{project}:process-start:{_normalized_fragment(payload.get('cwd'))}",
-                )
+            if action in {"terminal.exec", "process.start"}:
+                # Project identity is an authorization boundary, not a shell
+                # mutex. Independent commands/processes in one checkout may
+                # overlap; concrete files/process IDs keep their own locks.
+                return False, ()
             if action in {"process.write_stdin", "process.stop"}:
                 return False, (
                     f"project:{project}:process:{payload.get('process_id') or 'unknown'}",
