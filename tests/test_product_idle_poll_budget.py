@@ -41,17 +41,17 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
 
     def test_short_initial_burst_then_safe_idle_ceiling(self):
         self.assertLessEqual(product_idle_claim_delay_seconds(1, 12), 0.5)
-        self.assertEqual(product_idle_claim_delay_seconds(60, 12), 12.0)
-        self.assertEqual(product_idle_claim_delay_seconds(60, 1), 8.0)
-        self.assertEqual(product_idle_claim_delay_seconds(60, 60), 12.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 12), 18.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 1), 18.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 60), 18.0)
         with self.assertRaises(ValueError):
             product_idle_claim_delay_seconds(0, 12)
 
     def test_silent_wake_socket_cannot_extend_fallback_to_five_minutes(self):
         # Connection without an actual authenticated notification is not
         # permission to replace the safe bounded claim polling budget.
-        self.assertEqual(product_idle_claim_delay_seconds(60, 12), 30.0)
-        self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=False), 12.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 12), 18.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=False), 18.0)
         self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=True), 300.0)
         self.assertEqual(product_idle_claim_delay_seconds(1, 12, verified_wake=True), 300.0)
         with self.assertRaises(ValueError):
@@ -61,24 +61,21 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
         # Product wake is the default low-latency path; even its long
         # reconciliation wait must not suppress the independent heartbeat.
         self.assertEqual(product_idle_wait_seconds(
-            now=100.0, next_claim_due=160.0, next_heartbeat=120.0,
-        ), 20.0)
-        # After the heartbeat at 120, the next SQL claim is still due at 160.
+            now=100.0, next_claim_due=160.0, next_heartbeat=130.0,
+        ), 30.0)
+        # After the heartbeat at 130, the next SQL claim is still due at 160.
         self.assertEqual(product_idle_wait_seconds(
-            now=120.0, next_claim_due=160.0, next_heartbeat=140.0,
-        ), 20.0)
-        self.assertEqual(product_idle_wait_seconds(
-            now=140.0, next_claim_due=160.0, next_heartbeat=160.0,
-        ), 20.0)
+            now=130.0, next_claim_due=160.0, next_heartbeat=160.0,
+        ), 30.0)
         # No additional claims are needed merely to maintain presence.
 
     def test_wake_connected_uses_same_heartbeat_gate_during_five_minute_idle(self):
         self.assertEqual(product_idle_wait_seconds(
-            now=100.0, next_claim_due=400.0, next_heartbeat=120.0,
-        ), 20.0)
+            now=100.0, next_claim_due=400.0, next_heartbeat=130.0,
+        ), 30.0)
         self.assertEqual(product_idle_wait_seconds(
-            now=120.0, next_claim_due=400.0, next_heartbeat=140.0,
-        ), 20.0)
+            now=130.0, next_claim_due=400.0, next_heartbeat=160.0,
+        ), 30.0)
 
     def test_idle_wait_prefers_next_claim_when_earlier_and_bounds_overdue(self):
         self.assertEqual(product_idle_wait_seconds(
@@ -102,8 +99,8 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
             misses += 1
             requests += 1
         # Account for two SQL roundtrips per claim and one heartbeat every
-        # 20 seconds, each conservatively estimated at two DB statements.
-        upper_bound_queries = requests * 2 + 4320 * 2
+        # 30 seconds, each conservatively estimated at two DB statements.
+        upper_bound_queries = requests * 2 + 2880 * 2
         self.assertLess(upper_bound_queries, 16000)
         # The account Free limit is shared by devices, not per device.
         # Even 4 idle agents must leave plenty of room for real commands.
