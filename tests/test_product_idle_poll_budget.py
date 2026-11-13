@@ -47,13 +47,22 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             product_idle_claim_delay_seconds(0, 12)
 
-    def test_silent_wake_socket_cannot_extend_fallback_to_five_minutes(self):
+    def test_verified_wake_reconciliation_stays_inside_action_ttl(self):
         # Connection without an actual authenticated notification is not
         # permission to replace the safe bounded claim polling budget.
         self.assertEqual(product_idle_claim_delay_seconds(60, 12), 18.0)
         self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=False), 18.0)
-        self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=True), 300.0)
-        self.assertEqual(product_idle_claim_delay_seconds(1, 12, verified_wake=True), 300.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=True), 60.0)
+        self.assertEqual(product_idle_claim_delay_seconds(1, 12, verified_wake=True), 60.0)
+        self.assertEqual(
+            product_idle_claim_delay_seconds(
+                60, 12, verified_wake=True, active_jobs=1,
+            ),
+            18.0,
+            "active work must not depend exclusively on a later wake signal",
+        )
+        with self.assertRaises(ValueError):
+            product_idle_claim_delay_seconds(60, 12, active_jobs=-1)
         with self.assertRaises(ValueError):
             product_idle_claim_delay_seconds(60, 12, verified_wake=1)
 
@@ -69,13 +78,18 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
         ), 30.0)
         # No additional claims are needed merely to maintain presence.
 
-    def test_wake_connected_uses_same_heartbeat_gate_during_five_minute_idle(self):
+    def test_verified_wake_uses_same_independent_heartbeat_gate(self):
         self.assertEqual(product_idle_wait_seconds(
-            now=100.0, next_claim_due=400.0, next_heartbeat=130.0,
+            now=100.0, next_claim_due=160.0, next_heartbeat=130.0,
         ), 30.0)
         self.assertEqual(product_idle_wait_seconds(
-            now=130.0, next_claim_due=400.0, next_heartbeat=160.0,
+            now=130.0, next_claim_due=160.0, next_heartbeat=160.0,
         ), 30.0)
+        self.assertLess(
+            product_idle_claim_delay_seconds(60, 12, verified_wake=True),
+            120.0,
+            "lost-wake reconciliation must precede the Product action queue TTL",
+        )
 
     def test_idle_wait_prefers_next_claim_when_earlier_and_bounds_overdue(self):
         self.assertEqual(product_idle_wait_seconds(

@@ -64,8 +64,12 @@ if product_idle_claim_delay_seconds(1, 0.25) != 0.25:
 for configured_ceiling in (0.25, 1.0, 10.0, 30.0, 300.0):
     if product_idle_claim_delay_seconds(40, configured_ceiling) != 18.0:
         raise SystemExit("Packaged Runtime idle Product fallback is not canonical")
-if product_idle_claim_delay_seconds(40, 12.0, verified_wake=True) != 300.0:
+if product_idle_claim_delay_seconds(40, 12.0, verified_wake=True) != 60.0:
     raise SystemExit("Packaged Runtime verified wake reconciliation is not canonical")
+if product_idle_claim_delay_seconds(40, 12.0, verified_wake=True) >= 120.0:
+    raise SystemExit("Packaged Runtime can reconcile after Product action queue expiry")
+if product_idle_claim_delay_seconds(40, 12.0, verified_wake=True, active_jobs=1) != 18.0:
+    raise SystemExit("Packaged Runtime lets active work depend on advisory wake")
 if _PRODUCT_HEARTBEAT_SECONDS != 30.0:
     raise SystemExit("Packaged Runtime heartbeat budget is not canonical")
 remaining = 86400.0

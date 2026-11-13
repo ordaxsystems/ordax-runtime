@@ -67,7 +67,11 @@ def _transport_retry_delay(consecutive_failures: int) -> float:
 
 
 def product_idle_claim_delay_seconds(
-    idle_misses: int, configured_ceiling: float, *, verified_wake: bool = False,
+    idle_misses: int,
+    configured_ceiling: float,
+    *,
+    verified_wake: bool = False,
+    active_jobs: int = 0,
 ) -> float:
     """Bounded idle polling that preserves the daily PostgreSQL query budget.
 
@@ -82,17 +86,26 @@ def product_idle_claim_delay_seconds(
         raise ValueError("configured_ceiling must be finite")
     if type(verified_wake) is not bool:
         raise ValueError("verified_wake must be a boolean")
+    if type(active_jobs) is not int or active_jobs < 0:
+        raise ValueError("active_jobs must be a non-negative integer")
     # A connected socket that has never delivered a real wake signal is not
     # evidence of push availability. Keep a responsive bounded SQL fallback.
-    if verified_wake:
-        return 300.0
+    if verified_wake and active_jobs == 0:
+        # Slow reconciliation is allowed only when the Runtime is truly idle.
+        # While another job is active, independent new work must remain
+        # discoverable through the responsive fallback even if a wake is lost.
+        # Product MCP queue entries currently expire after 120 seconds. A lost
+        # advisory wake must be reconciled well before that authority expires,
+        # otherwise the fallback cannot recover the queued action at all.
+        return 60.0
     # The Runtime is an interactive control surface: an idle device must not
     # wait 30–60 seconds before observing ordinary work. Retain the burst and
     # cap the SQL fallback at 18 seconds. A 30-second presence heartbeat keeps
     # the conservative per-device DB budget below 16k statements/day while
     # leaving a full 30-second margin inside the 60-second readiness window.
-    # Once authenticated wake is verified, SQL polling becomes the five-minute
-    # reconciliation path above.
+    # Once authenticated wake is verified, SQL polling becomes the one-minute
+    # lost-signal reconciliation path above. It must remain below the canonical
+    # Product action queue TTL.
     ceiling = 18.0
     return min(ceiling, 0.25 * (1.8 ** min(idle_misses - 1, 11)))
 
@@ -1219,15 +1232,18 @@ def run(
                     # Stay very responsive during interactive work, then ease
                     # toward the configured ceiling while the agent is idle.
                     # Only a connection with a verified wake message may
-                    # reduce SQL reconciliation to five minutes. A silent
-                    # socket must not make new actions stall for five minutes.
+                    # reduce SQL polling frequency. Even then, lost-signal
+                    # reconciliation must happen before the Product action TTL.
+                    # A silent socket keeps the 18-second fallback.
                     idle_delay = product_idle_claim_delay_seconds(
-                        idle_claim_misses, config.poll_seconds,
+                        idle_claim_misses,
+                        config.poll_seconds,
                         verified_wake=(
                             wake_listener is not None
                             and wake_listener.connected.is_set()
                             and wake_listener.delivered.is_set()
                         ),
+                        active_jobs=len(job_futures),
                     )
                     next_claim_due = time.monotonic() + idle_delay
                     _wait_for_native_access(
