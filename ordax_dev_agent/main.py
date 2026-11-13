@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import math
 import os
@@ -33,6 +34,8 @@ _VERBOSE_JOB_LIFECYCLE_EVENTS = frozenset(
         "unity.recover_resume",
     }
 )
+
+_MAX_CONCURRENT_PRODUCT_JOBS = 4
 
 
 def _startup_log(config: AgentConfig | None, message: str) -> None:
@@ -377,6 +380,208 @@ def _complete_job_after_stopping_keepalive(
             control.complete(active_job, result)
 
 
+def _execute_claimed_job(
+    *,
+    control: object,
+    registry: object,
+    job: object,
+    job_runtime: dict,
+    runtime: dict,
+    runtime_lock: threading.RLock,
+    host_actions: object,
+    native_access_enabled: Callable[[], bool] | None,
+    orchestrator_installation_provider: Callable | None,
+    job_changed: threading.Event,
+) -> dict:
+    """Execute one already-claimed Product job without owning the claim loop."""
+    from .models import ActionResult
+
+    job_started = time.monotonic()
+    job_runtime["job_started_at"] = time.time()
+    job_runtime["job_phase"] = "executing"
+    job_runtime.setdefault("job_timings", {})
+    job_runtime["progress"] = None
+    verbose_lifecycle = job.action in _VERBOSE_JOB_LIFECYCLE_EVENTS
+    if verbose_lifecycle:
+        control.append_event(job.id, "info", f"starting {job.action}")
+    artifact_cache: dict = {}
+
+    def publish_observation(observation: dict) -> None:
+        progress = {
+            "index": observation["index"],
+            "ok": observation["ok"],
+            "observed_at": observation["observed_at"],
+            "duration_seconds": observation["duration_seconds"],
+        }
+        job_runtime["progress"] = progress
+        try:
+            progress["artifacts"] = _upload_result_artifacts(
+                control,
+                job,
+                ActionResult(
+                    observation["ok"], observation["summary"], observation,
+                ),
+                artifact_cache,
+            )
+            control.append_event(
+                job.id, "info", "visual observation available", progress,
+            )
+        except Exception as error:
+            progress["delivery_error"] = str(error)
+        job_runtime["progress"] = progress
+
+    registry.on_observation = publish_observation
+    keepalive_stop = threading.Event()
+    lease_lock = threading.Lock()
+    presence_lock = threading.Lock()
+
+    def _keep_lease() -> None:
+        while not keepalive_stop.wait(20.0):
+            _renew_active_job_tick(
+                control, job, keepalive_stop, lease_lock, job_runtime,
+            )
+
+    lease_thread = threading.Thread(
+        target=_keep_lease,
+        name=f"ordax-job-{job.id[:8]}-lease",
+        daemon=True,
+    )
+    lease_thread.start()
+    result = None
+    report_committed = False
+    try:
+        try:
+            from .product_remote import PRODUCT_REMOTE_CAPABILITY
+
+            if not _native_local_access_granted(native_access_enabled):
+                result = ActionResult(
+                    False, "native_local_connector_disabled",
+                )
+            elif job.action == "forge.app_read":
+                from .orchestrator_product_execution import (
+                    execute_orchestrator_app_status,
+                )
+
+                result = execute_orchestrator_app_status(
+                    control,
+                    job,
+                    installation_provider=orchestrator_installation_provider,
+                )
+            elif job.action == PRODUCT_REMOTE_CAPABILITY:
+                from .product_remote import execute_product_invocation
+
+                result = execute_product_invocation(
+                    registry,
+                    control,
+                    job.action_payload(),
+                )
+            else:
+                result = registry.execute(job.action, job.action_payload())
+        except Exception as error:
+            result = ActionResult(
+                False, f"{type(error).__name__}: {error}",
+            )
+
+        job_runtime["job_timings"]["execution_seconds"] = round(
+            time.monotonic() - job_started, 3,
+        )
+        job_runtime["job_phase"] = "uploading"
+        upload_started = time.monotonic()
+        try:
+            uploaded = _upload_result_artifacts(
+                control, job, result, artifact_cache,
+            )
+            if uploaded:
+                local_only = [
+                    item for item in uploaded
+                    if str(item.get("delivery", "")).startswith("local-only")
+                ]
+                delivered = [
+                    item for item in uploaded if item not in local_only
+                ]
+                if local_only:
+                    result.data["local_artifacts"] = local_only
+                    result.data["artifact_delivery"] = "local-only"
+                if delivered:
+                    result.data["uploaded_artifacts"] = delivered
+        except Exception as error:
+            result.data["upload_error"] = str(error)
+            result.ok = False
+            result.summary += "; artifact upload failed"
+        job_runtime["job_timings"]["upload_seconds"] = round(
+            time.monotonic() - upload_started, 3,
+        )
+
+        job_runtime["job_phase"] = "reporting"
+        report_started = time.monotonic()
+        result.data["agent_timings"] = dict(job_runtime["job_timings"])
+        if verbose_lifecycle or not result.ok:
+            try:
+                control.append_event(
+                    job.id,
+                    "info" if result.ok else "error",
+                    result.summary,
+                )
+            except Exception as error:
+                print(
+                    f"terminal progress event failed: {error}",
+                    file=sys.stderr,
+                )
+        _complete_job_after_stopping_keepalive(
+            control,
+            job,
+            result,
+            keepalive_stop,
+            lease_lock,
+            presence_lock,
+        )
+        report_committed = True
+        _end_job_lease(job_runtime, report_committed=True)
+        job_runtime["job_timings"]["report_seconds"] = round(
+            time.monotonic() - report_started, 3,
+        )
+        job_runtime["job_phase"] = (
+            "completed" if result.ok else "failed"
+        )
+        return {
+            "ok": bool(result.ok),
+            "summary": result.summary,
+            "restart_required": bool(
+                result.ok and result.data.get("restart_required")
+            ),
+        }
+    finally:
+        registry.on_observation = None
+        keepalive_stop.set()
+        lease_thread.join(timeout=2.0)
+        job_runtime["job_timings"]["total_seconds"] = round(
+            time.monotonic() - job_started, 3,
+        )
+        if not report_committed and job_runtime.get("job_phase") != "failed":
+            job_runtime["job_phase"] = "delivery-error"
+        with runtime_lock:
+            active_jobs = runtime.get("active_jobs")
+            if isinstance(active_jobs, dict):
+                active_jobs.pop(job.id, None)
+                runtime["active_job_count"] = len(active_jobs)
+            if result is not None:
+                runtime["last_job_id"] = job.id
+                runtime["last_job_action"] = job.action
+                runtime["last_result"] = {
+                    "ok": bool(result.ok and report_committed),
+                    "summary": result.summary,
+                }
+                if report_committed:
+                    runtime["jobs_completed"] = (
+                        int(runtime.get("jobs_completed", 0)) + 1
+                    )
+            if runtime.get("state") in {"ready", "busy"}:
+                runtime["state"] = (
+                    "busy" if runtime.get("active_job_count") else "ready"
+                )
+        job_changed.set()
+
+
 def _agent_metadata(config: AgentConfig) -> dict:
     from .projects import load_projects
 
@@ -637,23 +842,47 @@ def run(
         "started_at": time.time(),
         "job_phase": "idle",
         "jobs_completed": 0,
+        "active_jobs": {},
+        "active_job_count": 0,
+        "max_concurrent_jobs": _MAX_CONCURRENT_PRODUCT_JOBS,
         "transport_state": "not-configured",
         "last_transport_error": None,
         "last_transport_recovered_at": None,
     }
+    runtime_lock = threading.RLock()
     registry = None
     remote_control_configured = False
     control = None
 
     def runtime_status_snapshot() -> dict:
-        return _runtime_status_snapshot(
-            runtime,
-            action_registry_ready=registry is not None,
-            remote_control_configured=remote_control_configured,
-            central_session_status=(
-                control.product_central_session.status if control is not None else None
-            ),
-        )
+        with runtime_lock:
+            snapshot = _runtime_status_snapshot(
+                runtime,
+                action_registry_ready=registry is not None,
+                remote_control_configured=remote_control_configured,
+                central_session_status=(
+                    control.product_central_session.status if control is not None else None
+                ),
+            )
+            active = runtime.get("active_jobs")
+            if isinstance(active, dict):
+                snapshot["active_jobs"] = {
+                    job_id: {
+                        "action": state.get("action"),
+                        "job_started_at": state.get("job_started_at"),
+                        "job_phase": state.get("job_phase"),
+                        "job_timings": dict(state.get("job_timings") or {}),
+                        "job_lease": dict(state.get("job_lease") or {}),
+                        "progress": (
+                            dict(state["progress"])
+                            if isinstance(state.get("progress"), dict)
+                            else None
+                        ),
+                    }
+                    for job_id, state in active.items()
+                    if isinstance(state, dict)
+                }
+            return snapshot
 
     def status_payload() -> dict:
         runtime["uptime_seconds"] = round(time.monotonic() - started_monotonic, 2)
