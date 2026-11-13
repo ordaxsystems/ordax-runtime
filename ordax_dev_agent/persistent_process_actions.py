@@ -391,17 +391,22 @@ class PersistentProcessActions:
             manager_environment = None
             if getattr(sys, "_ordax_native_runtime", False) and getattr(sys, "frozen", False):
                 manager_environment = {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"}
-            manager = subprocess.Popen(
-                manager_command,
-                cwd=str(project.root),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                shell=False,
-                creationflags=creationflags,
-                start_new_session=start_new_session,
-                env=manager_environment,
-            )
+            # The detached manager must report failures occurring *before* it
+            # writes manager_ready_at_unix. Discarding stderr produced silent
+            # 'ownership_valid=false' with no cause on Windows devices.
+            # Reuse the one private process log, not another diagnostics store.
+            with log_path.open("a", encoding="utf-8", errors="replace") as bootstrap_log:
+                manager = subprocess.Popen(
+                    manager_command,
+                    cwd=str(project.root),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=bootstrap_log,
+                    shell=False,
+                    creationflags=creationflags,
+                    start_new_session=start_new_session,
+                    env=manager_environment,
+                )
             handles = getattr(self, "_persistent_process_handles", None)
             if handles is None:
                 handles = {}
@@ -426,13 +431,21 @@ class PersistentProcessActions:
         # startup handshake. A small fixed floor prevents Windows launcher/runtime
         # PID transitions and antivirus/process-enumeration latency from turning a
         # healthy process into a false startup failure.
-        handshake_deadline = time.monotonic() + max(3.0, requested_wait)
+        # Windows may delay the private Python bootstrap (AV/DLL scanning)
+        # after Popen succeeds. Observe the actual authenticated journal and
+        # manager exit, rather than killing a live owned manager after 3s.
+        # This remains bounded and never grants execution before child proof.
+        handshake_deadline = time.monotonic() + max(
+            10.0 if os.name == "nt" else 3.0, requested_wait,
+        )
         while time.monotonic() < handshake_deadline:
-            time.sleep(0.05)
             current_raw = self._load_process_state(project, process_id)
             lifecycle = str(current_raw.get("state") or "")
             if lifecycle in {"running", "failed", "exited", "stopped"}:
                 break
+            if manager.poll() is not None:
+                break
+            time.sleep(0.05)
 
         # After the initial state file is created, the detached runtime is the
         # sole writer of manager_pid/lifecycle. Do not patch those fields from
@@ -491,6 +504,15 @@ class PersistentProcessActions:
             getattr(self, "_persistent_process_handles", {}).pop(process_id, None)
             getattr(self, "_persistent_process_launch_tokens", {}).pop(process_id, None)
             current = self._public_process_state(self._load_process_state(project, process_id))
+        if not started_ok and not finished:
+            # Only a confirmed child launch may be reported ready. Preserve
+            # the exact supervised process ID for local diagnostics, without
+            # leaking argv, token or internal Runtime paths in error messages.
+            current["startup_failure"] = (
+                "manager_exited_before_handshake"
+                if manager.poll() is not None and not current_raw.get("manager_ready_at_unix")
+                else "manager_handshake_not_confirmed"
+            )
         return ActionResult(
             started_ok,
             ("persistent process completed" if completed_ok

@@ -168,6 +168,81 @@ class ComputerProcessActionsTests(unittest.TestCase):
                     launcher.assert_called_once()
                     terminator.assert_not_called()
 
+    def test_detached_manager_exits_before_handshake_with_private_diagnostic(self):
+        # This was previously indistinguishable from a slow manager because
+        # Popen discarded stderr and the return value contained no failure.
+        class ExitedManager:
+            pid = 4242
+            def poll(self):
+                return 3
+
+        registry = self._device_registry()
+        with patch(
+            "ordax_dev_agent.computer_filesystem_actions.load_computer_access_policy",
+            return_value=SimpleNamespace(enabled=True, full_access=True),
+        ), patch(
+            "ordax_dev_agent.persistent_process_actions.subprocess.Popen",
+            return_value=ExitedManager(),
+        ) as launcher, patch.object(
+            registry, "_pid_running", return_value=False,
+        ):
+            result = registry.computer_process_start({
+                "argv": ["cmd.exe", "/d", "/c", "exit 3"],
+                "cwd": self.temp.name, "wait_seconds": 0.1,
+            })
+        self.assertFalse(result.ok)
+        self.assertEqual(result.data["startup_failure"], "manager_exited_before_handshake")
+        self.assertFalse(result.data["ownership_valid"])
+        self.assertNotIn("token", result.data)
+        self.assertIn("stderr", launcher.call_args.kwargs)
+        self.assertNotEqual(launcher.call_args.kwargs["stderr"], __import__("subprocess").DEVNULL)
+
+    def test_delayed_manager_is_not_killed_before_actual_windows_handshake(self):
+        # A delayed Windows supervisor cannot be accepted without journal
+        # proof; it gets a bounded opportunity to publish that proof.
+        registry = self._device_registry()
+        class LiveManager:
+            pid = 4141
+            def poll(self):
+                return None
+            def wait(self, timeout):
+                return 0
+        manager = LiveManager()
+        reads = 0
+        def journal(scope, process_id):
+            nonlocal reads
+            reads += 1
+            raw = json.loads(registry._process_state_path(
+                scope, process_id,
+            ).read_text(encoding="utf-8"))
+            if reads >= 4:
+                raw.update(
+                    manager_pid=4141, manager_ready_at_unix=1.0,
+                    child_pid=4242, running_at_unix=1.0, state="running",
+                )
+            return raw
+        with patch(
+            "ordax_dev_agent.computer_filesystem_actions.load_computer_access_policy",
+            return_value=SimpleNamespace(enabled=True, full_access=True),
+        ), patch(
+            "ordax_dev_agent.persistent_process_actions.subprocess.Popen",
+            return_value=manager,
+        ), patch.object(
+            registry, "_load_process_state", side_effect=journal,
+        ), patch.object(
+            registry, "_pid_running", return_value=True,
+        ), patch(
+            "ordax_dev_agent.persistent_process_actions.subprocess.run",
+        ) as stop_tree:
+            result = registry.computer_process_start({
+                "argv": ["cmd.exe", "/d", "/c", "echo ready"],
+                "cwd": self.temp.name, "wait_seconds": 0.1,
+            })
+        self.assertTrue(result.ok, result.summary)
+        self.assertTrue(result.data["ownership_valid"])
+        self.assertTrue(result.data["running"])
+        stop_tree.assert_not_called()
+
     def test_process_list_is_device_scoped_filtered_and_bounded(self):
         snapshot = [
             {"pid": 10, "parent_pid": 1, "name": "python.exe", "executable": "C:/Python/python.exe"},
