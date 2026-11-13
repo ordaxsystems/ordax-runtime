@@ -54,6 +54,15 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
         self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=False), 18.0)
         self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=True), 60.0)
         self.assertEqual(product_idle_claim_delay_seconds(1, 12, verified_wake=True), 60.0)
+        self.assertEqual(
+            product_idle_claim_delay_seconds(
+                60, 12, verified_wake=True, active_jobs=1,
+            ),
+            18.0,
+            "active work must not depend exclusively on a later wake signal",
+        )
+        with self.assertRaises(ValueError):
+            product_idle_claim_delay_seconds(60, 12, active_jobs=-1)
         with self.assertRaises(ValueError):
             product_idle_claim_delay_seconds(60, 12, verified_wake=1)
 
