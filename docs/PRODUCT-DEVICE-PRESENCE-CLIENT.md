@@ -34,7 +34,12 @@ Enquanto nenhum sinal `wake` real foi entregue na conexão atual, a fila é
 reconciliada por SQL com fallback limitado a **18 segundos**.
 
 Depois de uma entrega de wake comprovada, o Runtime reduz a frequência de
-polling, mas a reconciliação de sinal perdido é de no máximo **60 segundos**.
+polling **somente quando está realmente ocioso**. Se existir qualquer job ativo,
+novas ações independentes continuam no fallback rápido de até **18 segundos**,
+portanto um build/terminal longo não transforma o wake em requisito exclusivo
+para descobrir outro trabalho. Sem jobs ativos, a reconciliação de sinal perdido
+é de no máximo **60 segundos**.
+
 Esse limite é intencionalmente menor que o TTL canônico de **120 segundos** das
 ações Product MCP. Nunca aumentar a reconciliação para além do TTL: nesse caso
 um wake perdido faria a ação expirar antes de o próprio fallback poder recuperá-la.
