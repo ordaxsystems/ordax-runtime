@@ -73,6 +73,28 @@ class ActionConcurrencyTests(unittest.TestCase):
         finally:
             click.release()
 
+    def test_observational_device_actions_overlap_long_terminal_work(self) -> None:
+        first = self.coordinator()
+        second = self.coordinator()
+        terminal = first.try_acquire(
+            "computer.terminal_exec", {"cwd": str(self.state)},
+            project_resolver=self.project,
+        )
+        self.assertIsNotNone(terminal)
+        try:
+            for action, payload in (
+                ("computer.process_list", {}),
+                ("computer.directory_list", {"path": str(self.state)}),
+                ("computer.screen_info", {}),
+            ):
+                observation = second.try_acquire(
+                    action, payload, project_resolver=self.project,
+                )
+                self.assertIsNotNone(observation, action)
+                observation.release()
+        finally:
+            terminal.release()
+
     def test_runtime_update_remains_globally_exclusive(self) -> None:
         first = self.coordinator()
         second = self.coordinator()
