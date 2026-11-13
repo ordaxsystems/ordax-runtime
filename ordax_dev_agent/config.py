@@ -28,8 +28,9 @@ class AgentConfig:
     workspace_root: Path | None = None
     # Trusted host-owned authority paths; never loaded from remote payloads.
     protected_roots: tuple[Path, ...] = ()
-    # Off until the canonical MCP Worker wake DO rollout is validated.
-    product_wake_enabled: bool = False
+    # Canonical advisory wake is the normal low-latency path. PostgreSQL
+    # remains the sole queue/lease authority and polling remains the fallback.
+    product_wake_enabled: bool = True
     # Trusted host-only authority selection; never loaded from settings or environment.
     computer_access_source: Literal["windows-local", "native-unbound"] = "windows-local"
 
@@ -60,7 +61,7 @@ class AgentConfig:
         if not isinstance(settings.get("adapters", []), list):
             raise ValueError("adapters must be a list of locally installed adapter names")
 
-        wake_setting = settings.get("product_wake_enabled", False)
+        wake_setting = settings.get("product_wake_enabled", True)
         if not isinstance(wake_setting, bool):
             raise ValueError("product_wake_enabled must be a boolean")
         wake_override = os.environ.get("ORDAX_PRODUCT_WAKE_MODE")
