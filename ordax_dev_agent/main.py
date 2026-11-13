@@ -36,6 +36,7 @@ _VERBOSE_JOB_LIFECYCLE_EVENTS = frozenset(
 )
 
 _MAX_CONCURRENT_PRODUCT_JOBS = 4
+_PRODUCT_HEARTBEAT_SECONDS = 20.0
 
 
 def _startup_log(config: AgentConfig | None, message: str) -> None:
@@ -1156,7 +1157,7 @@ def run(
                         if runtime.get("active_jobs") and runtime.get("state") == "ready":
                             runtime["state"] = "busy"
                     runtime.setdefault("startup_seconds", round(time.monotonic() - started_monotonic, 3))
-                    next_heartbeat = now + 20.0
+                    next_heartbeat = now + _PRODUCT_HEARTBEAT_SECONDS
 
                 if _consume_product_wake(control, wake_listener):
                     next_claim_due = 0.0
