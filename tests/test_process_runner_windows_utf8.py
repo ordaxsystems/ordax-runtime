@@ -57,7 +57,7 @@ class WindowsTerminalUtf8ContractTests(unittest.TestCase):
 
     def test_legacy_powershell_command_sets_console_output_to_utf8_without_shell(self):
         child = _CompletedProcess("Café ✓ 日本語 ção\r\n".encode("utf-8"))
-        original = ["powershell", "-NoProfile", "-Command", "Write-Output 'unicode'"]
+        original = [r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", "-NoProfile", "-Command", "Write-Output 'unicode'"]
         with (
             patch("ordax_dev_agent.process_runner.sys", SimpleNamespace(platform="win32", frozen=False)),
             patch("ordax_dev_agent.process_runner.subprocess.Popen", return_value=child) as popen,
