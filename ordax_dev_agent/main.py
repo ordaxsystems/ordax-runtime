@@ -36,7 +36,7 @@ _VERBOSE_JOB_LIFECYCLE_EVENTS = frozenset(
 )
 
 _MAX_CONCURRENT_PRODUCT_JOBS = 4
-_PRODUCT_HEARTBEAT_SECONDS = 20.0
+_PRODUCT_HEARTBEAT_SECONDS = 30.0
 
 
 def _startup_log(config: AgentConfig | None, message: str) -> None:
@@ -88,9 +88,12 @@ def product_idle_claim_delay_seconds(
         return 300.0
     # The Runtime is an interactive control surface: an idle device must not
     # wait 30–60 seconds before observing ordinary work. Retain the burst and
-    # cap the fallback at 8–12 seconds. Once authenticated wake is verified,
-    # SQL polling becomes the five-minute reconciliation path above.
-    ceiling = min(12.0, max(8.0, configured_ceiling))
+    # cap the SQL fallback at 18 seconds. A 30-second presence heartbeat keeps
+    # the conservative per-device DB budget below 16k statements/day while
+    # leaving a full 30-second margin inside the 60-second readiness window.
+    # Once authenticated wake is verified, SQL polling becomes the five-minute
+    # reconciliation path above.
+    ceiling = 18.0
     return min(ceiling, 0.25 * (1.8 ** min(idle_misses - 1, 11)))
 
 
@@ -118,8 +121,8 @@ def product_idle_wait_seconds(
     """Wake for the earliest deadline, without turning heartbeat into a claim.
 
     The Product wake listener is the preferred low-latency path. The idle
-    SQL fallback is bounded to 8–12 seconds (or 300 after verified wake), while the
-    independently required presence heartbeat is due every 20 seconds.
+    SQL fallback is bounded to 18 seconds (or 300 after verified wake), while the
+    independently required presence heartbeat is due every 30 seconds.
     """
     if not all(math.isfinite(value) for value in (now, next_claim_due, next_heartbeat)):
         raise ValueError("Product idle deadlines must be finite")
