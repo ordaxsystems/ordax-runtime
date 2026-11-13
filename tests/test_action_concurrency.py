@@ -95,6 +95,32 @@ class ActionConcurrencyTests(unittest.TestCase):
         finally:
             terminal.release()
 
+    def test_command_starts_in_same_cwd_can_overlap(self) -> None:
+        for action, payload in (
+            ("computer.terminal_exec", {"cwd": str(self.state)}),
+            ("computer.process_start", {"cwd": str(self.state)}),
+            ("terminal.exec", {"project": "alpha", "cwd": str(self.state)}),
+            ("process.start", {"project": "alpha", "cwd": str(self.state)}),
+        ):
+            with self.subTest(action=action):
+                first = self.coordinator()
+                second = self.coordinator()
+                a = first.try_acquire(
+                    action, payload, project_resolver=self.project,
+                )
+                self.assertIsNotNone(a)
+                try:
+                    b = second.try_acquire(
+                        action, payload, project_resolver=self.project,
+                    )
+                    self.assertIsNotNone(
+                        b,
+                        f"{action} must not serialize independent starts by cwd",
+                    )
+                    b.release()
+                finally:
+                    a.release()
+
     def test_runtime_update_remains_globally_exclusive(self) -> None:
         first = self.coordinator()
         second = self.coordinator()
