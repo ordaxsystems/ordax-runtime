@@ -60,7 +60,7 @@ from .rodin_actions import RodinActions
 from .comfyui_actions import ComfyUIActions
 from .aleph_actions import AlephActions
 from .aleph_scene_actions import AlephSceneActions
-from .execution_lock import ExecutionLock
+from .action_concurrency import ActionConcurrencyCoordinator
 from .windows_dpi import ensure_physical_desktop_coordinates
 from .adapter_contracts import (
     adapter_contract_catalog,
@@ -186,10 +186,10 @@ class ActionRegistry(
         self.desktop_coordinate_space = ensure_physical_desktop_coordinates()
         self.config = config
         self.projects = load_projects(config)
-        self.on_observation = None
+        self._observation_local = threading.local()
         self._initialize_application_intelligence()
         self._computer_activity = ComputerActivityTracker(config.state_dir)
-        self._execution_lock = threading.Lock()
+        self._concurrency = ActionConcurrencyCoordinator(config.state_dir)
         self._actions: dict[str, Action] = {
             "projects.list": self.projects_list,
             "workspace.repository_catalog": self.workspace_repository_catalog,
@@ -554,6 +554,14 @@ class ActionRegistry(
                 return slug
         raise ValueError("no registered project directories are available")
 
+    @property
+    def on_observation(self):
+        return getattr(self._observation_local, "callback", None)
+
+    @on_observation.setter
+    def on_observation(self, callback) -> None:
+        self._observation_local.callback = callback
+
     def computer_activity_status(self, payload: dict[str, Any]) -> ActionResult:
         if payload:
             return ActionResult(False, "computer.activity_status accepts no fields")
@@ -606,12 +614,16 @@ class ActionRegistry(
             "git.quick_status",
         ):
             return self._execute_handler(action, handler, payload)
-        if not self._execution_lock.acquire(blocking=False):
-            return ActionResult(False, "Agent is busy; retry after the current action", {"retryable": True})
-        process_lock = ExecutionLock(self.config.state_dir)
+        concurrency_lease = self._concurrency.try_acquire(
+            action, payload, project_resolver=self._project,
+        )
+        if concurrency_lease is None:
+            return ActionResult(
+                False,
+                "Conflicting action is already running",
+                {"retryable": True, "conflict_scope": "resource"},
+            )
         try:
-            if not process_lock.acquire():
-                return ActionResult(False, "Another agent/MCP action is running", {"retryable": True})
             prefix = action.split(".", 1)[0]
             adapter = self._adapter_contracts.get(prefix)
             if adapter is not None and action not in adapter.global_actions:
@@ -621,13 +633,11 @@ class ActionRegistry(
                         f"application not enabled for project {project.slug}: "
                         f"{adapter.project_app}"
                     )
-            result = self._execute_handler(action, handler, payload)
-            return result
+            return self._execute_handler(action, handler, payload)
         except (ValueError, FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
             return _action_error_result(action, error)
         finally:
-            process_lock.release()
-            self._execution_lock.release()
+            concurrency_lease.release()
 
     def _project_path(self, payload: dict[str, Any]) -> Path:
         return self._project(payload).root

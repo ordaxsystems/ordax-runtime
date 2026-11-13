@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import math
 import os
@@ -33,6 +34,9 @@ _VERBOSE_JOB_LIFECYCLE_EVENTS = frozenset(
         "unity.recover_resume",
     }
 )
+
+_MAX_CONCURRENT_PRODUCT_JOBS = 4
+_PRODUCT_HEARTBEAT_SECONDS = 20.0
 
 
 def _startup_log(config: AgentConfig | None, message: str) -> None:
@@ -311,21 +315,15 @@ def _end_job_lease(runtime: dict, *, report_committed: bool) -> None:
         lease["lease_expires_at"] = None
 
 
-def _keep_job_alive_tick(
+def _renew_active_job_tick(
     control: object,
     active_job: object,
     stop_event: threading.Event,
-    operation_lock: threading.Lock,
+    lease_lock: threading.Lock,
     runtime: dict,
-    host_actions: object,
-    agent_version: str,
 ) -> None:
-    """Renew an active lease and publish busy status before terminal reporting.
-
-    The lock serializes this pair with the terminal report. Once shutdown is
-    requested, an in-flight renewal must not publish a stale busy heartbeat.
-    """
-    with operation_lock:
+    """Renew only the fenced job lease; a slow renewal must not block presence."""
+    with lease_lock:
         if stop_event.is_set():
             return
         try:
@@ -340,6 +338,18 @@ def _keep_job_alive_tick(
                 f"{runtime.get('job_lease', {}).get('last_error_code')}",
                 file=sys.stderr,
             )
+
+
+def _heartbeat_active_job_tick(
+    control: object,
+    stop_event: threading.Event,
+    presence_lock: threading.Lock,
+    runtime: dict,
+    host_actions: object,
+    agent_version: str,
+) -> None:
+    """Publish live presence independently of lease-renewal network latency."""
+    with presence_lock:
         if stop_event.is_set():
             return
         try:
@@ -357,12 +367,224 @@ def _complete_job_after_stopping_keepalive(
     active_job: object,
     result: object,
     stop_event: threading.Event,
-    operation_lock: threading.Lock,
+    lease_lock: threading.Lock,
+    presence_lock: threading.Lock,
 ) -> None:
-    """Stop renewal and serialize terminal reporting after any in-flight tick."""
+    """Fence terminal reporting after BOTH in-flight keepalive operations.
+
+    Stop first to reject new ticks. Complete only after both network calls
+    finish, so neither renewal nor a late busy heartbeat can follow the report.
+    """
     stop_event.set()
-    with operation_lock:
-        control.complete(active_job, result)
+    with presence_lock:
+        with lease_lock:
+            control.complete(active_job, result)
+
+
+def _execute_claimed_job(
+    *,
+    control: object,
+    registry: object,
+    job: object,
+    job_runtime: dict,
+    runtime: dict,
+    runtime_lock: threading.RLock,
+    host_actions: object,
+    native_access_enabled: Callable[[], bool] | None,
+    orchestrator_installation_provider: Callable | None,
+    job_changed: threading.Event,
+) -> dict:
+    """Execute one already-claimed Product job without owning the claim loop."""
+    from .models import ActionResult
+
+    job_started = time.monotonic()
+    job_runtime["job_started_at"] = time.time()
+    job_runtime["job_phase"] = "executing"
+    job_runtime.setdefault("job_timings", {})
+    job_runtime["progress"] = None
+    verbose_lifecycle = job.action in _VERBOSE_JOB_LIFECYCLE_EVENTS
+    if verbose_lifecycle:
+        try:
+            control.append_event(job.id, "info", f"starting {job.action}")
+        except Exception as error:
+            # Progress telemetry is optional and must never strand a leased job.
+            print(f"starting progress event failed: {error}", file=sys.stderr)
+    artifact_cache: dict = {}
+
+    def publish_observation(observation: dict) -> None:
+        progress = {
+            "index": observation["index"],
+            "ok": observation["ok"],
+            "observed_at": observation["observed_at"],
+            "duration_seconds": observation["duration_seconds"],
+        }
+        job_runtime["progress"] = progress
+        try:
+            progress["artifacts"] = _upload_result_artifacts(
+                control,
+                job,
+                ActionResult(
+                    observation["ok"], observation["summary"], observation,
+                ),
+                artifact_cache,
+            )
+            control.append_event(
+                job.id, "info", "visual observation available", progress,
+            )
+        except Exception as error:
+            progress["delivery_error"] = str(error)
+        job_runtime["progress"] = progress
+
+    registry.on_observation = publish_observation
+    keepalive_stop = threading.Event()
+    lease_lock = threading.Lock()
+    presence_lock = threading.Lock()
+
+    def _keep_lease() -> None:
+        while not keepalive_stop.wait(20.0):
+            _renew_active_job_tick(
+                control, job, keepalive_stop, lease_lock, job_runtime,
+            )
+
+    lease_thread = threading.Thread(
+        target=_keep_lease,
+        name=f"ordax-job-{job.id[:8]}-lease",
+        daemon=True,
+    )
+    lease_thread.start()
+    result = None
+    report_committed = False
+    try:
+        try:
+            from .product_remote import PRODUCT_REMOTE_CAPABILITY
+
+            if not _native_local_access_granted(native_access_enabled):
+                result = ActionResult(
+                    False, "native_local_connector_disabled",
+                )
+            elif job.action == "forge.app_read":
+                from .orchestrator_product_execution import (
+                    execute_orchestrator_app_status,
+                )
+
+                result = execute_orchestrator_app_status(
+                    control,
+                    job,
+                    installation_provider=orchestrator_installation_provider,
+                )
+            elif job.action == PRODUCT_REMOTE_CAPABILITY:
+                from .product_remote import execute_product_invocation
+
+                result = execute_product_invocation(
+                    registry,
+                    control,
+                    job.action_payload(),
+                )
+            else:
+                result = registry.execute(job.action, job.action_payload())
+        except Exception as error:
+            result = ActionResult(
+                False, f"{type(error).__name__}: {error}",
+            )
+
+        job_runtime["job_timings"]["execution_seconds"] = round(
+            time.monotonic() - job_started, 3,
+        )
+        job_runtime["job_phase"] = "uploading"
+        upload_started = time.monotonic()
+        try:
+            uploaded = _upload_result_artifacts(
+                control, job, result, artifact_cache,
+            )
+            if uploaded:
+                local_only = [
+                    item for item in uploaded
+                    if str(item.get("delivery", "")).startswith("local-only")
+                ]
+                delivered = [
+                    item for item in uploaded if item not in local_only
+                ]
+                if local_only:
+                    result.data["local_artifacts"] = local_only
+                    result.data["artifact_delivery"] = "local-only"
+                if delivered:
+                    result.data["uploaded_artifacts"] = delivered
+        except Exception as error:
+            result.data["upload_error"] = str(error)
+            result.ok = False
+            result.summary += "; artifact upload failed"
+        job_runtime["job_timings"]["upload_seconds"] = round(
+            time.monotonic() - upload_started, 3,
+        )
+
+        job_runtime["job_phase"] = "reporting"
+        report_started = time.monotonic()
+        result.data["agent_timings"] = dict(job_runtime["job_timings"])
+        if verbose_lifecycle or not result.ok:
+            try:
+                control.append_event(
+                    job.id,
+                    "info" if result.ok else "error",
+                    result.summary,
+                )
+            except Exception as error:
+                print(
+                    f"terminal progress event failed: {error}",
+                    file=sys.stderr,
+                )
+        _complete_job_after_stopping_keepalive(
+            control,
+            job,
+            result,
+            keepalive_stop,
+            lease_lock,
+            presence_lock,
+        )
+        report_committed = True
+        _end_job_lease(job_runtime, report_committed=True)
+        job_runtime["job_timings"]["report_seconds"] = round(
+            time.monotonic() - report_started, 3,
+        )
+        job_runtime["job_phase"] = (
+            "completed" if result.ok else "failed"
+        )
+        return {
+            "ok": bool(result.ok),
+            "summary": result.summary,
+            "restart_required": bool(
+                result.ok and result.data.get("restart_required")
+            ),
+        }
+    finally:
+        registry.on_observation = None
+        keepalive_stop.set()
+        lease_thread.join(timeout=2.0)
+        job_runtime["job_timings"]["total_seconds"] = round(
+            time.monotonic() - job_started, 3,
+        )
+        if not report_committed and job_runtime.get("job_phase") != "failed":
+            job_runtime["job_phase"] = "delivery-error"
+        with runtime_lock:
+            active_jobs = runtime.get("active_jobs")
+            if isinstance(active_jobs, dict):
+                active_jobs.pop(job.id, None)
+                runtime["active_job_count"] = len(active_jobs)
+            if result is not None:
+                runtime["last_job_id"] = job.id
+                runtime["last_job_action"] = job.action
+                runtime["last_result"] = {
+                    "ok": bool(result.ok and report_committed),
+                    "summary": result.summary,
+                }
+                if report_committed:
+                    runtime["jobs_completed"] = (
+                        int(runtime.get("jobs_completed", 0)) + 1
+                    )
+            if runtime.get("state") in {"ready", "busy"}:
+                runtime["state"] = (
+                    "busy" if runtime.get("active_job_count") else "ready"
+                )
+        job_changed.set()
 
 
 def _agent_metadata(config: AgentConfig) -> dict:
@@ -625,23 +847,47 @@ def run(
         "started_at": time.time(),
         "job_phase": "idle",
         "jobs_completed": 0,
+        "active_jobs": {},
+        "active_job_count": 0,
+        "max_concurrent_jobs": _MAX_CONCURRENT_PRODUCT_JOBS,
         "transport_state": "not-configured",
         "last_transport_error": None,
         "last_transport_recovered_at": None,
     }
+    runtime_lock = threading.RLock()
     registry = None
     remote_control_configured = False
     control = None
 
     def runtime_status_snapshot() -> dict:
-        return _runtime_status_snapshot(
-            runtime,
-            action_registry_ready=registry is not None,
-            remote_control_configured=remote_control_configured,
-            central_session_status=(
-                control.product_central_session.status if control is not None else None
-            ),
-        )
+        with runtime_lock:
+            snapshot = _runtime_status_snapshot(
+                runtime,
+                action_registry_ready=registry is not None,
+                remote_control_configured=remote_control_configured,
+                central_session_status=(
+                    control.product_central_session.status if control is not None else None
+                ),
+            )
+            active = runtime.get("active_jobs")
+            if isinstance(active, dict):
+                snapshot["active_jobs"] = {
+                    job_id: {
+                        "action": state.get("action"),
+                        "job_started_at": state.get("job_started_at"),
+                        "job_phase": state.get("job_phase"),
+                        "job_timings": dict(state.get("job_timings") or {}),
+                        "job_lease": dict(state.get("job_lease") or {}),
+                        "progress": (
+                            dict(state["progress"])
+                            if isinstance(state.get("progress"), dict)
+                            else None
+                        ),
+                    }
+                    for job_id, state in active.items()
+                    if isinstance(state, dict)
+                }
+            return snapshot
 
     def status_payload() -> dict:
         runtime["uptime_seconds"] = round(time.monotonic() - started_monotonic, 2)
@@ -824,6 +1070,15 @@ def run(
     idle_claim_misses = 0
     transport_failures = 0
     next_claim_due = 0.0
+    next_terminal_recovery = 0.0
+    restart_requested = False
+    job_changed = threading.Event()
+    job_executor = ThreadPoolExecutor(
+        max_workers=_MAX_CONCURRENT_PRODUCT_JOBS,
+        thread_name_prefix="ordax-product-job",
+    )
+    job_futures: dict[object, str] = {}
+    from .remote_protocol import DeviceAuthorizationError
     wake_listener = None
     if config.product_wake_enabled:
         from .product_wake_signal import ProductWakeListener
@@ -837,7 +1092,51 @@ def run(
                 break
             now = time.monotonic()
             try:
-                if callable(recover_pending_reports):
+                for future, job_id in list(job_futures.items()):
+                    if not future.done():
+                        continue
+                    del job_futures[future]
+                    try:
+                        outcome = future.result()
+                    except DeviceAuthorizationError:
+                        runtime["state"] = "credential-recovery-required"
+                        return 43
+                    except Exception as error:
+                        _mark_transport_delivery_error(runtime, error)
+                        transport_failures += 1
+                        retry_delay = _transport_retry_delay(transport_failures)
+                        runtime["transport_retry_seconds"] = retry_delay
+                        next_claim_due = max(
+                            next_claim_due, time.monotonic() + retry_delay,
+                        )
+                        if (
+                            transport_failures <= 2
+                            or (transport_failures & (transport_failures - 1)) == 0
+                        ):
+                            print(
+                                f"job {job_id} delivery error "
+                                f"(retry in {retry_delay:.0f}s): {error}",
+                                file=sys.stderr,
+                            )
+                    else:
+                        if outcome.get("restart_required"):
+                            restart_requested = True
+                        transport_failures = 0
+                        runtime.pop("transport_retry_seconds", None)
+
+                if restart_requested:
+                    if not job_futures:
+                        runtime["state"] = "restarting"
+                        return 42
+                    job_changed.wait(0.25)
+                    job_changed.clear()
+                    continue
+
+                if (
+                    callable(recover_pending_reports)
+                    and now >= next_terminal_recovery
+                ):
+                    next_terminal_recovery = now + 1.0
                     recovered = int(recover_pending_reports())
                     if recovered:
                         runtime["terminal_reports_recovered"] = (
@@ -849,17 +1148,28 @@ def run(
                         }
 
                 if now >= next_heartbeat:
+                    with runtime_lock:
+                        has_active_jobs = bool(runtime.get("active_jobs"))
                     control.heartbeat(
                         host_actions,
                         agent_version=__version__,
                         metadata=_agent_metadata(config),
+                        status="busy" if has_active_jobs else "online",
                     )
                     _record_product_heartbeat(runtime)
+                    with runtime_lock:
+                        if runtime.get("active_jobs") and runtime.get("state") == "ready":
+                            runtime["state"] = "busy"
                     runtime.setdefault("startup_seconds", round(time.monotonic() - started_monotonic, 3))
-                    next_heartbeat = now + 20.0
+                    next_heartbeat = now + _PRODUCT_HEARTBEAT_SECONDS
 
                 if _consume_product_wake(control, wake_listener):
                     next_claim_due = 0.0
+
+                if len(job_futures) >= _MAX_CONCURRENT_PRODUCT_JOBS:
+                    job_changed.wait(0.25)
+                    job_changed.clear()
+                    continue
 
                 if now < next_claim_due:
                     # Enforce the claim deadline even without advisory wake.
@@ -906,129 +1216,52 @@ def run(
                     continue
 
                 idle_claim_misses = 0
-                runtime["state"] = "busy"
-                runtime["last_job_id"] = job.id
-                runtime["last_job_action"] = job.action
-                job_started = time.monotonic()
-                runtime["job_started_at"] = time.time()
-                runtime["job_phase"] = "executing"
-                runtime["job_timings"] = {}
-                _begin_job_lease(runtime, job.id)
-                runtime["progress"] = None
-                verbose_lifecycle = job.action in _VERBOSE_JOB_LIFECYCLE_EVENTS
-                if verbose_lifecycle:
-                    control.append_event(job.id, "info", f"starting {job.action}")
-                artifact_cache = {}
-
-                def publish_observation(observation: dict) -> None:
-                    progress = {"index": observation["index"], "ok": observation["ok"],
-                                "observed_at": observation["observed_at"],
-                                "duration_seconds": observation["duration_seconds"]}
-                    runtime["progress"] = progress
-                    try:
-                        progress["artifacts"] = _upload_result_artifacts(
-                            control, job, ActionResult(observation["ok"], observation["summary"], observation),
-                            artifact_cache,
-                        )
-                        control.append_event(job.id, "info", "visual observation available", progress)
-                    except Exception as error:
-                        progress["delivery_error"] = str(error)
-                        # Final upload retries missing artifacts without repeating app actions.
-                    runtime["progress"] = progress
-
-                registry.on_observation = publish_observation
-
-                keepalive_stop = threading.Event()
-                keepalive_operation_lock = threading.Lock()
-
-                def _keep_job_alive(active_job=job, stop_event=keepalive_stop) -> None:
-                    while not stop_event.wait(20.0):
-                        _keep_job_alive_tick(
-                            control, active_job, stop_event, keepalive_operation_lock,
-                            runtime, host_actions, __version__,
-                        )
-
-                keepalive_thread = threading.Thread(
-                    target=_keep_job_alive,
-                    name=f"ordax-job-{job.id[:8]}-keepalive",
-                    daemon=True,
-                )
-                keepalive_thread.start()
-
-                try:
-                    try:
-                        from .product_remote import PRODUCT_REMOTE_CAPABILITY
-                        if not _native_local_access_granted(native_access_enabled):
-                            # The local switch can be turned off after claim/start.
-                            # Report denial, never execute under a stale grant.
-                            result = ActionResult(False, "native_local_connector_disabled")
-                        elif job.action == "forge.app_read":
-                            from .orchestrator_product_execution import execute_orchestrator_app_status
-                            result = execute_orchestrator_app_status(control, job,
-                                installation_provider=orchestrator_installation_provider)
-                        elif job.action == PRODUCT_REMOTE_CAPABILITY:
-                            from .product_remote import execute_product_invocation
-                            result = execute_product_invocation(
-                                registry,
-                                control,
-                                job.action_payload(),
-                            )
-                        else:
-                            result = registry.execute(job.action, job.action_payload())
-                    except Exception as error:
-                        result = ActionResult(False, f"{type(error).__name__}: {error}")
-                    runtime["job_timings"]["execution_seconds"] = round(time.monotonic() - job_started, 3)
-                    runtime["job_phase"] = "uploading"
-                    upload_started = time.monotonic()
-                    try:
-                        uploaded = _upload_result_artifacts(control, job, result, artifact_cache)
-                        if uploaded:
-                            local_only = [item for item in uploaded if str(item.get("delivery", "")).startswith("local-only")]
-                            delivered = [item for item in uploaded if item not in local_only]
-                            if local_only:
-                                result.data["local_artifacts"] = local_only
-                                result.data["artifact_delivery"] = "local-only"
-                            if delivered:
-                                result.data["uploaded_artifacts"] = delivered
-                    except Exception as error:
-                        result.data["upload_error"] = str(error)
-                        result.ok = False
-                        result.summary += "; artifact upload failed"
-                    runtime["job_timings"]["upload_seconds"] = round(time.monotonic() - upload_started, 3)
-                    runtime["job_phase"] = "reporting"
-                    report_started = time.monotonic()
-                    result.data["agent_timings"] = dict(runtime["job_timings"])
-                    if verbose_lifecycle or not result.ok:
-                        try:
-                            control.append_event(
-                                job.id, "info" if result.ok else "error", result.summary,
-                            )
-                        except Exception as error:
-                            # An optional progress event must not block the terminal result.
-                            print(f"terminal progress event failed: {error}", file=sys.stderr)
-                    _complete_job_after_stopping_keepalive(
-                        control, job, result, keepalive_stop, keepalive_operation_lock,
-                    )
-                    _end_job_lease(runtime, report_committed=True)
-                    runtime["job_timings"]["report_seconds"] = round(time.monotonic() - report_started, 3)
-                finally:
-                    registry.on_observation = None
-                    keepalive_stop.set()
-                    keepalive_thread.join(timeout=2.0)
-
-                runtime["job_timings"]["total_seconds"] = round(time.monotonic() - job_started, 3)
-                runtime["job_phase"] = "completed" if result.ok else "failed"
-                runtime["jobs_completed"] += 1
-                runtime["last_result"] = {
-                    "ok": result.ok,
-                    "summary": result.summary,
+                next_claim_due = 0.0
+                job_runtime = {
+                    "action": job.action,
+                    "job_phase": "claimed",
+                    "job_timings": {},
+                    "progress": None,
                 }
+                _begin_job_lease(job_runtime, job.id)
+                with runtime_lock:
+                    active_jobs = runtime["active_jobs"]
+                    if job.id in active_jobs:
+                        raise RuntimeError(
+                            f"duplicate active Product job id: {job.id}"
+                        )
+                    active_jobs[job.id] = job_runtime
+                    runtime["active_job_count"] = len(active_jobs)
+                    runtime["state"] = "busy"
+                    runtime["last_job_id"] = job.id
+                    runtime["last_job_action"] = job.action
+                    runtime["job_started_at"] = time.time()
+                    runtime["job_phase"] = (
+                        "concurrent"
+                        if len(active_jobs) > 1
+                        else "executing"
+                    )
+                    first_active_job = len(active_jobs) == 1
+                if first_active_job:
+                    # Advertise busy immediately after the first accepted lease,
+                    # rather than waiting for the ordinary idle heartbeat cadence.
+                    next_heartbeat = 0.0
 
-                if result.ok and result.data.get("restart_required"):
-                    runtime["state"] = "restarting"
-                    return 42
-
-                runtime["state"] = "ready"
+                future = job_executor.submit(
+                    _execute_claimed_job,
+                    control=control,
+                    registry=registry,
+                    job=job,
+                    job_runtime=job_runtime,
+                    runtime=runtime,
+                    runtime_lock=runtime_lock,
+                    host_actions=host_actions,
+                    native_access_enabled=native_access_enabled,
+                    orchestrator_installation_provider=orchestrator_installation_provider,
+                    job_changed=job_changed,
+                )
+                job_futures[future] = job.id
+                continue
             except Exception as error:
                 from .remote_protocol import DeviceAuthorizationError
                 if isinstance(error, DeviceAuthorizationError):
@@ -1050,6 +1283,7 @@ def run(
     finally:
         runtime["state"] = "stopping"
         stop_requested.set()
+        job_executor.shutdown(wait=True, cancel_futures=False)
         if wake_listener is not None:
             wake_listener.close()
         try:

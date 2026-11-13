@@ -5,6 +5,8 @@ import json
 import os
 import signal
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from dataclasses import replace
@@ -24,14 +26,19 @@ DEVICE = "22222222-2222-4222-8222-222222222222"
 
 class NativeRuntimeCompositionTests(unittest.TestCase):
     def setUp(self):
+        # Resolve the OS temp root before intentionally clearing inherited
+        # environment. Otherwise Windows tempfile can fall back to cwd, which
+        # would place this fixture inside the Runtime source tree it must protect.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
         environment = patch.dict(os.environ, {}, clear=True)
         environment.start()
         self.addCleanup(environment.stop)
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.state = self.root / "state"
         self.state.mkdir()
+        self.workspace = self.root / "workspace"
+        self.workspace.mkdir()
         self.config = AgentConfig(
             agent_name="native-test", poll_seconds=8,
             state_dir=self.state, agent_repo_path=self.root / "runtime-source",
@@ -181,7 +188,8 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         plane = Mock()
         plane.recover_pending_reports.return_value = 0
         plane.pair_if_needed.return_value = False
-        plane.claim_next_job.return_value = job
+        jobs = [job]
+        plane.claim_next_job.side_effect = lambda: jobs.pop(0) if jobs else None
         handlers = {}
         results = []
 
@@ -211,13 +219,23 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         plane.complete.assert_called_once()
 
     def test_native_graphics_register_only_supplied_handlers_under_shared_policy(self):
-        (self.state / "agent-settings.json").write_text(json.dumps({"computer_access": {"enabled": False}}))
+        (self.state / "agent-settings.json").write_text(json.dumps({
+            "computer_access": {
+                "enabled": False,
+                "allowed_roots": [str(self.workspace)],
+            },
+        }))
         handler = Mock(return_value=ActionResult(True, "native screen ready", {"width": 1280}))
         registry = ActionRegistry(self.config, computer_adapter={"computer.screen_info": handler})
         self.assertEqual(COMPUTER_GRAPHICAL_ACTIONS.intersection(registry.names), {"computer.screen_info"})
         self.assertFalse(registry.execute("computer.screen_info", {}).ok)
         handler.assert_not_called()
-        (self.state / "agent-settings.json").write_text(json.dumps({"computer_access": {"enabled": True}}))
+        (self.state / "agent-settings.json").write_text(json.dumps({
+            "computer_access": {
+                "enabled": True,
+                "allowed_roots": [str(self.workspace)],
+            },
+        }))
         self.assertTrue(registry.execute("computer.screen_info", {}).ok)
         handler.assert_called_once_with({})
         self.assertFalse(registry.execute("computer.click", {"x": 1, "y": 1}).ok)
@@ -242,9 +260,12 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         # This is source integration evidence, not a credentialled device E2E.
         for enabled in (True, False):
             with self.subTest(enabled=enabled):
-                path = self.root / ("allowed.txt" if enabled else "denied.txt")
+                path = self.workspace / ("allowed.txt" if enabled else "denied.txt")
                 (self.state / "agent-settings.json").write_text(json.dumps({
-                    "computer_access": {"enabled": enabled, "allowed_roots": [str(self.root)]},
+                    "computer_access": {
+                        "enabled": enabled,
+                        "allowed_roots": [str(self.workspace)],
+                    },
                 }))
                 job = AgentJob("native-file-job", "computer.text_write", {
                     "path": str(path), "content": "native runtime integration\n", "create": True,
@@ -252,7 +273,8 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                 plane = Mock()
                 plane.recover_pending_reports.return_value = 0
                 plane.pair_if_needed.return_value = False
-                plane.claim_next_job.return_value = job
+                jobs = [job]
+                plane.claim_next_job.side_effect = lambda: jobs.pop(0) if jobs else None
                 handlers = {}
                 results = []
 
@@ -288,6 +310,81 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                 self.assertEqual(plane.heartbeat.call_args.kwargs["status"], "offline")
                 self.assertFalse(COMPUTER_GRAPHICAL_ACTIONS.intersection(plane.heartbeat.call_args.args[0]))
                 self.assertFalse((self.state / "device-token.cloudflare-v3.txt").exists())
+
+
+    def test_product_loop_executes_two_jobs_concurrently_and_isolates_failure(self):
+        jobs = [
+            AgentJob("parallel-fail", "computer.processes", {}),
+            AgentJob("parallel-ok", "computer.file_stat", {"path": str(self.workspace)}),
+        ]
+        plane = Mock()
+        plane.recover_pending_reports.return_value = 0
+        plane.pair_if_needed.return_value = False
+        plane.claim_next_job.side_effect = lambda: jobs.pop(0) if jobs else None
+        handlers = {}
+        completions = []
+        completions_lock = threading.Lock()
+        active = [0]
+        maximum_active = [0]
+        active_lock = threading.Lock()
+        rendezvous = threading.Barrier(2, timeout=2.0)
+
+        def execute(_registry, action, _payload):
+            with active_lock:
+                active[0] += 1
+                maximum_active[0] = max(maximum_active[0], active[0])
+            try:
+                rendezvous.wait()
+                time.sleep(0.08)
+                if action == "computer.processes":
+                    return ActionResult(False, "planned independent failure")
+                return ActionResult(True, "independent job completed")
+            finally:
+                with active_lock:
+                    active[0] -= 1
+
+        def complete(completed_job, result):
+            with completions_lock:
+                completions.append((completed_job.id, result.ok))
+                finished = len(completions) == 2
+            if finished:
+                handlers[signal.SIGTERM]()
+
+        plane.complete.side_effect = complete
+        with (
+            patch("ordax_dev_agent.control_plane.build_control_plane", return_value=plane),
+            patch("ordax_dev_agent.main.start_status_server") as server,
+            patch("ordax_dev_agent.main._start_local_watchdog", return_value=None),
+            patch("ordax_dev_agent.main._PRODUCT_HEARTBEAT_SECONDS", 0.02),
+            patch("ordax_dev_agent.main.signal.signal",
+                  side_effect=lambda kind, handler: handlers.__setitem__(kind, handler)),
+            patch("ordax_dev_agent.actions.ActionRegistry.execute", new=execute),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(
+                run(
+                    self.config,
+                    device_credential_provider=self.provider,
+                    native_access_enabled=lambda: True,
+                    status_port=0,
+                ),
+                0,
+            )
+            server.return_value.shutdown.assert_called_once_with()
+
+        self.assertEqual(maximum_active[0], 2)
+        self.assertCountEqual(
+            completions,
+            [("parallel-fail", False), ("parallel-ok", True)],
+        )
+        busy_heartbeats = [
+            call for call in plane.heartbeat.call_args_list
+            if call.kwargs.get("status") == "busy"
+        ]
+        self.assertTrue(
+            busy_heartbeats,
+            "main Product heartbeat must remain live while jobs execute",
+        )
 
 
 if __name__ == "__main__":

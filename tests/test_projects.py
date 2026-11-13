@@ -8,7 +8,6 @@ from unittest.mock import patch, Mock
 
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
-from ordax_dev_agent.execution_lock import ExecutionLock
 from ordax_dev_agent.models import AgentJob, ActionResult
 from ordax_dev_agent.projects import load_projects
 from ordax_dev_agent.unity_editor_bridge import UnityEditorBridge
@@ -243,26 +242,39 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(first, final)
         self.assertEqual(control.upload_artifact.call_count, 1)
 
-    def test_read_only_studio_surfaces_remain_available_while_agent_is_busy(self):
+    def test_read_only_studio_surfaces_remain_available_while_project_is_busy(self):
         registry = ActionRegistry(self.config)
-        self.assertTrue(registry._execution_lock.acquire(blocking=False))
+        held = registry._concurrency.try_acquire(
+            "project.observe", {"project": "model"}, project_resolver=registry._project,
+        )
+        self.assertIsNotNone(held)
         try:
             catalog = registry.execute("workspace.repository_catalog", {})
             preview = registry.execute("project.preview_status", {"project": "model"})
         finally:
-            registry._execution_lock.release()
+            held.release()
         self.assertTrue(catalog.ok, catalog.summary)
         self.assertTrue(preview.ok, preview.summary)
 
-    def test_process_lock_excludes_second_client(self):
-        first, second = ExecutionLock(self.config.state_dir), ExecutionLock(self.config.state_dir)
-        self.assertTrue(first.acquire())
+    def test_same_project_resource_excludes_second_client(self):
+        first_registry = ActionRegistry(self.config)
+        second_registry = ActionRegistry(self.config)
+        payload = {"project": "model"}
+        first = first_registry._concurrency.try_acquire(
+            "project.observe", payload, project_resolver=first_registry._project,
+        )
+        self.assertIsNotNone(first)
         try:
-            self.assertFalse(second.acquire())
-            self.assertFalse(ActionRegistry(self.config).execute('project.observe', {}).ok)
+            second = second_registry._concurrency.try_acquire(
+                "project.observe", payload, project_resolver=second_registry._project,
+            )
+            self.assertIsNone(second)
         finally:
             first.release()
-        self.assertTrue(second.acquire())
+        second = second_registry._concurrency.try_acquire(
+            "project.observe", payload, project_resolver=second_registry._project,
+        )
+        self.assertIsNotNone(second)
         second.release()
 
     def test_unity_timeout_does_not_return_retryable_none(self):

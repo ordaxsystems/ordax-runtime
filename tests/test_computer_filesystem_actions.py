@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
-from ordax_dev_agent.execution_lock import ExecutionLock
 from ordax_dev_agent.computer_filesystem_actions import load_computer_access_policy, _readable_installed_product_manifest
 
 
@@ -381,39 +380,52 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
         self.assertFalse(linked["allowed"])
         self.assertFalse(any(item["name"] == "secret.txt" for item in result.data["entries"]))
 
-    def test_observation_read_is_not_blocked_by_process_execution_lock(self):
-        held = ExecutionLock(self.state)
-        self.assertTrue(held.acquire())
-        self.addCleanup(held.release)
-
-        result = self.registry.execute(
-            "computer.directory_list",
-            {"path": str(self.allowed), "max_depth": 1, "max_entries": 20},
+    def test_observation_read_is_not_blocked_by_unrelated_mutation(self):
+        payload = {"path": str(self.allowed / "busy.txt"), "content": "x", "create": True}
+        held = self.registry._concurrency.try_acquire(
+            "computer.text_write", payload, project_resolver=self.registry._project,
         )
-        self.assertTrue(result.ok, result.summary)
-
-    def test_observation_read_is_not_blocked_by_registry_execution_lock(self):
-        self.assertTrue(self.registry._execution_lock.acquire(blocking=False))
+        self.assertIsNotNone(held)
         try:
             result = self.registry.execute(
-                "computer.file_stat", {"path": str(self.allowed)}
+                "computer.directory_list",
+                {"path": str(self.allowed), "max_depth": 1, "max_entries": 20},
             )
         finally:
-            self.registry._execution_lock.release()
+            held.release()
         self.assertTrue(result.ok, result.summary)
 
-    def test_mutating_write_remains_serialized_by_process_lock(self):
-        held = ExecutionLock(self.state)
-        self.assertTrue(held.acquire())
-        self.addCleanup(held.release)
-
-        result = self.registry.execute(
-            "computer.text_write",
-            {"path": str(self.allowed / "blocked.txt"), "content": "x", "create": True},
+    def test_different_file_write_is_not_blocked_by_unrelated_file_lock(self):
+        busy = {"path": str(self.allowed / "busy.txt"), "content": "a", "create": True}
+        held = self.registry._concurrency.try_acquire(
+            "computer.text_write", busy, project_resolver=self.registry._project,
         )
+        self.assertIsNotNone(held)
+        try:
+            result = self.registry.execute(
+                "computer.text_write",
+                {"path": str(self.allowed / "independent.txt"), "content": "b", "create": True},
+            )
+        finally:
+            held.release()
+        self.assertTrue(result.ok, result.summary)
+        self.assertEqual((self.allowed / "independent.txt").read_text(), "b")
+
+    def test_same_file_write_conflict_is_retryable(self):
+        target = self.allowed / "blocked.txt"
+        payload = {"path": str(target), "content": "x", "create": True}
+        held = self.registry._concurrency.try_acquire(
+            "computer.text_write", payload, project_resolver=self.registry._project,
+        )
+        self.assertIsNotNone(held)
+        try:
+            result = self.registry.execute("computer.text_write", payload)
+        finally:
+            held.release()
         self.assertFalse(result.ok)
         self.assertTrue(result.data.get("retryable"))
-        self.assertFalse((self.allowed / "blocked.txt").exists())
+        self.assertEqual(result.data.get("conflict_scope"), "resource")
+        self.assertFalse(target.exists())
 
     def test_configured_root_cannot_be_removed_or_moved(self):
         remove = self.registry.execute(

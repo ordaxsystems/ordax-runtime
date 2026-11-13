@@ -7,7 +7,8 @@ from unittest.mock import patch
 from ordax_dev_agent.main import (
     _begin_job_lease,
     _complete_job_after_stopping_keepalive,
-    _keep_job_alive_tick,
+    _renew_active_job_tick,
+    _heartbeat_active_job_tick,
     _end_job_lease,
     _mark_transport_delivery_error,
     _mark_transport_healthy,
@@ -114,13 +115,14 @@ class TransportHealthRecoveryTests(unittest.TestCase):
         _record_job_lease_renewal(runtime, {"lease_expires_at": "2026-10-20T17:30:00"})
         self.assertEqual("unverified", runtime["job_lease"]["state"])
 
-    def test_terminal_report_waits_for_keepalive_and_suppresses_late_busy_heartbeat(self) -> None:
+    def test_slow_lease_renewal_never_starves_busy_presence(self) -> None:
         stop_event = threading.Event()
-        operation_lock = threading.Lock()
-        renewal_started = threading.Event()
-        release_renewal = threading.Event()
+        lease_lock, presence_lock = threading.Lock(), threading.Lock()
+        renewal_started, release_renewal = threading.Event(), threading.Event()
+        heartbeat_seen = threading.Event()
         operations: list[str] = []
-        runtime = {"job_lease": {"state": "started", "renewal_attempts": 0}}
+        runtime = {"state": "busy", "transport_state": "connected"}
+        _begin_job_lease(runtime, "safe-request-id")
 
         class Control:
             def renew(self, _job: object) -> dict:
@@ -133,31 +135,85 @@ class TransportHealthRecoveryTests(unittest.TestCase):
 
             def heartbeat(self, *_args: object, **_kwargs: object) -> None:
                 operations.append("busy_heartbeat")
+                heartbeat_seen.set()
 
             def complete(self, *_args: object) -> None:
                 operations.append("complete")
 
         control = Control()
-        keepalive = threading.Thread(
-            target=_keep_job_alive_tick,
-            args=(control, object(), stop_event, operation_lock, runtime, [], "test"),
+        lease_thread = threading.Thread(
+            target=_renew_active_job_tick,
+            args=(control, object(), stop_event, lease_lock, runtime),
         )
-        keepalive.start()
+        lease_thread.start()
         self.assertTrue(renewal_started.wait(1))
+        presence_thread = threading.Thread(
+            target=_heartbeat_active_job_tick,
+            args=(control, stop_event, presence_lock, runtime, [], "test"),
+        )
+        presence_thread.start()
+        self.assertTrue(heartbeat_seen.wait(1), "heartbeat blocked behind slow renewal")
+        self.assertFalse(release_renewal.is_set())
 
         reporter = threading.Thread(
             target=_complete_job_after_stopping_keepalive,
-            args=(control, object(), object(), stop_event, operation_lock),
+            args=(control, object(), object(), stop_event, lease_lock, presence_lock),
         )
         reporter.start()
         self.assertTrue(stop_event.wait(1))
         release_renewal.set()
-        keepalive.join(2)
-        reporter.join(2)
+        for thread in (lease_thread, presence_thread, reporter):
+            thread.join(2)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(
+            ["renew_started", "busy_heartbeat", "renew_returned", "complete"],
+            operations,
+        )
+        self.assertTrue(runtime["paired"])
+        self.assertEqual("renewed", runtime["job_lease"]["state"])
+        # A tick awakened after the terminal report must not publish stale busy.
+        _heartbeat_active_job_tick(
+            control, stop_event, presence_lock, runtime, [], "test",
+        )
+        self.assertEqual("complete", operations[-1])
 
-        self.assertFalse(keepalive.is_alive())
-        self.assertFalse(reporter.is_alive())
-        self.assertEqual(["renew_started", "renew_returned", "complete"], operations)
+    def test_terminal_report_waits_for_in_flight_presence_and_blocks_late_busy(self) -> None:
+        stop_event = threading.Event()
+        lease_lock, presence_lock = threading.Lock(), threading.Lock()
+        heartbeat_started, release_heartbeat = threading.Event(), threading.Event()
+        operations: list[str] = []
+        runtime = {"state": "busy", "transport_state": "connected"}
+
+        class Control:
+            def heartbeat(self, *_args: object, **_kwargs: object) -> None:
+                operations.append("busy_started")
+                heartbeat_started.set()
+                if not release_heartbeat.wait(2):
+                    raise AssertionError("test did not release the heartbeat")
+                operations.append("busy_returned")
+
+            def complete(self, *_args: object) -> None:
+                operations.append("complete")
+
+        control = Control()
+        presence_thread = threading.Thread(
+            target=_heartbeat_active_job_tick,
+            args=(control, stop_event, presence_lock, runtime, [], "test"),
+        )
+        presence_thread.start()
+        self.assertTrue(heartbeat_started.wait(1))
+        reporter = threading.Thread(
+            target=_complete_job_after_stopping_keepalive,
+            args=(control, object(), object(), stop_event, lease_lock, presence_lock),
+        )
+        reporter.start()
+        self.assertTrue(stop_event.wait(1))
+        self.assertNotIn("complete", operations)
+        release_heartbeat.set()
+        for thread in (presence_thread, reporter):
+            thread.join(2)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(["busy_started", "busy_returned", "complete"], operations)
 
     def test_non_transient_state_is_not_reported_as_recovery(self) -> None:
         runtime = {
