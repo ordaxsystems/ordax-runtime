@@ -362,6 +362,8 @@ class PersistentProcessActions:
                 | getattr(subprocess, "DETACHED_PROCESS", 0)
                 | getattr(subprocess, "CREATE_NO_WINDOW", 0)
             )
+            if os.environ.get("ORDAX_PERSISTENT_BREAKAWAY_ALLOWED") == "1":
+                creationflags |= getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
         else:
             start_new_session = True
 

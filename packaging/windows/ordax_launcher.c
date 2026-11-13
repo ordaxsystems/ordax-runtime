@@ -130,7 +130,11 @@ static HANDLE create_kill_job(void) {
     }
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
     ZeroMemory(&limits, sizeof(limits));
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // Keep ordinary Runtime children owned by the launcher job, while allowing
+    // the explicitly breakaway persistent-process manager to survive a Runtime
+    // restart and reconcile its durable process receipt afterwards.
+    limits.BasicLimitInformation.LimitFlags =
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
     if (!SetInformationJobObject(
             job,
             JobObjectExtendedLimitInformation,
@@ -471,6 +475,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
         // refuse an in-job self-upgrade and demand the independent Task Scheduler
         // handoff, otherwise quiesce kills its own installer before completion.
         SetEnvironmentVariableW(L"ORDAX_RUNTIME_SUPERVISED", L"1");
+        SetEnvironmentVariableW(L"ORDAX_PERSISTENT_BREAKAWAY_ALLOWED", L"1");
         DWORD backoff_ms = 1000;
         for (;;) {
             if (WaitForSingleObject(shutdown_event, 0) == WAIT_OBJECT_0) {
