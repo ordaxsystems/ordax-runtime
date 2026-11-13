@@ -59,7 +59,12 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
         self.assertEqual([], status.data["allowed_applications"])
         reported = status.data["runtime_capabilities"]
         self.assertEqual(reported["agent_version"], "1.31.0")
-        self.assertEqual(set(reported["implemented_actions"]), {
+        expected_implemented = sorted(
+            name for name in self.registry.names if name.startswith("computer.")
+        )
+        self.assertEqual(reported["implemented_actions"], expected_implemented)
+        self.assertEqual(reported["implemented_action_count"], len(expected_implemented))
+        self.assertEqual(set(reported["device_terminal_process_actions"]), {
             "computer.terminal_exec",
             "computer.process_start",
             "computer.process_status",
@@ -68,11 +73,12 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
             "computer.process_write_stdin",
             "computer.process_stop",
         })
+        self.assertFalse(reported["remote_routing_evaluated"])
         self.assertNotIn("terminal.exec", reported["implemented_actions"])
         self.assertNotIn("process.start", reported["implemented_actions"])
         self.assertEqual(
             reported["registered_computer_actions"],
-            sorted(name for name in self.registry.names if name.startswith("computer.")),
+            expected_implemented,
         )
         self.assertEqual(
             reported["registered_computer_action_count"],
@@ -118,6 +124,12 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
             actual["registered_computer_actions"],
         )
         self.assertEqual(2, actual["registered_computer_action_count"])
+        self.assertEqual(actual["implemented_actions"], actual["registered_computer_actions"])
+        self.assertEqual(2, actual["implemented_action_count"])
+        self.assertEqual(
+            ["computer.terminal_exec"],
+            actual["device_terminal_process_actions"],
+        )
         self.assertNotIn("computer.process_start", actual["implemented_actions"])
 
     def test_missing_allowed_paths_return_bounded_structured_errors(self):
