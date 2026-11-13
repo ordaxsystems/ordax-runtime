@@ -558,6 +558,71 @@ class ComputerFilesystemActions:
         device_terminal_process_actions = [
             name for name in device_actions if name in registered
         ]
+        execution_mode_definitions: dict[str, dict[str, Any]] = {}
+
+        def classify(actions: tuple[str, ...], mode: str, **details: Any) -> None:
+            for action in actions:
+                if action in registered:
+                    execution_mode_definitions[action] = {
+                        "mode": mode,
+                        **details,
+                    }
+
+        classify((
+            "computer.access_status",
+            "computer.activity_status",
+            "computer.directory_create",
+            "computer.directory_list",
+            "computer.file_stat",
+            "computer.path_move",
+            "computer.path_remove",
+            "computer.process_list",
+            "computer.process_logs",
+            "computer.process_start",
+            "computer.process_status",
+            "computer.process_stop",
+            "computer.process_write_stdin",
+            "computer.processes",
+            "computer.search",
+            "computer.terminal_exec",
+            "computer.terminate_process",
+            "computer.text_patch",
+            "computer.text_read",
+            "computer.text_write",
+            "computer.transfer_abort",
+            "computer.transfer_begin",
+            "computer.transfer_chunk",
+            "computer.transfer_commit",
+            "computer.transfer_status",
+        ), "headless")
+        classify((
+            "computer.active_window",
+            "computer.clipboard_read",
+            "computer.screen_info",
+            "computer.screenshot",
+            "computer.windows",
+        ), "background", input_scope="observe_only")
+        classify((
+            "computer.click",
+            "computer.clipboard_write",
+            "computer.drag",
+            "computer.focus_window",
+            "computer.hotkey",
+            "computer.launch_app",
+            "computer.mouse_move",
+            "computer.scroll",
+        ), "foreground_only", requires_explicit_user_consent=True)
+        if "computer.type" in registered:
+            execution_mode_definitions["computer.type"] = {
+                "mode": "background",
+                "target_scope": "verified_win32_edit",
+                "fallback": "none",
+            }
+
+        execution_mode_unclassified_actions = sorted(
+            set(registered_computer_actions) - set(execution_mode_definitions)
+        )
+
         status["runtime_capabilities"] = {
             "agent_version": __version__,
             # "implemented" means locally executable by this Runtime registry.
@@ -570,6 +635,8 @@ class ComputerFilesystemActions:
             "registered_computer_actions": registered_computer_actions,
             "registered_computer_action_count": len(registered_computer_actions),
             "remote_routing_evaluated": False,
+            "execution_modes": execution_mode_definitions,
+            "execution_mode_unclassified_actions": execution_mode_unclassified_actions,
         }
         return ActionResult(True, "computer access policy ready", status)
 
