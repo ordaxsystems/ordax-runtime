@@ -85,14 +85,18 @@ def product_idle_claim_delay_seconds(
     # A connected socket that has never delivered a real wake signal is not
     # evidence of push availability. Keep a responsive bounded SQL fallback.
     if verified_wake:
-        return 300.0
+        # Product MCP queue entries currently expire after 120 seconds. A lost
+        # advisory wake must be reconciled well before that authority expires,
+        # otherwise the fallback cannot recover the queued action at all.
+        return 60.0
     # The Runtime is an interactive control surface: an idle device must not
     # wait 30–60 seconds before observing ordinary work. Retain the burst and
     # cap the SQL fallback at 18 seconds. A 30-second presence heartbeat keeps
     # the conservative per-device DB budget below 16k statements/day while
     # leaving a full 30-second margin inside the 60-second readiness window.
-    # Once authenticated wake is verified, SQL polling becomes the five-minute
-    # reconciliation path above.
+    # Once authenticated wake is verified, SQL polling becomes the one-minute
+    # lost-signal reconciliation path above. It must remain below the canonical
+    # Product action queue TTL.
     ceiling = 18.0
     return min(ceiling, 0.25 * (1.8 ** min(idle_misses - 1, 11)))
 
@@ -1219,8 +1223,9 @@ def run(
                     # Stay very responsive during interactive work, then ease
                     # toward the configured ceiling while the agent is idle.
                     # Only a connection with a verified wake message may
-                    # reduce SQL reconciliation to five minutes. A silent
-                    # socket must not make new actions stall for five minutes.
+                    # reduce SQL polling frequency. Even then, lost-signal
+                    # reconciliation must happen before the Product action TTL.
+                    # A silent socket keeps the 18-second fallback.
                     idle_delay = product_idle_claim_delay_seconds(
                         idle_claim_misses, config.poll_seconds,
                         verified_wake=(
