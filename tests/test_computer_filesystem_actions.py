@@ -74,6 +74,30 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
             "computer.process_stop",
         })
         self.assertFalse(reported["remote_routing_evaluated"])
+        self.assertEqual(reported["execution_mode_unclassified_actions"], [])
+        self.assertEqual(
+            reported["execution_modes"]["computer.terminal_exec"]["mode"],
+            "headless",
+        )
+        self.assertEqual(
+            reported["execution_modes"]["computer.type"],
+            {
+                "mode": "background",
+                "target_scope": "verified_win32_edit",
+                "fallback": "none",
+            },
+        )
+        self.assertEqual(
+            reported["execution_modes"]["computer.click"]["mode"],
+            "foreground_only",
+        )
+        self.assertTrue(
+            reported["execution_modes"]["computer.click"]["requires_explicit_user_consent"]
+        )
+        self.assertEqual(
+            reported["execution_modes"]["computer.screenshot"],
+            {"mode": "background", "input_scope": "observe_only"},
+        )
         self.assertNotIn("terminal.exec", reported["implemented_actions"])
         self.assertNotIn("process.start", reported["implemented_actions"])
         self.assertEqual(
@@ -98,6 +122,10 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
             "computer.process_start",
             second.data["runtime_capabilities"]["registered_computer_actions"],
         )
+        self.assertNotIn(
+            "computer.process_start",
+            second.data["runtime_capabilities"]["execution_modes"],
+        )
 
         blocked = self.registry.execute(
             "computer.file_stat", {"path": str(self.outside)}
@@ -112,6 +140,11 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
         self.assertNotIn("computer.screen_info", reported["registered_computer_actions"])
         self.assertIn("computer.terminal_exec", reported["registered_computer_actions"])
         self.assertEqual(len(reported["registered_computer_actions"]), reported["registered_computer_action_count"])
+        self.assertEqual(
+            set(reported["execution_modes"]),
+            set(reported["registered_computer_actions"]),
+        )
+        self.assertEqual(reported["execution_mode_unclassified_actions"], [])
 
         restricted = ActionRegistry(
             self.registry.config,
@@ -131,6 +164,14 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
             actual["device_terminal_process_actions"],
         )
         self.assertNotIn("computer.process_start", actual["implemented_actions"])
+        self.assertEqual(
+            actual["execution_modes"],
+            {
+                "computer.access_status": {"mode": "headless"},
+                "computer.terminal_exec": {"mode": "headless"},
+            },
+        )
+        self.assertEqual(actual["execution_mode_unclassified_actions"], [])
 
     def test_missing_allowed_paths_return_bounded_structured_errors(self):
         # A missing path must remain a normal negative result. No absolute
