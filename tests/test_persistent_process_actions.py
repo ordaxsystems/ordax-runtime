@@ -59,6 +59,7 @@ class PersistentProcessActionsTests(unittest.TestCase):
             source,
         )
         self.assertNotIn('return ActionResult(False, "persistent process stop failed", {', source)
+        self.assertIn('CREATE_BREAKAWAY_FROM_JOB', source)
 
     def test_atomic_json_retries_transient_replace_error(self):
         path = self.root / "atomic-state.json"
