@@ -145,23 +145,9 @@ class AgentConfig:
                 )
             ),
             workspace_root=Path(
-                os.environ.get(
-                    "ORDAX_WORKSPACE_ROOT",
-                    settings.get(
-                        "workspace_root",
-                        str(
-                            Path(
-                                os.environ.get(
-                                    "ORDAX_HORDAX_PATH",
-                                    settings.get(
-                                        "hordax_path",
-                                        str(Path.home() / "Documents" / "github" / "HORDAX-game"),
-                                    ),
-                                )
-                            ).expanduser().resolve().parent
-                        ),
-                    ),
-                )
+                os.environ.get("ORDAX_WORKSPACE_ROOT")
+                or settings.get("workspace_root")
+                or str(Path(hordax_path_value).expanduser().resolve().parent)
             ).expanduser().resolve(),
         )
 
