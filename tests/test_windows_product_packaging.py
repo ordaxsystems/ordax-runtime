@@ -574,10 +574,10 @@ class WindowsProductPackagingTests(unittest.TestCase):
             encoding="utf-8")
         smoke = (ROOT / "scripts" / "windows" / "test-ordax-studio-install-smoke.ps1").read_text(
             encoding="utf-8")
-        self.assertIn("from ordax_dev_agent.main import product_idle_claim_delay_seconds", probe)
+        self.assertIn("product_idle_claim_delay_seconds,", probe)
         self.assertIn("product_idle_claim_delay_seconds(1, 0.25)", probe)
-        self.assertIn("product_idle_claim_delay_seconds(40, configured_ceiling) < 30.0", probe)
-        self.assertIn("product_idle_claim_delay_seconds(40, 300.0) > 60.0", probe)
+        self.assertIn("product_idle_claim_delay_seconds(40, configured_ceiling) != 18.0", probe)
+        self.assertIn("product_idle_claim_delay_seconds(40, 12.0, verified_wake=True) != 300.0", probe)
         self.assertIn("ORDAX_PACKAGED_PRODUCT_IDLE_BUDGET=PASS", probe)
         self.assertIn("assert-runtime-package-capabilities.ps1", builder)
         self.assertIn("assert-runtime-package-capabilities.ps1", smoke)

@@ -28,15 +28,19 @@ class AgentConfig:
     workspace_root: Path | None = None
     # Trusted host-owned authority paths; never loaded from remote payloads.
     protected_roots: tuple[Path, ...] = ()
-    # Off until the canonical MCP Worker wake DO rollout is validated.
-    product_wake_enabled: bool = False
+    # Canonical advisory wake is the normal low-latency path. PostgreSQL
+    # remains the sole queue/lease authority and polling remains the fallback.
+    product_wake_enabled: bool = True
     # Trusted host-only authority selection; never loaded from settings or environment.
     computer_access_source: Literal["windows-local", "native-unbound"] = "windows-local"
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
+        local_app_data_value = os.environ.get("LOCALAPPDATA")
         local_app_data = Path(
-            os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
+            local_app_data_value
+            if local_app_data_value
+            else Path.home() / "AppData" / "Local"
         )
         state_dir = Path(
             os.environ.get(
@@ -60,7 +64,7 @@ class AgentConfig:
         if not isinstance(settings.get("adapters", []), list):
             raise ValueError("adapters must be a list of locally installed adapter names")
 
-        wake_setting = settings.get("product_wake_enabled", False)
+        wake_setting = settings.get("product_wake_enabled", True)
         if not isinstance(wake_setting, bool):
             raise ValueError("product_wake_enabled must be a boolean")
         wake_override = os.environ.get("ORDAX_PRODUCT_WAKE_MODE")
@@ -83,6 +87,12 @@ class AgentConfig:
             "ORDAX_CONTROL_PLANE_PROTOCOL",
             settings.get("control_plane_protocol", "cloudflare-v3"),
         )
+        hordax_path_value = (
+            os.environ.get("ORDAX_HORDAX_PATH")
+            or settings.get("hordax_path")
+        )
+        if not hordax_path_value:
+            hordax_path_value = Path.home() / "Documents" / "github" / "HORDAX-game"
         if str(protocol).strip().lower() != "cloudflare-v3":
             raise ValueError(f"Unsupported control-plane protocol: {protocol}")
 
@@ -124,15 +134,7 @@ class AgentConfig:
                     settings.get("agent_repo_path", state_dir / "src"),
                 )
             ),
-            hordax_path=Path(
-                os.environ.get(
-                    "ORDAX_HORDAX_PATH",
-                    settings.get(
-                        "hordax_path",
-                        str(Path.home() / "Documents" / "github" / "HORDAX-game"),
-                    ),
-                )
-            ),
+            hordax_path=Path(hordax_path_value),
             bridge_path=Path(
                 os.environ.get(
                     "ORDAX_BRIDGE_PATH",
@@ -143,23 +145,9 @@ class AgentConfig:
                 )
             ),
             workspace_root=Path(
-                os.environ.get(
-                    "ORDAX_WORKSPACE_ROOT",
-                    settings.get(
-                        "workspace_root",
-                        str(
-                            Path(
-                                os.environ.get(
-                                    "ORDAX_HORDAX_PATH",
-                                    settings.get(
-                                        "hordax_path",
-                                        str(Path.home() / "Documents" / "github" / "HORDAX-game"),
-                                    ),
-                                )
-                            ).expanduser().resolve().parent
-                        ),
-                    ),
-                )
+                os.environ.get("ORDAX_WORKSPACE_ROOT")
+                or settings.get("workspace_root")
+                or str(Path(hordax_path_value).expanduser().resolve().parent)
             ).expanduser().resolve(),
         )
 

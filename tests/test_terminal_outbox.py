@@ -116,6 +116,27 @@ class TerminalOutboxTests(unittest.TestCase):
                     "no losing or orphaned temporary receipt may remain",
                 )
 
+    def test_concurrent_ack_during_pending_scan_is_benign(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            outbox = TerminalOutbox(Path(raw), "cloudflare-v3", DEVICE_ID)
+            expected = report()
+            path = outbox.persist(expected)
+            original = outbox._read_path
+
+            def acknowledged_before_read(candidate: Path):
+                candidate.unlink()
+                return original(candidate)
+
+            with mock.patch.object(
+                outbox, "_read_path", side_effect=acknowledged_before_read,
+            ):
+                self.assertEqual(outbox.pending(), [])
+
+            # Recovery and the completing job may both acknowledge the same
+            # server-accepted receipt.
+            outbox.acknowledge(path)
+            outbox.acknowledge(path)
+
     def test_malformed_entry_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state = Path(raw)

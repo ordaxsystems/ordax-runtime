@@ -49,7 +49,10 @@ from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS
 from ordax_dev_agent.product_mcp import PRODUCT_MCP_TOOLS
-from ordax_dev_agent.main import product_idle_claim_delay_seconds
+from ordax_dev_agent.main import (
+    _PRODUCT_HEARTBEAT_SECONDS,
+    product_idle_claim_delay_seconds,
+)
 
 # Offline proof executed by the *shipped private Python*, not the developer
 # checkout. Older installed Runtime builds polled an empty Product queue every
@@ -58,12 +61,25 @@ from ordax_dev_agent.main import product_idle_claim_delay_seconds
 # installations before publication, silent upgrade or repair.
 if product_idle_claim_delay_seconds(1, 0.25) != 0.25:
     raise SystemExit("Packaged Runtime changed interactive Product claim burst unexpectedly")
-for configured_ceiling in (0.25, 1.0, 10.0, 30.0):
-    if product_idle_claim_delay_seconds(40, configured_ceiling) < 30.0:
-        raise SystemExit("Packaged Runtime can exhaust shared Hyperdrive idle budget")
-if product_idle_claim_delay_seconds(40, 300.0) > 60.0:
-    raise SystemExit("Packaged Runtime unbounded idle Product claim delay")
-print("ORDAX_PACKAGED_PRODUCT_IDLE_BUDGET=PASS")
+for configured_ceiling in (0.25, 1.0, 10.0, 30.0, 300.0):
+    if product_idle_claim_delay_seconds(40, configured_ceiling) != 18.0:
+        raise SystemExit("Packaged Runtime idle Product fallback is not canonical")
+if product_idle_claim_delay_seconds(40, 12.0, verified_wake=True) != 300.0:
+    raise SystemExit("Packaged Runtime verified wake reconciliation is not canonical")
+if _PRODUCT_HEARTBEAT_SECONDS != 30.0:
+    raise SystemExit("Packaged Runtime heartbeat budget is not canonical")
+remaining = 86400.0
+misses = 1
+claims = 0
+while remaining > 0:
+    remaining -= product_idle_claim_delay_seconds(misses, 12.0)
+    misses += 1
+    claims += 1
+heartbeat_count = int(86400 / _PRODUCT_HEARTBEAT_SECONDS)
+upper_bound_queries = claims * 2 + heartbeat_count * 2
+if upper_bound_queries >= 16000:
+    raise SystemExit("Packaged Runtime can exhaust shared Hyperdrive idle budget")
+print(f"ORDAX_PACKAGED_PRODUCT_IDLE_BUDGET=PASS upper_bound_queries={upper_bound_queries}")
 
 # The actual shipped registry, transport-independent MCP catalog and Product
 # gateway must all agree about device actions. A cloud-only catalog does not

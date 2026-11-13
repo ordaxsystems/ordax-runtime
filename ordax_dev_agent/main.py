@@ -36,7 +36,7 @@ _VERBOSE_JOB_LIFECYCLE_EVENTS = frozenset(
 )
 
 _MAX_CONCURRENT_PRODUCT_JOBS = 4
-_PRODUCT_HEARTBEAT_SECONDS = 20.0
+_PRODUCT_HEARTBEAT_SECONDS = 30.0
 
 
 def _startup_log(config: AgentConfig | None, message: str) -> None:
@@ -83,15 +83,17 @@ def product_idle_claim_delay_seconds(
     if type(verified_wake) is not bool:
         raise ValueError("verified_wake must be a boolean")
     # A connected socket that has never delivered a real wake signal is not
-    # evidence of push availability. Keep the budgeted 30-60s claim fallback.
+    # evidence of push availability. Keep a responsive bounded SQL fallback.
     if verified_wake:
         return 300.0
-    # poll_seconds controls active connectivity, not the cost of repeatedly
-    # claiming an empty PostgreSQL queue. The previous 8–12s idle ceiling
-    # can exhaust Hyperdrive Free when several devices are enrolled.
-    # Retain a brief interactive burst, then settle to at least 30 seconds.
-    # Workers Paid is required for sustained usage beyond its service quota.
-    ceiling = min(60.0, max(30.0, configured_ceiling))
+    # The Runtime is an interactive control surface: an idle device must not
+    # wait 30–60 seconds before observing ordinary work. Retain the burst and
+    # cap the SQL fallback at 18 seconds. A 30-second presence heartbeat keeps
+    # the conservative per-device DB budget below 16k statements/day while
+    # leaving a full 30-second margin inside the 60-second readiness window.
+    # Once authenticated wake is verified, SQL polling becomes the five-minute
+    # reconciliation path above.
+    ceiling = 18.0
     return min(ceiling, 0.25 * (1.8 ** min(idle_misses - 1, 11)))
 
 
@@ -118,9 +120,9 @@ def product_idle_wait_seconds(
 ) -> float:
     """Wake for the earliest deadline, without turning heartbeat into a claim.
 
-    The Product wake listener is optional and disabled by default. The idle
-    claim budget can be 30–60 seconds (or 300 with advisory wake), while the
-    independently required presence heartbeat is due every 20 seconds.
+    The Product wake listener is the preferred low-latency path. The idle
+    SQL fallback is bounded to 18 seconds (or 300 after verified wake), while the
+    independently required presence heartbeat is due every 30 seconds.
     """
     if not all(math.isfinite(value) for value in (now, next_claim_due, next_heartbeat)):
         raise ValueError("Product idle deadlines must be finite")

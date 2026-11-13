@@ -376,20 +376,27 @@ class ProductWakeTests(unittest.TestCase):
         listener.close()
         self.assertEqual(socket.closed[:1], [(1008, "invalid_product_wake")])
 
-    def test_wake_mode_defaults_off_and_requires_explicit_owner_setting(self):
+    def test_wake_mode_defaults_on_with_explicit_local_and_environment_rollback(self):
         with TemporaryDirectory() as folder:
             local = Path(folder)
             settings_dir = local / "OrdaX" / "DevAgent"
             settings_dir.mkdir(parents=True)
             settings = settings_dir / "agent-settings.json"
-            with patch.dict("os.environ", {"LOCALAPPDATA": str(local)}, clear=True):
-                self.assertFalse(AgentConfig.from_env().product_wake_enabled)
-                settings.write_text(json.dumps({"product_wake_enabled": True}), encoding="utf-8")
+            with patch.dict(
+                "os.environ",
+                {
+                    "LOCALAPPDATA": str(local),
+                    "ORDAX_HORDAX_PATH": str(local / "HORDAX-game"),
+                },
+                clear=True,
+            ):
                 self.assertTrue(AgentConfig.from_env().product_wake_enabled)
-                with patch.dict("os.environ", {"ORDAX_PRODUCT_WAKE_MODE": "disabled"}):
-                    self.assertFalse(AgentConfig.from_env().product_wake_enabled)
+                settings.write_text(json.dumps({"product_wake_enabled": False}), encoding="utf-8")
+                self.assertFalse(AgentConfig.from_env().product_wake_enabled)
                 with patch.dict("os.environ", {"ORDAX_PRODUCT_WAKE_MODE": "enabled"}):
                     self.assertTrue(AgentConfig.from_env().product_wake_enabled)
+                with patch.dict("os.environ", {"ORDAX_PRODUCT_WAKE_MODE": "disabled"}):
+                    self.assertFalse(AgentConfig.from_env().product_wake_enabled)
                 with patch.dict("os.environ", {"ORDAX_PRODUCT_WAKE_MODE": "unexpected"}):
                     with self.assertRaises(ValueError):
                         AgentConfig.from_env()

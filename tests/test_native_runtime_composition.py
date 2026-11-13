@@ -45,6 +45,9 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
             hordax_path=self.root / "unused", bridge_path=self.root / "unused",
             projects={}, device_id=DEVICE,
             product_mcp_url="https://mcp.ordax.com.br",
+            # These composition tests inject a fake non-HTTPS control plane;
+            # Product wake has its own HTTPS/authenticated transport suite.
+            product_wake_enabled=False,
         )
         self.provider = Mock(return_value={"device_id": DEVICE, "device_token": "b" * 64})
 

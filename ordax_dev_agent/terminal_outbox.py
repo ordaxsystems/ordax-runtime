@@ -94,12 +94,19 @@ class TerminalOutbox:
     def _read_path(self, path: Path) -> dict[str, Any]:
         try:
             size = path.stat().st_size
+        except FileNotFoundError:
+            # A concurrent successful delivery may acknowledge this exact
+            # receipt after pending() enumerated it. Preserve that benign race
+            # so the scanner can skip it without marking transport unhealthy.
+            raise
         except OSError as error:
             raise RuntimeError(f"terminal outbox entry cannot be inspected: {path}") from error
         if size <= 0 or size > _MAX_OUTBOX_BYTES:
             raise RuntimeError(f"terminal outbox entry has invalid size: {path}")
         try:
             envelope = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
             raise RuntimeError(f"terminal outbox entry is invalid: {path}") from error
         if not isinstance(envelope, dict):
@@ -128,11 +135,23 @@ class TerminalOutbox:
         for path in sorted(self.root.iterdir()):
             if path.name.startswith(".") and path.name.endswith(".next"):
                 continue
-            if path.suffix != ".json" or not path.is_file():
+            if path.suffix != ".json":
                 raise RuntimeError(f"unexpected file in terminal outbox: {path}")
-            entries.append((path, self._read_path(path)))
+            if not path.is_file():
+                # Another delivery may have acknowledged an entry between the
+                # directory snapshot and this check.
+                if not path.exists():
+                    continue
+                raise RuntimeError(f"unexpected file in terminal outbox: {path}")
+            try:
+                report = self._read_path(path)
+            except FileNotFoundError:
+                continue
+            entries.append((path, report))
         return entries
 
     @staticmethod
     def acknowledge(path: Path) -> None:
-        path.unlink()
+        # Cloud acceptance is idempotent. Two delivery paths may both receive
+        # the same success receipt; the second local acknowledgement is benign.
+        path.unlink(missing_ok=True)
