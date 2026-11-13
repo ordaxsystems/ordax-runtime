@@ -36,8 +36,11 @@ class AgentConfig:
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
+        local_app_data_value = os.environ.get("LOCALAPPDATA")
         local_app_data = Path(
-            os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
+            local_app_data_value
+            if local_app_data_value
+            else Path.home() / "AppData" / "Local"
         )
         state_dir = Path(
             os.environ.get(
