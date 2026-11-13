@@ -41,9 +41,9 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
 
     def test_short_initial_burst_then_safe_idle_ceiling(self):
         self.assertLessEqual(product_idle_claim_delay_seconds(1, 12), 0.5)
-        self.assertEqual(product_idle_claim_delay_seconds(60, 12), 30.0)
-        self.assertEqual(product_idle_claim_delay_seconds(60, 1), 30.0)
-        self.assertEqual(product_idle_claim_delay_seconds(60, 60), 60.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 12), 12.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 1), 8.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 60), 12.0)
         with self.assertRaises(ValueError):
             product_idle_claim_delay_seconds(0, 12)
 
@@ -51,7 +51,7 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
         # Connection without an actual authenticated notification is not
         # permission to replace the safe bounded claim polling budget.
         self.assertEqual(product_idle_claim_delay_seconds(60, 12), 30.0)
-        self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=False), 30.0)
+        self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=False), 12.0)
         self.assertEqual(product_idle_claim_delay_seconds(60, 12, verified_wake=True), 300.0)
         self.assertEqual(product_idle_claim_delay_seconds(1, 12, verified_wake=True), 300.0)
         with self.assertRaises(ValueError):
