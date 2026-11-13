@@ -91,6 +91,24 @@ def product_idle_claim_delay_seconds(
     return min(ceiling, 0.25 * (1.8 ** min(idle_misses - 1, 11)))
 
 
+def _consume_product_wake(control: object, listener: object | None) -> bool:
+    """Reconcile the canonical SQL queue and device-attested session together.
+
+    The authenticated advisory signal carries no challenge, action, token or
+    grant. The existing session client keeps its concurrency/cadence guards;
+    every queued action is still independently authorized through PostgreSQL.
+    """
+    if listener is None or not listener.wake.is_set():
+        return False
+    listener.wake.clear()
+    try:
+        control.product_central_session.schedule_tick()
+    except Exception:
+        # Optional attestation must never prevent the existing SQL claim.
+        pass
+    return True
+
+
 def product_idle_wait_seconds(
     *, now: float, next_claim_due: float, next_heartbeat: float,
 ) -> float:
@@ -840,8 +858,7 @@ def run(
                     runtime.setdefault("startup_seconds", round(time.monotonic() - started_monotonic, 3))
                     next_heartbeat = now + 20.0
 
-                if wake_listener is not None and wake_listener.wake.is_set():
-                    wake_listener.wake.clear()
+                if _consume_product_wake(control, wake_listener):
                     next_claim_due = 0.0
 
                 if now < next_claim_due:

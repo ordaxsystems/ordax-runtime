@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent.main import _consume_product_wake
 from ordax_dev_agent.product_ingress import TrustedProductIngress
 from ordax_dev_agent.product_wake_signal import (
     ProductWakeListener, WAKE_MESSAGE, trusted_wake_url,
@@ -42,6 +43,33 @@ class MockSocket:
 
 
 class ProductWakeTests(unittest.TestCase):
+    def test_existing_wake_reconciles_session_and_queue_once(self):
+        signal = threading.Event()
+        checks = []
+        control = SimpleNamespace(product_central_session=SimpleNamespace(
+            schedule_tick=lambda: checks.append("attestation"),
+        ))
+        listener = SimpleNamespace(wake=signal)
+        self.assertFalse(_consume_product_wake(control, listener))
+        signal.set()
+        self.assertTrue(_consume_product_wake(control, listener))
+        self.assertEqual(checks, ["attestation"])
+        self.assertFalse(signal.is_set())
+        self.assertFalse(_consume_product_wake(control, listener))
+        self.assertEqual(checks, ["attestation"], "no duplicate session work")
+
+    def test_session_error_cannot_block_woken_sql_queue(self):
+        signal = threading.Event()
+        signal.set()
+        def unavailable():
+            raise RuntimeError("session attestation unavailable")
+        control = SimpleNamespace(product_central_session=SimpleNamespace(
+            schedule_tick=unavailable,
+        ))
+        self.assertTrue(_consume_product_wake(control, SimpleNamespace(wake=signal)))
+        self.assertFalse(signal.is_set(), "SQL claims still proceed normally")
+
+
     def test_only_tls_origin_can_produce_wss_endpoint(self):
         self.assertEqual(trusted_wake_url("https://mcp.ordax.com.br"),
                          "wss://mcp.ordax.com.br/v3/device/transport/wake")
