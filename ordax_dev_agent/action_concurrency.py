@@ -74,8 +74,12 @@ class ActionConcurrencyLease:
     thread_locks: list[threading.Lock]
     process_locks: list[ExecutionLock]
     slot_locks: list[ExecutionLock]
+    on_release: Callable[[], None] | None = None
+    released: bool = False
 
     def release(self) -> None:
+        if self.released:
+            return
         for lock in reversed(self.process_locks):
             lock.release()
         for lock in reversed(self.slot_locks):
@@ -85,6 +89,9 @@ class ActionConcurrencyLease:
         self.thread_locks.clear()
         self.process_locks.clear()
         self.slot_locks.clear()
+        self.released = True
+        if self.on_release is not None:
+            self.on_release()
 
 
 class ActionConcurrencyCoordinator:
@@ -102,6 +109,15 @@ class ActionConcurrencyCoordinator:
         self.max_slots = max_slots
         self._lock_guard = threading.Lock()
         self._thread_locks: dict[str, threading.Lock] = {}
+        self._active_count = 0
+
+    def _lease_released(self) -> None:
+        with self._lock_guard:
+            self._active_count = max(0, self._active_count - 1)
+
+    def is_busy(self) -> bool:
+        with self._lock_guard:
+            return self._active_count > 0
 
     def _thread_lock(self, key: str) -> threading.Lock:
         with self._lock_guard:
@@ -250,8 +266,15 @@ class ActionConcurrencyCoordinator:
             if acquired_slots is None:
                 return None
             slot_locks.extend(acquired_slots)
+            with self._lock_guard:
+                self._active_count += 1
             success = True
-            return ActionConcurrencyLease(thread_locks, process_locks, slot_locks)
+            return ActionConcurrencyLease(
+                thread_locks,
+                process_locks,
+                slot_locks,
+                on_release=self._lease_released,
+            )
         finally:
             if not success:
                 for lock in reversed(process_locks):
