@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 from .config import AgentConfig
 from .product_device_control_plane import ProductDeviceControlPlane
@@ -10,6 +10,7 @@ def build_control_plane(
     config: AgentConfig,
     *,
     device_credential_provider: Callable[[], dict[str, str] | None] | None = None,
+    project_binding_provider: Callable[[], dict[str, Any] | None] | None = None,
 ) -> ProductDeviceControlPlane:
     """Build the single canonical Product device transport.
 
@@ -20,5 +21,7 @@ def build_control_plane(
     if protocol != "cloudflare-v3":
         raise ValueError(f"Unsupported control-plane protocol: {protocol}")
     return ProductDeviceControlPlane(
-        config, device_credential_provider=device_credential_provider,
+        config,
+        device_credential_provider=device_credential_provider,
+        project_binding_provider=project_binding_provider,
     )
