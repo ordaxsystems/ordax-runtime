@@ -273,6 +273,25 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             self.assertEqual(plane._heartbeat_capabilities, ("a", "b"))
             plane.http.close()
 
+    def test_claim_is_independent_from_pending_report_recovery(self):
+        seen = []
+
+        def handler(request):
+            seen.append(request.url.path)
+            return httpx.Response(200, json={"ok": True, "job": None})
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            plane = self.plane(Path(raw_dir), handler)
+            with patch.object(
+                plane,
+                "recover_pending_reports",
+                side_effect=RuntimeError("test-only stale terminal report"),
+            ) as recovery:
+                self.assertIsNone(plane.claim_next_job())
+            recovery.assert_not_called()
+            self.assertEqual(seen, ["/v3/device/transport/claim"])
+            plane.http.close()
+
     def test_claim_starts_same_fenced_job_context_with_runtime_provenance(self):
         payload = {"request_id": "r", "action": "agent.status"}
         raw = json.dumps(payload, separators=(",", ":")).encode()
