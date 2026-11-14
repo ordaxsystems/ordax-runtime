@@ -16,6 +16,7 @@ Set-StrictMode -Version Latest
 $installRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs\OrdaX MCP')).TrimEnd('\')
 $launcher = Join-Path $installRoot 'ORDAX Runtime.exe'
 $lifecycle = Join-Path $installRoot 'ordax-mcp-lifecycle.ps1'
+$watchdog = Join-Path $installRoot 'ordax-agent-watchdog.ps1'
 $updatesRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'OrdaX\updates\mcp')).TrimEnd('\')
 $taskName = 'OrdaX MCP'
 $upgradeTaskName = 'OrdaX MCP Verified Upgrade'
@@ -28,6 +29,9 @@ function Assert-InstalledSource {
     }
     if (!(Test-Path -LiteralPath $launcher -PathType Leaf)) {
         throw 'Canonical OrdaX MCP launcher is missing'
+    }
+    if (!(Test-Path -LiteralPath $watchdog -PathType Leaf)) {
+        throw 'Canonical OrdaX MCP watchdog is missing'
     }
     $manifestPath = Join-Path $installRoot 'product-manifest.json'
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
@@ -99,6 +103,11 @@ switch ($Operation) {
     }
     'Launch' {
         Assert-InstalledSource
+        function Start-McpWatchdog {
+            param([System.Diagnostics.Process]$RuntimeProcess)
+            $arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -AgentPid {1} -RestartTaskName "{2}" -RequireProductDispatchReadiness -StartupGraceSeconds 60 -ProbeIntervalSeconds 10 -MaxConsecutiveFailures 6' -f $watchdog, $RuntimeProcess.Id, $taskName
+            Start-Process -FilePath $powershell -ArgumentList $arguments -WindowStyle Hidden | Out-Null
+        }
         # Never execute files while the trusted Inno installer is replacing them.
         if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
             Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
@@ -111,6 +120,7 @@ switch ($Operation) {
             try { [IO.Path]::GetFullPath($_.Path) -ieq $launcher } catch { $false }
         })
         if ($existingLaunchers.Count -gt 0) {
+            Start-McpWatchdog -RuntimeProcess $existingLaunchers[0]
             $existingLaunchers[0].WaitForExit()
             # Quiesce intentionally stopped it. Do not race the file replacement.
             if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
@@ -121,6 +131,7 @@ switch ($Operation) {
         # The launcher owns the singleton mutex and Python restart loop.
         # Waiting on its exact PID keeps the Task Scheduler action alive.
         $runtime = Start-Process -FilePath $launcher -WorkingDirectory $installRoot -PassThru -ErrorAction Stop
+        Start-McpWatchdog -RuntimeProcess $runtime
         $runtime.WaitForExit()
         if ($runtime.ExitCode -ne 0) {
             throw "OrdaX MCP supervisor ended with exit code $($runtime.ExitCode)"
