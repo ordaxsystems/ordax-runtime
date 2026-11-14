@@ -748,7 +748,7 @@ def _start_local_watchdog(
         str(health_port),
     ]
     if packaged_root:
-        command.extend(['-RestartTaskName', 'OrdaX MCP'])
+        command.extend(['-RestartTaskName', 'OrdaX MCP', '-RequireProductDispatchReadiness'])
     try:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         process = subprocess.Popen(
