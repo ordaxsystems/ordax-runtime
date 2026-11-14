@@ -18,7 +18,8 @@ from .config import AgentConfig
 from .device_credentials import resolve_token_path
 from .models import ActionResult, AgentJob
 from .product_central_session import ProductCentralSessionClient
-from .projects import canonical_github_repository_full_name, resolve_project_for_repository
+from .desktop_project_binding import resolve_desktop_project_workspace
+from .projects import Project, canonical_github_repository_full_name
 from .remote_protocol import (
     DeviceAuthorizationError,
     TransientDeliveryError,
@@ -87,15 +88,18 @@ def _canonical_project_binding_links(value: object) -> list[dict[str, str]]:
     normalized: list[dict[str, str]] = []
     for raw in value["links"]:
         if not isinstance(raw, dict) or set(raw) != {
-            "localProjectId", "cloudProjectId", "spaceId",
+            "localProjectId", "localProjectPath", "cloudProjectId", "spaceId",
         }:
             raise RuntimeError("Native Project link is invalid")
         local_id = raw.get("localProjectId")
+        local_path = raw.get("localProjectPath")
         cloud_id = raw.get("cloudProjectId")
         space_id = raw.get("spaceId")
         if (
             not isinstance(local_id, str)
             or _LOCAL_PROJECT_REF.fullmatch(local_id) is None
+            or not isinstance(local_path, str)
+            or not local_path.startswith("/")
             or not _canonical_uuid(cloud_id)
             or not _canonical_uuid(space_id)
             or local_id in local_seen
@@ -106,6 +110,7 @@ def _canonical_project_binding_links(value: object) -> list[dict[str, str]]:
         cloud_seen.add(cloud_id)
         normalized.append({
             "localProjectId": local_id,
+            "localProjectPath": local_path,
             "cloudProjectId": cloud_id,
             "spaceId": space_id,
         })
@@ -476,20 +481,29 @@ class ProductDeviceControlPlane:
             return 0
         links = _canonical_project_binding_links(snapshot)
         by_scope = {
-            (link["cloudProjectId"], link["spaceId"]): link["localProjectId"]
+            (link["cloudProjectId"], link["spaceId"]): link
             for link in links
         }
         confirmed = 0
         for intent in intents:
-            local_ref = by_scope.get((intent["project_id"], intent["space_id"]))
-            if local_ref is None:
+            link = by_scope.get((intent["project_id"], intent["space_id"]))
+            if link is None:
+                continue
+            try:
+                # A local Project Catalog id is not enough. Confirm only after
+                # the private File Space workspace exists and its Git origin
+                # independently matches the server-authoritative repository.
+                local_project = resolve_desktop_project_workspace(
+                    link, intent["repository_full_name"],
+                )
+            except (OSError, ValueError):
                 continue
             try:
                 result = self._post(
                     "project-binding-confirm",
                     {
                         "intent_id": intent["intent_id"],
-                        "local_project_ref": local_ref,
+                        "local_project_ref": local_project.slug,
                         "confirm": "bind_local_project",
                     },
                     timeout=10.0,
@@ -507,41 +521,67 @@ class ProductDeviceControlPlane:
                 confirmed += 1
         return confirmed
 
-    def _bind_project_scope(self, row: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    def _bind_project_scope(
+        self, row: dict[str, Any], payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], Project | None]:
         capability = str(row.get("capability") or row.get("operation") or "")
         raw_scope = payload.pop("_ordax_project_scope", None)
         if capability not in _PROJECT_SCOPE_ACTIONS:
             if raw_scope is not None:
                 raise RuntimeError("canonical Product project scope attestation is unexpected")
-            return payload
+            return payload, None
 
         project_id = str(row.get("project_id") or "")
-        try:
-            uuid.UUID(project_id)
-        except ValueError as error:
-            raise RuntimeError("canonical Product project id is missing or invalid") from error
-        if not isinstance(raw_scope, dict):
+        if not _canonical_uuid(project_id):
+            raise RuntimeError("canonical Product project id is missing or invalid")
+        if not isinstance(raw_scope, dict) or set(raw_scope) != {
+            "project_id", "repository_full_name",
+        }:
             raise RuntimeError("canonical Product project scope attestation is missing")
-
         scope_project_id = str(raw_scope.get("project_id") or "")
         repository_full_name = str(raw_scope.get("repository_full_name") or "")
-        if scope_project_id.lower() != project_id.lower():
-            raise RuntimeError("canonical Product project scope id mismatch")
+        if (
+            scope_project_id != project_id
+            or canonical_github_repository_full_name(repository_full_name)
+                != repository_full_name
+        ):
+            raise RuntimeError("canonical Product project scope is invalid")
 
-        local_project = resolve_project_for_repository(self.config, repository_full_name)
+        provider = self._project_binding_provider
+        if provider is None:
+            raise RuntimeError("OS Project Catalog authority is unavailable")
+        snapshot = provider()
+        if snapshot is None:
+            raise RuntimeError("OS Project Catalog authority is unavailable")
+        links = _canonical_project_binding_links(snapshot)
+        matches = [link for link in links if link["cloudProjectId"] == project_id]
+        if len(matches) != 1:
+            raise RuntimeError("OS Project Catalog binding is missing or ambiguous")
+        try:
+            local_project = resolve_desktop_project_workspace(
+                matches[0], repository_full_name,
+            )
+        except (OSError, ValueError) as error:
+            raise RuntimeError("OS Project workspace authority is invalid") from error
+
         rebound = dict(payload)
         rebound.pop("project", None)
         rebound["project"] = local_project.slug
-        return rebound
+        return rebound, local_project
 
     def _job_from_wire(self, row: dict[str, Any]) -> AgentJob:
-        payload = self._bind_project_scope(row, decode_job_payload(row))
+        payload, local_project = self._bind_project_scope(
+            row, decode_job_payload(row),
+        )
         action, action_payload, project = dispatch_job(row, payload)
+        if local_project is not None and project != local_project.slug:
+            raise RuntimeError("canonical Product local Project binding mismatch")
         job = AgentJob(
             id=str(row.get("job_id") or ""),
             action=action,
             payload=action_payload,
             project_slug=project,
+            project_root=str(local_project.root) if local_project is not None else None,
             lease_token=str(row.get("lease_id") or ""),
             effect_id=str(row.get("effect_id") or ""),
             attempt_id=str(row.get("attempt_id") or ""),
