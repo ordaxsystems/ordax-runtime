@@ -22,6 +22,7 @@ class _NativeHost(BaseHTTPRequestHandler):
         "persistence": "device",
         "links": [{
             "localProjectId": "project-3",
+            "localProjectPath": "/Documentos/Projeto",
             "cloudProjectId": PROJECT,
             "spaceId": SPACE,
         }],
@@ -77,6 +78,12 @@ class DesktopProjectBindingTests(unittest.TestCase):
                 {**original, "repository_full_name": "ordaxsystems/guess"},
                 {**original, "links": [{
                     **original["links"][0], "path": "C:/untrusted",
+                }]},
+                {**original, "links": [{
+                    **original["links"][0], "localProjectPath": "../escape",
+                }]},
+                {**original, "links": [{
+                    **original["links"][0], "localProjectPath": "/Documentos//Projeto",
                 }]},
                 {**original, "links": [{
                     **original["links"][0], "localProjectId": "repo-slug",
