@@ -127,7 +127,7 @@ class DesktopProjectBindingTests(unittest.TestCase):
                 "ORDAX_RUNTIME_HOST_PROFILE": "ordax-desktop",
                 "ORDAX_DESKTOP_USER_DATA": str(user_data),
             }
-            with patch.dict(os.environ, env, clear=True):
+            with patch.dict(os.environ, env, clear=False):
                 project = resolve_desktop_project_workspace(
                     link, "ordaxsystems/ordax-runtime",
                 )
