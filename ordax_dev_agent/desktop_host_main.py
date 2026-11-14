@@ -15,6 +15,7 @@ from pathlib import Path
 from uuid import UUID
 
 from .config import AgentConfig
+from .desktop_project_binding import read_desktop_project_links
 from .main import run
 from .product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS
 
@@ -73,8 +74,13 @@ def main() -> int:
                      computer_access_source="native-unbound")
     # This is intentionally NOT native_main: its Linux/USB identity and
     # connector policy belong to the OS's native-disk/USB Supervisor.
-    return run(scoped, computer_adapter={},
-               allowed_action_names=DESKTOP_OS_ACTIONS, status_port=0)
+    return run(
+        scoped,
+        computer_adapter={},
+        allowed_action_names=DESKTOP_OS_ACTIONS,
+        status_port=0,
+        project_binding_provider=read_desktop_project_links,
+    )
 
 
 if __name__ == "__main__":
