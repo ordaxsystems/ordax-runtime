@@ -12,6 +12,7 @@ from ordax_dev_agent.main import (
     _end_job_lease,
     _mark_transport_delivery_error,
     _mark_transport_healthy,
+    _product_heartbeat_tick,
     _recover_terminal_reports_tick,
     _record_job_lease_error,
     _record_job_lease_renewal,
@@ -28,6 +29,66 @@ class TransportHealthRecoveryTests(unittest.TestCase):
         self.assertEqual(5.0, _transport_retry_delay(1))  # first poll after recovery
         with self.assertRaises(ValueError):
             _transport_retry_delay(0)
+
+    def test_heartbeat_failure_is_presence_diagnostic_not_claim_backoff(self) -> None:
+        class Control:
+            def heartbeat(self, *_args, **_kwargs):
+                raise RuntimeError("private heartbeat backend detail")
+
+        runtime = {"transport_state": "connected", "state": "busy"}
+        with patch("ordax_dev_agent.main.time.time", return_value=321.0):
+            healthy = _product_heartbeat_tick(
+                Control(),
+                ["computer.file_stat"],
+                runtime,
+                agent_version="1.31.0",
+                metadata={},
+                status="busy",
+            )
+        self.assertFalse(healthy)
+        self.assertEqual("connected", runtime["transport_state"])
+        self.assertEqual("busy", runtime["state"])
+        self.assertEqual(
+            {"code": "RuntimeError", "at": 321.0},
+            runtime["last_heartbeat_error"],
+        )
+        self.assertNotIn("private heartbeat backend detail", str(runtime["last_heartbeat_error"]))
+
+    def test_successful_heartbeat_clears_presence_diagnostic(self) -> None:
+        class Control:
+            def heartbeat(self, *_args, **_kwargs):
+                return None
+
+        runtime = {"last_heartbeat_error": {"code": "RuntimeError", "at": 1.0}}
+        with patch("ordax_dev_agent.main.time.time", return_value=654.0):
+            healthy = _product_heartbeat_tick(
+                Control(),
+                [],
+                runtime,
+                agent_version="1.31.0",
+                metadata={},
+                status="online",
+            )
+        self.assertTrue(healthy)
+        self.assertNotIn("last_heartbeat_error", runtime)
+        self.assertEqual(654.0, runtime["last_heartbeat_at"])
+
+    def test_heartbeat_device_authorization_failure_remains_terminal(self) -> None:
+        from ordax_dev_agent.remote_protocol import DeviceAuthorizationError
+
+        class Control:
+            def heartbeat(self, *_args, **_kwargs):
+                raise DeviceAuthorizationError("invalid_device_token")
+
+        with self.assertRaises(DeviceAuthorizationError):
+            _product_heartbeat_tick(
+                Control(),
+                [],
+                {},
+                agent_version="1.31.0",
+                metadata={},
+                status="online",
+            )
 
     def test_terminal_report_recovery_failure_never_becomes_global_claim_backoff(self) -> None:
         runtime = {
