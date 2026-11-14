@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import json
 import math
 import os
@@ -519,7 +520,15 @@ def _execute_claimed_job(
                     job.action_payload(),
                 )
             else:
-                result = registry.execute(job.action, job.action_payload())
+                project_scope = (
+                    registry.verified_project_execution_scope(
+                        job.project_slug, job.project_root,
+                    )
+                    if job.project_root is not None and job.project_slug is not None
+                    else nullcontext()
+                )
+                with project_scope:
+                    result = registry.execute(job.action, job.action_payload())
         except Exception as error:
             result = ActionResult(
                 False, f"{type(error).__name__}: {error}",

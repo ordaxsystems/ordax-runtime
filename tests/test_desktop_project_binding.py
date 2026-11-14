@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import patch
 
-from ordax_dev_agent.desktop_project_binding import read_desktop_project_links
+from ordax_dev_agent.desktop_project_binding import (
+    read_desktop_project_links,
+    resolve_desktop_project_workspace,
+)
 
 
 TOKEN = "d" * 64
@@ -22,6 +28,7 @@ class _NativeHost(BaseHTTPRequestHandler):
         "persistence": "device",
         "links": [{
             "localProjectId": "project-3",
+            "localProjectPath": "/Documentos/Projeto",
             "cloudProjectId": PROJECT,
             "spaceId": SPACE,
         }],
@@ -79,6 +86,12 @@ class DesktopProjectBindingTests(unittest.TestCase):
                     **original["links"][0], "path": "C:/untrusted",
                 }]},
                 {**original, "links": [{
+                    **original["links"][0], "localProjectPath": "../escape",
+                }]},
+                {**original, "links": [{
+                    **original["links"][0], "localProjectPath": "/Documentos//Projeto",
+                }]},
+                {**original, "links": [{
                     **original["links"][0], "localProjectId": "repo-slug",
                 }]},
                 {**original, "links": [
@@ -91,6 +104,39 @@ class DesktopProjectBindingTests(unittest.TestCase):
                     self.invoke()
         finally:
             _NativeHost.payload = original
+
+    def test_workspace_resolver_stays_in_private_file_space_and_verifies_git_origin(self):
+        with tempfile.TemporaryDirectory() as raw:
+            user_data = Path(raw)
+            workspace = user_data / "Files" / "Documentos" / "Projeto"
+            workspace.mkdir(parents=True)
+            subprocess.run(["git", "init", str(workspace)], check=True,
+                           capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-C", str(workspace), "remote", "add", "origin",
+                 "https://github.com/ordaxsystems/ordax-runtime.git"],
+                check=True, capture_output=True, text=True,
+            )
+            link = {
+                "localProjectId": "project-3",
+                "localProjectPath": "/Documentos/Projeto",
+                "cloudProjectId": PROJECT,
+                "spaceId": SPACE,
+            }
+            env = {
+                "ORDAX_RUNTIME_HOST_PROFILE": "ordax-desktop",
+                "ORDAX_DESKTOP_USER_DATA": str(user_data),
+            }
+            with patch.dict(os.environ, env, clear=False):
+                project = resolve_desktop_project_workspace(
+                    link, "ordaxsystems/ordax-runtime",
+                )
+                self.assertEqual(project.slug, "project-3")
+                self.assertEqual(project.root, workspace.resolve())
+                with self.assertRaisesRegex(ValueError, "GitHub origin"):
+                    resolve_desktop_project_workspace(
+                        link, "ordaxsystems/other-repository",
+                    )
 
     def test_only_exact_per_launch_loopback_bridge_is_accepted(self):
         for url in (

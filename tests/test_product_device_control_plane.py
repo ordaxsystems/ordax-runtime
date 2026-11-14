@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import tempfile
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -13,6 +14,7 @@ from unittest.mock import patch
 import httpx
 
 from ordax_dev_agent import __version__ as DEVICE_AGENT_VERSION
+from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.models import ActionResult
 from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
@@ -46,20 +48,32 @@ class Central:
 class ProductDeviceControlPlaneTests(unittest.TestCase):
     def test_remote_terminal_and_process_actions_require_canonical_project_attestation(self):
         project_id = "33333333-3333-4333-8333-333333333333"
+        space_id = "44444444-4444-4444-8444-444444444444"
         repo = "ordaxsystems/demo-project"
         plane = ProductDeviceControlPlane.__new__(ProductDeviceControlPlane)
-        plane.config = object()
+        plane._project_binding_provider = lambda: {
+            "schema": "ordax.desktop-project-links/1",
+            "host": "ordax-desktop",
+            "persistence": "device",
+            "links": [{
+                "localProjectId": "project-7",
+                "localProjectPath": "/Documentos/demo-project",
+                "cloudProjectId": project_id,
+                "spaceId": space_id,
+            }],
+        }
+        local = SimpleNamespace(slug="project-7", root=Path("C:/verified/project-7"))
         actions = (
             "terminal.exec", "process.start", "process.status",
             "process.list", "process.logs", "process.write_stdin", "process.stop",
         )
         with patch(
-            "ordax_dev_agent.product_device_control_plane.resolve_project_for_repository",
-            return_value=SimpleNamespace(slug="real-local-project"),
+            "ordax_dev_agent.product_device_control_plane.resolve_desktop_project_workspace",
+            return_value=local,
         ) as resolve:
             for action in actions:
                 with self.subTest(action=action):
-                    bound = plane._bind_project_scope(
+                    bound, project = plane._bind_project_scope(
                         {"capability": action, "project_id": project_id},
                         {
                             "project": "untrusted-model-slug",
@@ -70,19 +84,23 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
                             },
                         },
                     )
-                    self.assertEqual(bound["project"], "real-local-project")
+                    self.assertEqual(bound["project"], "project-7")
                     self.assertEqual(bound["argv"], ["python", "--version"])
                     self.assertNotIn("_ordax_project_scope", bound)
+                    self.assertIs(project, local)
             self.assertEqual(resolve.call_count, len(actions))
-            resolve.assert_called_with(plane.config, repo)
+            resolve.assert_called_with(
+                plane._project_binding_provider()["links"][0], repo,
+            )
 
         for action in actions:
             with self.subTest(action=action):
                 with self.assertRaisesRegex(RuntimeError, "attestation is missing"):
                     plane._bind_project_scope(
-                        {"capability": action, "project_id": project_id}, {"project": "untrusted"},
+                        {"capability": action, "project_id": project_id},
+                        {"project": "untrusted"},
                     )
-                with self.assertRaisesRegex(RuntimeError, "id mismatch"):
+                with self.assertRaisesRegex(RuntimeError, "scope is invalid"):
                     plane._bind_project_scope(
                         {"capability": action, "project_id": project_id},
                         {"_ordax_project_scope": {
@@ -98,6 +116,23 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
                     "project_id": project_id, "repository_full_name": repo,
                 }},
             )
+
+    def test_verified_project_execution_scope_is_thread_local_and_not_persisted(self):
+        registry = ActionRegistry.__new__(ActionRegistry)
+        registry._project_execution_local = threading.local()
+        registry.projects = {}
+        registry.config = SimpleNamespace(default_project=None)
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            with registry.verified_project_execution_scope("project-7", root):
+                project = registry._project({"project": "project-7"})
+                self.assertEqual(project.slug, "project-7")
+                self.assertEqual(project.root, root.resolve())
+                self.assertEqual(registry.projects, {})
+                with self.assertRaisesRegex(ValueError, "does not match"):
+                    registry._project({"project": "project-8"})
+            with self.assertRaisesRegex(ValueError, "project not registered"):
+                registry._project({"project": "project-7"})
 
     def plane(self, root: Path, handler):
         token(root)
