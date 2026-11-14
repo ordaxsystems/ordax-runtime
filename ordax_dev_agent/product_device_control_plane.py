@@ -557,7 +557,11 @@ class ProductDeviceControlPlane:
         return job
 
     def claim_next_job(self) -> AgentJob | None:
-        self.recover_pending_reports()
+        # Pending terminal reports are reconciled by the lifecycle recovery
+        # loop, not on the claim critical path. A transient/stale recovery
+        # failure must never become a device-wide queue for independent work.
+        # The persisted report remains fail-closed and is never replayed as a
+        # new effect; recovery can retry it separately.
         payload = self._post("claim", {
             "agent_instance_id": self.agent_instance_id,
             "boot_id": self.boot_id,
