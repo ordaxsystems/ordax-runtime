@@ -103,9 +103,14 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         self.assertEqual(args[0].agent_name, "OrdaX Desktop")
         self.assertEqual(args[0].workspace_root, self.root / "Files")
         self.assertEqual(args[0].computer_access_source, "native-unbound")
-        self.assertEqual(kwargs, {"computer_adapter": {},
-                                  "allowed_action_names": frozenset({"agent.status", "computer.access_status", "ordax.surface.open", "ordax.surface.status"}),
-                                  "status_port": 0})
+        self.assertEqual(kwargs["computer_adapter"], {})
+        self.assertEqual(kwargs["allowed_action_names"], frozenset({
+            "agent.status", "computer.access_status",
+            "ordax.surface.open", "ordax.surface.status",
+        }))
+        self.assertEqual(kwargs["status_port"], 0)
+        from ordax_dev_agent.desktop_project_binding import read_desktop_project_links
+        self.assertIs(kwargs["project_binding_provider"], read_desktop_project_links)
 
     def test_desktop_policy_cannot_inherit_windows_agent_grants_or_environment(self):
         settings = self.state / "agent-settings.json"
