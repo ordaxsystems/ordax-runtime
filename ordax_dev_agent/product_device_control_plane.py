@@ -18,7 +18,7 @@ from .config import AgentConfig
 from .device_credentials import resolve_token_path
 from .models import ActionResult, AgentJob
 from .product_central_session import ProductCentralSessionClient
-from .projects import resolve_project_for_repository
+from .projects import canonical_github_repository_full_name, resolve_project_for_repository
 from .remote_protocol import (
     DeviceAuthorizationError,
     TransientDeliveryError,
@@ -49,6 +49,151 @@ _PROJECT_SCOPE_ACTIONS = frozenset({
     "process.stop",
 })
 
+_PROJECT_BINDING_CONFIRM_ERRORS = frozenset({
+    "project_device_binding_confirmation_invalid",
+    "project_device_binding_intent_not_active",
+    "project_device_binding_authority_changed",
+    "github_repository_changed",
+    "project_device_binding_conflict",
+})
+_LOCAL_PROJECT_REF = re.compile(r"^project-[1-9][0-9]*$")
+
+
+def _canonical_uuid(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(uuid.UUID(value)) == value
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def _canonical_project_binding_links(value: object) -> list[dict[str, str]]:
+    """Validate only the OS-owned explicit Project Catalog link projection."""
+    if not isinstance(value, dict) or set(value) != {
+        "schema", "host", "persistence", "links",
+    }:
+        raise RuntimeError("Native Project link snapshot is invalid")
+    if (
+        value.get("schema") != "ordax.desktop-project-links/1"
+        or value.get("host") != "ordax-desktop"
+        or value.get("persistence") != "device"
+        or not isinstance(value.get("links"), list)
+        or len(value["links"]) > 32
+    ):
+        raise RuntimeError("Native Project link snapshot is invalid")
+    local_seen: set[str] = set()
+    cloud_seen: set[str] = set()
+    normalized: list[dict[str, str]] = []
+    for raw in value["links"]:
+        if not isinstance(raw, dict) or set(raw) != {
+            "localProjectId", "cloudProjectId", "spaceId",
+        }:
+            raise RuntimeError("Native Project link is invalid")
+        local_id = raw.get("localProjectId")
+        cloud_id = raw.get("cloudProjectId")
+        space_id = raw.get("spaceId")
+        if (
+            not isinstance(local_id, str)
+            or _LOCAL_PROJECT_REF.fullmatch(local_id) is None
+            or not _canonical_uuid(cloud_id)
+            or not _canonical_uuid(space_id)
+            or local_id in local_seen
+            or cloud_id in cloud_seen
+        ):
+            raise RuntimeError("Native Project link is invalid")
+        local_seen.add(local_id)
+        cloud_seen.add(cloud_id)
+        normalized.append({
+            "localProjectId": local_id,
+            "cloudProjectId": cloud_id,
+            "spaceId": space_id,
+        })
+    return normalized
+
+
+def _canonical_project_binding_intents(
+    value: object, device_id: str,
+) -> list[dict[str, str]]:
+    if not isinstance(value, dict) or set(value) != {
+        "ok", "schema", "device_id", "intents",
+    }:
+        raise RuntimeError("Project binding intents response is invalid")
+    intents = value.get("intents")
+    if (
+        value.get("ok") is not True
+        or value.get("schema") != "ordax.device-project-binding-intents/1"
+        or value.get("device_id") != device_id
+        or not isinstance(intents, list)
+        or len(intents) > 16
+    ):
+        raise RuntimeError("Project binding intents response is invalid")
+    seen: set[str] = set()
+    normalized: list[dict[str, str]] = []
+    for raw in intents:
+        if not isinstance(raw, dict) or set(raw) != {
+            "intent_id", "project_id", "space_id",
+            "repository_full_name", "expires_at",
+        }:
+            raise RuntimeError("Project binding intent is invalid")
+        intent_id = raw.get("intent_id")
+        project_id = raw.get("project_id")
+        space_id = raw.get("space_id")
+        repository = raw.get("repository_full_name")
+        expires_at = raw.get("expires_at")
+        canonical_repository = (
+            canonical_github_repository_full_name(repository)
+            if isinstance(repository, str) else None
+        )
+        if (
+            not _canonical_uuid(intent_id)
+            or intent_id in seen
+            or not _canonical_uuid(project_id)
+            or not _canonical_uuid(space_id)
+            or canonical_repository != repository
+            or not isinstance(expires_at, str)
+            or not expires_at
+        ):
+            raise RuntimeError("Project binding intent is invalid")
+        seen.add(intent_id)
+        normalized.append({
+            "intent_id": intent_id,
+            "project_id": project_id,
+            "space_id": space_id,
+            "repository_full_name": repository,
+            "expires_at": expires_at,
+        })
+    return normalized
+
+
+def _validate_project_binding_confirmation(
+    value: object, *, intent: dict[str, str], device_id: str,
+) -> bool:
+    if not isinstance(value, dict):
+        raise RuntimeError("Project binding confirmation response is invalid")
+    if value.get("ok") is False:
+        if set(value) == {"ok", "error"} and value.get("error") in _PROJECT_BINDING_CONFIRM_ERRORS:
+            return False
+        raise RuntimeError("Project binding confirmation response is invalid")
+    if set(value) != {
+        "ok", "schema", "intent_id", "binding_id", "project_id",
+        "space_id", "device_id", "state", "next_state",
+    }:
+        raise RuntimeError("Project binding confirmation response is invalid")
+    if (
+        value.get("ok") is not True
+        or value.get("schema") != "ordax.device-project-binding-confirmed/1"
+        or value.get("intent_id") != intent["intent_id"]
+        or not _canonical_uuid(value.get("binding_id"))
+        or value.get("project_id") != intent["project_id"]
+        or value.get("space_id") != intent["space_id"]
+        or value.get("device_id") != device_id
+        or value.get("state") != "active"
+        or value.get("next_state") != "ready_without_grants"
+    ):
+        raise RuntimeError("Project binding confirmation response is invalid")
+    return True
+
 
 class ProductDeviceControlPlane:
     """Canonical device transport over the Product MCP PostgreSQL authority.
@@ -66,12 +211,19 @@ class ProductDeviceControlPlane:
         config: AgentConfig,
         *,
         device_credential_provider: Callable[[], dict[str, str] | None] | None = None,
+        project_binding_provider: Callable[[], dict[str, Any] | None] | None = None,
     ):
         if not config.product_mcp_url:
             raise RuntimeError("ORDAX_PRODUCT_MCP_URL is required for the canonical device transport.")
         if not config.device_id:
             raise RuntimeError("ORDAX_DEVICE_ID is required for the canonical device transport.")
         self.config = config
+        if project_binding_provider is not None and not callable(project_binding_provider):
+            raise TypeError("Project binding provider must be callable")
+        self._project_binding_provider = project_binding_provider
+        # A timed-out confirmation is never replayed blindly. The next
+        # reconciliation must first re-read the authoritative pending intents.
+        self._uncertain_project_binding_confirmations: set[str] = set()
         self.device_id = str(config.device_id)
         try:
             uuid.UUID(self.device_id)
@@ -204,7 +356,15 @@ class ProductDeviceControlPlane:
         self._assert_native_credential_current()
         return self.device_token
 
-    def _post(self, operation: str, body: dict[str, Any], *, timeout: float = 20.0) -> dict[str, Any]:
+    def _post(
+        self,
+        operation: str,
+        body: dict[str, Any],
+        *,
+        timeout: float = 20.0,
+        allow_not_found: bool = False,
+        accepted_errors: frozenset[str] = frozenset(),
+    ) -> dict[str, Any] | None:
         self._assert_native_credential_current()
         try:
             response = self._trusted_ingress.request(
@@ -227,10 +387,20 @@ class ProductDeviceControlPlane:
             raise RuntimeError("canonical Product transport returned invalid JSON") from error
         if not isinstance(payload, dict):
             raise RuntimeError("canonical Product transport returned a non-object response")
+        error_code = str(payload.get("error") or "")
+        if (
+            response.status_code == 404
+            and allow_not_found
+            and payload.get("ok") is False
+            and error_code == "not_found"
+        ):
+            return None
         if response.status_code >= 400:
+            if payload.get("ok") is False and error_code in accepted_errors:
+                return payload
             raise RuntimeError(
                 f"canonical Product transport HTTP {response.status_code}: "
-                f"{str(payload.get('error') or 'request_rejected')[:160]}"
+                f"{error_code or 'request_rejected'}"
             )
         if payload.get("ok") is not True:
             raise RuntimeError(
@@ -268,6 +438,74 @@ class ProductDeviceControlPlane:
             except Exception:
                 # Session attestation never weakens device transport health.
                 pass
+
+    def reconcile_project_bindings(self) -> int:
+        """Confirm only OS Project Catalog links for current Platform intents.
+
+        The repository carried by the intent is validated but is deliberately
+        not used to derive a local identity. The only accepted local ref is an
+        explicit durable OS link matching both cloud Project and Space.
+        """
+        provider = self._project_binding_provider
+        if provider is None:
+            return 0
+        raw = self._post(
+            "project-binding-intents",
+            {},
+            timeout=10.0,
+            allow_not_found=True,
+            accepted_errors=frozenset({"device_not_active"}),
+        )
+        if raw is None:
+            return 0
+        if raw.get("ok") is False:
+            if raw == {"ok": False, "error": "device_not_active"}:
+                return 0
+            raise RuntimeError("Project binding intents response is invalid")
+        intents = _canonical_project_binding_intents(raw, self.device_id)
+        pending_ids = {item["intent_id"] for item in intents}
+        # Absence after an uncertain response is authoritative evidence that
+        # the previous request consumed/invalidated the intent. Presence proves
+        # it is safe to retry only after this fresh read.
+        self._uncertain_project_binding_confirmations.intersection_update(pending_ids)
+        if not intents:
+            return 0
+
+        snapshot = provider()
+        if snapshot is None:
+            return 0
+        links = _canonical_project_binding_links(snapshot)
+        by_scope = {
+            (link["cloudProjectId"], link["spaceId"]): link["localProjectId"]
+            for link in links
+        }
+        confirmed = 0
+        for intent in intents:
+            local_ref = by_scope.get((intent["project_id"], intent["space_id"]))
+            if local_ref is None:
+                continue
+            try:
+                result = self._post(
+                    "project-binding-confirm",
+                    {
+                        "intent_id": intent["intent_id"],
+                        "local_project_ref": local_ref,
+                        "confirm": "bind_local_project",
+                    },
+                    timeout=10.0,
+                    accepted_errors=_PROJECT_BINDING_CONFIRM_ERRORS,
+                )
+            except TransientDeliveryError:
+                self._uncertain_project_binding_confirmations.add(intent["intent_id"])
+                continue
+            if result is None:
+                raise RuntimeError("Project binding confirmation response is invalid")
+            self._uncertain_project_binding_confirmations.discard(intent["intent_id"])
+            if _validate_project_binding_confirmation(
+                result, intent=intent, device_id=self.device_id,
+            ):
+                confirmed += 1
+        return confirmed
 
     def _bind_project_scope(self, row: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         capability = str(row.get("capability") or row.get("operation") or "")

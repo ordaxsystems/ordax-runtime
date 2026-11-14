@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from collections.abc import Mapping
 
 from . import __version__
@@ -840,6 +840,7 @@ def run(
     status_port: int = 8765,
     orchestrator_installation_provider: Callable | None = None,
     native_access_enabled: Callable[[], bool] | None = None,
+    project_binding_provider: Callable[[], dict[str, Any] | None] | None = None,
 ) -> int:
     """Run the canonical lifecycle with host-owned configuration and identity.
 
@@ -1037,9 +1038,12 @@ def run(
     from .models import ActionResult
     _startup_log(config, "CONTROL_PLANE_IMPORT_OK")
     try:
-        control = build_control_plane(
-            config, device_credential_provider=device_credential_provider,
-        )
+        control_kwargs = {
+            "device_credential_provider": device_credential_provider,
+        }
+        if project_binding_provider is not None:
+            control_kwargs["project_binding_provider"] = project_binding_provider
+        control = build_control_plane(config, **control_kwargs)
     except Exception:
         status_server.shutdown()
         raise
@@ -1196,6 +1200,25 @@ def run(
                         status="busy" if has_active_jobs else "online",
                     )
                     _record_product_heartbeat(runtime)
+                    reconcile_project_bindings = getattr(
+                        control, "reconcile_project_bindings", None,
+                    )
+                    if callable(reconcile_project_bindings):
+                        try:
+                            confirmed = int(reconcile_project_bindings())
+                            if confirmed:
+                                runtime["project_bindings_confirmed"] = int(
+                                    runtime.get("project_bindings_confirmed", 0)
+                                ) + confirmed
+                            runtime.pop("last_project_binding_error", None)
+                        except DeviceAuthorizationError:
+                            raise
+                        except Exception as error:
+                            # Project onboarding is fail-closed and independent
+                            # from action dispatch. Never let a missing/stale
+                            # Native Project Catalog bridge become a new global
+                            # queue or make unrelated device actions unavailable.
+                            runtime["last_project_binding_error"] = type(error).__name__
                     with runtime_lock:
                         if runtime.get("active_jobs") and runtime.get("state") == "ready":
                             runtime["state"] = "busy"

@@ -190,6 +190,8 @@ jobs:
           tests.test_product_action_recovery
           tests.test_product_central_session
           tests.test_product_device_control_plane
+          tests.test_product_project_binding_reconcile
+          tests.test_desktop_project_binding
           tests.test_remote_protocol
           tests.test_terminal_outbox
           tests.test_runtime_operational_status
