@@ -1038,11 +1038,12 @@ def run(
     from .models import ActionResult
     _startup_log(config, "CONTROL_PLANE_IMPORT_OK")
     try:
-        control = build_control_plane(
-            config,
-            device_credential_provider=device_credential_provider,
-            project_binding_provider=project_binding_provider,
-        )
+        control_kwargs = {
+            "device_credential_provider": device_credential_provider,
+        }
+        if project_binding_provider is not None:
+            control_kwargs["project_binding_provider"] = project_binding_provider
+        control = build_control_plane(config, **control_kwargs)
     except Exception:
         status_server.shutdown()
         raise
