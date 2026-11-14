@@ -183,6 +183,44 @@ def _mark_transport_unavailable(runtime: dict, error: Exception) -> None:
     }
 
 
+def _recover_terminal_reports_tick(
+    recover_pending_reports: Callable[[], int] | None,
+    runtime: dict,
+) -> bool:
+    """Retry durable terminal receipts without blocking unrelated claims.
+
+    A persisted receipt remains the sole recovery authority for an uncertain
+    effect. Generic recovery failure is diagnostic only for this tick: it must
+    not mark the whole Product transport unhealthy or stop independent queued
+    work from being claimed. Device credential rejection remains terminal.
+    """
+    if not callable(recover_pending_reports):
+        return True
+    from .remote_protocol import DeviceAuthorizationError
+
+    try:
+        recovered = int(recover_pending_reports())
+    except DeviceAuthorizationError:
+        raise
+    except Exception as error:
+        runtime["last_terminal_recovery_error"] = {
+            "code": type(error).__name__,
+            "at": time.time(),
+        }
+        return False
+
+    runtime.pop("last_terminal_recovery_error", None)
+    if recovered:
+        runtime["terminal_reports_recovered"] = (
+            int(runtime.get("terminal_reports_recovered", 0)) + recovered
+        )
+        runtime["last_result"] = {
+            "ok": True,
+            "summary": f"recovered {recovered} pending terminal report(s)",
+        }
+    return True
+
+
 def _mark_identity_loaded(runtime: dict) -> None:
     """An enrolled token is not a remote heartbeat receipt."""
     runtime["paired"] = False
@@ -1179,16 +1217,14 @@ def run(
                     callable(recover_pending_reports)
                     and now >= next_terminal_recovery
                 ):
-                    next_terminal_recovery = now + 1.0
-                    recovered = int(recover_pending_reports())
-                    if recovered:
-                        runtime["terminal_reports_recovered"] = (
-                            int(runtime.get("terminal_reports_recovered", 0)) + recovered
-                        )
-                        runtime["last_result"] = {
-                            "ok": True,
-                            "summary": f"recovered {recovered} pending terminal report(s)",
-                        }
+                    recovery_healthy = _recover_terminal_reports_tick(
+                        recover_pending_reports, runtime,
+                    )
+                    # Retry stale/uncertain receipts separately. A failed
+                    # recovery never becomes a global claim backoff.
+                    next_terminal_recovery = now + (
+                        1.0 if recovery_healthy else 5.0
+                    )
 
                 if now >= next_heartbeat:
                     with runtime_lock:
