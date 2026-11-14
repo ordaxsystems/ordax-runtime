@@ -55,7 +55,19 @@ incluem `action_registry_unavailable`, `remote_control_not_configured`,
 Esses campos não provam que um MCP remoto está online, que uma ação específica
 tem grant, nem que um comando foi executado ou auditado. A interface deve
 mostrar separadamente presença local, saúde do endpoint MCP e prontidão do
-dispatcher Runtime. O agregador `StudioApi.product_status` conserva o campo
+dispatcher Runtime. `/readiness` publica também `capabilities_digest`,
+calculado sobre a mesma lista canônica de ações enviada no heartbeat Product.
+Esse digest descreve implementação disponível; não é grant, autorização de
+cliente nem prova do binding persistente conversa -> Device mantido na Platform.
+
+No perfil hospedado pelo OrdaX Desktop, a porta efêmera desse mesmo servidor é
+entregue ao Supervisor por um arquivo de handoff de lançamento sob o diretório
+canônico `product-runtime`. O handoff contém somente schema, nonce aleatório do
+lançamento, PID e porta; não contém token, grant, challenge ou identidade de
+cliente e é removido quando o Runtime termina. O Supervisor deve validar o nonce
+antes de consultar o loopback e nunca inferir autorização a partir dessa leitura.
+
+O agregador `StudioApi.product_status` conserva o campo
 legado `device_agent.ok` para compatibilidade e acrescenta
 `device_agent.product_dispatch_ready` e `device_agent.product_readiness_code`.
 

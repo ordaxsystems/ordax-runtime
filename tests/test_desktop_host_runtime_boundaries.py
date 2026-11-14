@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
-from ordax_dev_agent.desktop_host_main import DESKTOP_OS_ACTIONS, main
+from ordax_dev_agent.desktop_host_main import DESKTOP_OS_ACTIONS, _desktop_status_handoff, main
 from ordax_dev_agent.product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS
 
 
@@ -80,6 +80,7 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         variables = {
             "ORDAX_DESKTOP_USER_DATA": str(self.root),
             "ORDAX_AGENT_STATE_DIR": str(self.state),
+            "ORDAX_RUNTIME_STATUS_NONCE": "c" * 64,
         }
         if env:
             variables.update(env)
@@ -109,8 +110,32 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
             "ordax.surface.open", "ordax.surface.status",
         }))
         self.assertEqual(kwargs["status_port"], 0)
+        self.assertTrue(callable(kwargs["status_server_ready"]))
         from ordax_dev_agent.desktop_project_binding import read_desktop_project_links
         self.assertIs(kwargs["project_binding_provider"], read_desktop_project_links)
+
+    def test_status_handoff_is_launch_bound_and_contains_no_authority(self):
+        import json
+        nonce = "d" * 64
+        with patch.dict(os.environ, {"ORDAX_RUNTIME_STATUS_NONCE": nonce}, clear=False):
+            path, publish = _desktop_status_handoff(self.state)
+            publish(43210)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["schema"], "ordax.desktop-runtime-status-handoff/1")
+        self.assertEqual(payload["launch_nonce"], nonce)
+        self.assertEqual(payload["runtime_pid"], os.getpid())
+        self.assertEqual(payload["port"], 43210)
+        self.assertEqual(set(payload), {"schema", "launch_nonce", "runtime_pid", "port"})
+        with patch.dict(os.environ, {"ORDAX_RUNTIME_STATUS_NONCE": nonce}, clear=False):
+            _, duplicate = _desktop_status_handoff(self.state)
+            with self.assertRaisesRegex(RuntimeError, "already exists"):
+                duplicate(43211)
+        path.unlink()
+
+    def test_desktop_runtime_rejects_missing_or_invalid_status_launch_nonce(self):
+        for nonce in ("", "short", "A" * 64):
+            with self.subTest(nonce=nonce), self.assertRaisesRegex(RuntimeError, "status nonce"):
+                self.run_host(env={"ORDAX_RUNTIME_STATUS_NONCE": nonce})
 
     def test_desktop_policy_cannot_inherit_windows_agent_grants_or_environment(self):
         settings = self.state / "agent-settings.json"
