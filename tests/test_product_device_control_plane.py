@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import tempfile
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -13,6 +14,7 @@ from unittest.mock import patch
 import httpx
 
 from ordax_dev_agent import __version__ as DEVICE_AGENT_VERSION
+from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.models import ActionResult
 from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
@@ -114,6 +116,23 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
                     "project_id": project_id, "repository_full_name": repo,
                 }},
             )
+
+    def test_verified_project_execution_scope_is_thread_local_and_not_persisted(self):
+        registry = ActionRegistry.__new__(ActionRegistry)
+        registry._project_execution_local = threading.local()
+        registry.projects = {}
+        registry.config = SimpleNamespace(default_project=None)
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            with registry.verified_project_execution_scope("project-7", root):
+                project = registry._project({"project": "project-7"})
+                self.assertEqual(project.slug, "project-7")
+                self.assertEqual(project.root, root.resolve())
+                self.assertEqual(registry.projects, {})
+                with self.assertRaisesRegex(ValueError, "does not match"):
+                    registry._project({"project": "project-8"})
+            with self.assertRaisesRegex(ValueError, "project not registered"):
+                registry._project({"project": "project-7"})
 
     def plane(self, root: Path, handler):
         token(root)
