@@ -183,6 +183,45 @@ def _mark_transport_unavailable(runtime: dict, error: Exception) -> None:
     }
 
 
+def _product_heartbeat_tick(
+    control: object,
+    host_actions: list[str],
+    runtime: dict,
+    *,
+    agent_version: str,
+    metadata: dict[str, object],
+    status: str,
+) -> bool:
+    """Publish presence without making heartbeat an authorization/claim gate.
+
+    PostgreSQL claim/start remain the authority for each action. A transient
+    heartbeat failure can make presence/readiness stale, but must not create a
+    device-wide queue while already-authorized claims are still available.
+    Device credential rejection remains terminal and is propagated unchanged.
+    """
+    from .remote_protocol import DeviceAuthorizationError
+
+    try:
+        control.heartbeat(
+            host_actions,
+            agent_version=agent_version,
+            metadata=metadata,
+            status=status,
+        )
+    except DeviceAuthorizationError:
+        raise
+    except Exception as error:
+        runtime["last_heartbeat_error"] = {
+            "code": type(error).__name__,
+            "at": time.time(),
+        }
+        return False
+
+    _record_product_heartbeat(runtime)
+    runtime.pop("last_heartbeat_error", None)
+    return True
+
+
 def _recover_terminal_reports_tick(
     recover_pending_reports: Callable[[], int] | None,
     runtime: dict,
@@ -1229,37 +1268,45 @@ def run(
                 if now >= next_heartbeat:
                     with runtime_lock:
                         has_active_jobs = bool(runtime.get("active_jobs"))
-                    control.heartbeat(
+                    heartbeat_healthy = _product_heartbeat_tick(
+                        control,
                         host_actions,
+                        runtime,
                         agent_version=__version__,
                         metadata=_agent_metadata(config),
                         status="busy" if has_active_jobs else "online",
                     )
-                    _record_product_heartbeat(runtime)
-                    reconcile_project_bindings = getattr(
-                        control, "reconcile_project_bindings", None,
-                    )
-                    if callable(reconcile_project_bindings):
-                        try:
-                            confirmed = int(reconcile_project_bindings())
-                            if confirmed:
-                                runtime["project_bindings_confirmed"] = int(
-                                    runtime.get("project_bindings_confirmed", 0)
-                                ) + confirmed
-                            runtime.pop("last_project_binding_error", None)
-                        except DeviceAuthorizationError:
-                            raise
-                        except Exception as error:
-                            # Project onboarding is fail-closed and independent
-                            # from action dispatch. Never let a missing/stale
-                            # Native Project Catalog bridge become a new global
-                            # queue or make unrelated device actions unavailable.
-                            runtime["last_project_binding_error"] = type(error).__name__
+                    # Project binding reconciliation uses the same remote
+                    # transport. Skip it on a failed presence tick so its
+                    # bounded request cannot compound a transient heartbeat
+                    # outage; claims remain independently authorized below.
+                    if heartbeat_healthy:
+                        reconcile_project_bindings = getattr(
+                            control, "reconcile_project_bindings", None,
+                        )
+                        if callable(reconcile_project_bindings):
+                            try:
+                                confirmed = int(reconcile_project_bindings())
+                                if confirmed:
+                                    runtime["project_bindings_confirmed"] = int(
+                                        runtime.get("project_bindings_confirmed", 0)
+                                    ) + confirmed
+                                runtime.pop("last_project_binding_error", None)
+                            except DeviceAuthorizationError:
+                                raise
+                            except Exception as error:
+                                # Project onboarding is fail-closed and independent
+                                # from action dispatch. Never let a missing/stale
+                                # Native Project Catalog bridge become a new global
+                                # queue or make unrelated device actions unavailable.
+                                runtime["last_project_binding_error"] = type(error).__name__
                     with runtime_lock:
                         if runtime.get("active_jobs") and runtime.get("state") == "ready":
                             runtime["state"] = "busy"
                     runtime.setdefault("startup_seconds", round(time.monotonic() - started_monotonic, 3))
-                    next_heartbeat = now + _PRODUCT_HEARTBEAT_SECONDS
+                    next_heartbeat = now + (
+                        _PRODUCT_HEARTBEAT_SECONDS if heartbeat_healthy else 5.0
+                    )
 
                 if _consume_product_wake(control, wake_listener):
                     next_claim_due = 0.0
