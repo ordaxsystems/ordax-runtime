@@ -25,6 +25,46 @@ from .product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS
 # Additional OS actions require verified Native adapters; no unscoped Windows
 # filesystem, terminal, GUI control or host adapter is delegated.
 DESKTOP_OS_ACTIONS = frozenset({"agent.status", "computer.access_status"}) | NATIVE_SURFACE_DEVICE_ACTIONS
+_STATUS_HANDOFF_SCHEMA = "ordax.desktop-runtime-status-handoff/1"
+
+
+def _desktop_status_handoff(canonical: Path) -> tuple[Path, object]:
+    """Bind the ephemeral loopback status port to this exact Supervisor launch."""
+    nonce = os.environ.get("ORDAX_RUNTIME_STATUS_NONCE", "")
+    if re.fullmatch(r"[0-9a-f]{64}", nonce) is None:
+        raise RuntimeError("OrdaX Desktop Runtime requires a launch-bound status nonce")
+    handoff = canonical / f"runtime-status-{nonce}.json"
+
+    def publish(port: int) -> None:
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise RuntimeError("OrdaX Desktop Runtime status port is invalid")
+        try:
+            handoff.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise RuntimeError("OrdaX Desktop Runtime status handoff already exists")
+        temporary = canonical / f".runtime-status-{nonce}.{os.getpid()}.tmp"
+        payload = {
+            "schema": _STATUS_HANDOFF_SCHEMA,
+            "launch_nonce": nonce,
+            "runtime_pid": os.getpid(),
+            "port": port,
+        }
+        try:
+            with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+                json.dump(payload, handle, separators=(",", ":"))
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, handoff)
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    return handoff, publish
 
 
 def main() -> int:
@@ -74,13 +114,21 @@ def main() -> int:
                      computer_access_source="native-unbound")
     # This is intentionally NOT native_main: its Linux/USB identity and
     # connector policy belong to the OS's native-disk/USB Supervisor.
-    return run(
-        scoped,
-        computer_adapter={},
-        allowed_action_names=DESKTOP_OS_ACTIONS,
-        status_port=0,
-        project_binding_provider=read_desktop_project_links,
-    )
+    handoff_path, publish_status = _desktop_status_handoff(canonical)
+    try:
+        return run(
+            scoped,
+            computer_adapter={},
+            allowed_action_names=DESKTOP_OS_ACTIONS,
+            status_port=0,
+            project_binding_provider=read_desktop_project_links,
+            status_server_ready=publish_status,
+        )
+    finally:
+        try:
+            handoff_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

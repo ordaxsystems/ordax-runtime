@@ -330,6 +330,13 @@ def start_status_server(
                 state = runtime.get("state")
                 transport = runtime.get("transport_state")
                 code = runtime.get("product_readiness_code")
+                digest = runtime.get("capabilities_digest")
+                if not (
+                    isinstance(digest, str)
+                    and len(digest) == 64
+                    and all(char in "0123456789abcdef" for char in digest)
+                ):
+                    digest = None
                 ready = (
                     runtime.get("product_dispatch_ready") is True
                     and code == "ready"
@@ -343,6 +350,7 @@ def start_status_server(
                         "transport_state": transport,
                         "product_dispatch_ready": ready,
                         "product_readiness_code": code,
+                        "capabilities_digest": digest,
                     },
                     "client_authorization": "not_verified_by_local_readiness",
                 }

@@ -18,6 +18,7 @@ from . import __version__
 from .config import AgentConfig
 from .product_central_session import ProductCentralSessionStatus
 from .status_server import start_status_server
+from ordax_connector.capabilities import capability_digest
 
 
 _VERBOSE_JOB_LIFECYCLE_EVENTS = frozenset(
@@ -918,6 +919,7 @@ def run(
     orchestrator_installation_provider: Callable | None = None,
     native_access_enabled: Callable[[], bool] | None = None,
     project_binding_provider: Callable[[], dict[str, Any] | None] | None = None,
+    status_server_ready: Callable[[int], None] | None = None,
 ) -> int:
     """Run the canonical lifecycle with host-owned configuration and identity.
 
@@ -928,6 +930,8 @@ def run(
     """
     if type(status_port) is not int or not 0 <= status_port <= 65535:
         raise ValueError("Runtime status port is invalid")
+    if status_server_ready is not None and not callable(status_server_ready):
+        raise TypeError("Runtime status server callback must be callable")
     if orchestrator_installation_provider is not None and not callable(orchestrator_installation_provider):
         raise TypeError("Orchestrator installation provider must be host-owned and callable")
     if device_credential_provider is not None:
@@ -974,6 +978,9 @@ def run(
     registry = None
     remote_control_configured = False
     control = None
+    # Exact action names used by Product heartbeat. This is implementation
+    # metadata only; it never represents grants or a client/device binding.
+    host_actions: list[str] = []
 
     def runtime_status_snapshot() -> dict:
         with runtime_lock:
@@ -1023,10 +1030,16 @@ def run(
     def readiness_payload() -> dict:
         # Same Runtime for Windows and OS Native. No costly agent_status(),
         # local file scans, remote calls, secrets, or additional supervisor.
+        # capabilities_digest is calculated from the SAME canonical action
+        # names sent by Product heartbeat. It describes implementation only;
+        # authorization and persistent conversation binding remain Platform-owned.
         return {
             "runtime": {
                 "state": runtime["state"],
                 "transport_state": runtime["transport_state"],
+                "capabilities_digest": (
+                    capability_digest(host_actions) if host_actions else None
+                ),
                 **product_dispatch_readiness(
                     runtime,
                     action_registry_ready=registry is not None,
@@ -1050,6 +1063,23 @@ def run(
         readiness_provider=readiness_payload,
         capabilities_provider=lambda: registry.names if registry is not None else [],
     )
+    status_server_closed = False
+
+    def close_status_server() -> None:
+        nonlocal status_server_closed
+        if status_server_closed:
+            return
+        status_server_closed = True
+        status_server.shutdown()
+        status_server.server_close()
+
+    try:
+        if status_server_ready is not None:
+            status_server_ready(status_server.server_port)
+    except Exception:
+        close_status_server()
+        status_server.server_close()
+        raise
     _startup_log(config, f"STATUS_SERVER_READY port={status_server.server_port}")
 
     from .actions import ActionRegistry
@@ -1108,7 +1138,7 @@ def run(
                 stop_requested.wait(2.0)
         finally:
             runtime["state"] = "stopping"
-            status_server.shutdown()
+            close_status_server()
         return 0
 
     from .control_plane import build_control_plane
@@ -1122,7 +1152,7 @@ def run(
             control_kwargs["project_binding_provider"] = project_binding_provider
         control = build_control_plane(config, **control_kwargs)
     except Exception:
-        status_server.shutdown()
+        close_status_server()
         raise
     _startup_log(config, "CONTROL_PLANE_READY")
 
@@ -1134,7 +1164,7 @@ def run(
         while not stop:
             if not _native_local_access_granted(native_access_enabled):
                 runtime["state"] = "local-disabled"
-                status_server.shutdown()
+                close_status_server()
                 return 0
             try:
                 runtime["state"] = "recovering-terminal-reports"
@@ -1148,7 +1178,7 @@ def run(
                 break
             except DeviceAuthorizationError:
                 runtime["state"] = "credential-recovery-required"
-                status_server.shutdown()
+                close_status_server()
                 return 43
             except Exception as error:
                 runtime["state"] = "terminal-recovery-error"
@@ -1162,7 +1192,7 @@ def run(
     while not stop:
         if not _native_local_access_granted(native_access_enabled):
             runtime["state"] = "local-disabled"
-            status_server.shutdown()
+            close_status_server()
             return 0
         try:
             control.pair_if_needed(
@@ -1182,7 +1212,7 @@ def run(
                 continue
 
     if stop:
-        status_server.shutdown()
+        close_status_server()
         return 0
 
     next_heartbeat = 0.0
@@ -1443,7 +1473,7 @@ def run(
             )
         except Exception:
             pass
-        status_server.shutdown()
+        close_status_server()
 
     return 0
 
