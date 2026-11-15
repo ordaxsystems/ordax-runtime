@@ -45,7 +45,11 @@ def run():
                     session = launch_verified_orchestrator(installation=installation, authorize=lambda: authorization)
                 status = session.read('status')
                 projects = session.read('projects_list')
-                if status['autonomousExecution'] is not False or status['coordinatorAvailable'] is not False or projects['projects'] != []:
+                if (status['autonomousExecution'] is not False
+                        or status.get('analysisAvailable') is not True
+                        or status.get('analysisMode') != 'app_owned'
+                        or 'coordinatorAvailable' in status
+                        or projects['projects'] != []):
                     raise RuntimeError('managed_fixture_state_mismatch')
                 original_pid, original_session = session.pid, session._client._session_id
                 old_key = bytes(session._client._key)
