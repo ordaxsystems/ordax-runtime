@@ -12,7 +12,7 @@ from typing import Any
 
 
 MAX_PRODUCT_HTTP_RESPONSE_BYTES = 4 * 1024 * 1024
-_PRODUCT_ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,127}\\Z")
+_PRODUCT_ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,127}")
 
 
 def canonical_product_error_code(value: object) -> str | None:
