@@ -115,6 +115,97 @@ class ProductCentralSessionClientTests(unittest.TestCase):
                     "No redirected HTTP request may carry the Product Device token",
                 )
 
+    def test_central_response_stream_stops_at_sixteen_kib(self):
+        seen_chunks: list[int] = []
+
+        class OversizedStream(httpx.SyncByteStream):
+            def __iter__(self):
+                for index in range(6):
+                    seen_chunks.append(index)
+                    yield b"x" * 4096
+
+        client = self.make_client(
+            ["a" * 64],
+            lambda _request: httpx.Response(
+                200, stream=OversizedStream(),
+                headers={"content-type": "application/json"},
+            ),
+        )
+        result = client.tick(now=10.0)
+        self.assertEqual(
+            result.last_error, "product_central_session_response_oversized"
+        )
+        self.assertFalse(result.confirmed)
+        self.assertEqual(seen_chunks, [0, 1, 2, 3, 4],
+                         "stop streaming before consuming the sixth chunk")
+
+    def test_central_rejects_duplicate_keys_and_nonfinite_poll_json(self):
+        for response in (
+            b'{"ok":true,"pending":false,"pending":true}',
+            b'{"ok":true,"pending":false,"extra":NaN}',
+            b'{"ok":true,"pending":false,"extra":Infinity}',
+            b'{"ok":true,"pending":false,"extra":1e99999}',
+        ):
+            requests = []
+            def handler(request):
+                requests.append(request.method)
+                return httpx.Response(200, content=response)
+            client = self.make_client(["a" * 64], handler)
+            with self.subTest(response=response):
+                result = client.tick(now=10.0)
+                self.assertFalse(result.confirmed)
+                self.assertEqual(
+                    result.last_error, "product_central_session_response_invalid"
+                )
+                self.assertEqual(requests, ["GET"],
+                                 "never confirm an ambiguous challenge")
+
+    def test_central_rejects_ambiguous_confirmation_receipt(self):
+        calls = []
+        def handler(request):
+            calls.append(request.method)
+            if request.method == "GET":
+                return httpx.Response(200, json={
+                    "ok": True, "pending": True, "challenge_id": CHALLENGE_ID,
+                })
+            return httpx.Response(200, content=(
+                b'{"ok":true,"status":"bound","device_id":"'
+                + DEVICE_ID.encode("ascii")
+                + b'","device_id":"44444444-4444-4444-8444-444444444444"}'
+            ))
+        client = self.make_client(["a" * 64], handler)
+        result = client.tick(now=10.0)
+        self.assertEqual(calls, ["GET", "POST"])
+        self.assertFalse(result.confirmed)
+        self.assertEqual(
+            result.last_error, "product_central_session_response_invalid"
+        )
+
+    def test_central_reenrollment_status_precedes_unreadable_body(self):
+        class UnreadableStream(httpx.SyncByteStream):
+            def __iter__(self):
+                raise AssertionError("401 body should not be consumed")
+                yield b"never"
+
+        for denied_method in ("GET", "POST"):
+            calls = []
+            def handler(request):
+                calls.append(request.method)
+                if denied_method == "GET" or request.method == "POST":
+                    return httpx.Response(401, stream=UnreadableStream())
+                return httpx.Response(200, json={
+                    "ok": True, "pending": True, "challenge_id": CHALLENGE_ID,
+                })
+            client = self.make_client(["a" * 64], handler)
+            with self.subTest(method=denied_method):
+                status = client.tick(now=10.0)
+                self.assertFalse(status.confirmed)
+                self.assertEqual(
+                    status.last_error, "product_identity_reenrollment_required"
+                )
+                self.assertEqual(calls, ["GET"] if denied_method == "GET"
+                                 else ["GET", "POST"])
+
     def test_pending_challenge_is_confirmed_for_exact_device(self):
         token = ["a" * 64]
         calls: list[tuple[str, dict | None]] = []
