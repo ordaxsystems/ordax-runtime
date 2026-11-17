@@ -44,6 +44,32 @@ class Central:
 
 
 class ProductDeviceControlPlaneTests(unittest.TestCase):
+    def test_close_releases_both_owned_clients_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            token(root)
+            plane = ProductDeviceControlPlane(config(root))
+            session_http = plane.product_central_session._http
+            self.assertFalse(plane.http.is_closed)
+            self.assertFalse(session_http.is_closed)
+            plane.close()
+            self.assertTrue(plane.http.is_closed)
+            self.assertTrue(session_http.is_closed)
+            plane.close()
+
+    def test_rejected_session_configuration_closes_created_transport(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            token(root)
+            with (
+                patch("ordax_dev_agent.product_device_control_plane.httpx.Client") as http_factory,
+                patch("ordax_dev_agent.product_device_control_plane.ProductCentralSessionClient",
+                      side_effect=ValueError("invalid Product origin")),
+            ):
+                with self.assertRaisesRegex(ValueError, "invalid Product origin"):
+                    ProductDeviceControlPlane(config(root))
+                http_factory.return_value.close.assert_called_once_with()
+
     def test_remote_terminal_and_process_actions_require_canonical_project_attestation(self):
         project_id = "33333333-3333-4333-8333-333333333333"
         repo = "ordaxsystems/demo-project"
