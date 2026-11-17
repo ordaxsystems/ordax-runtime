@@ -228,7 +228,7 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
             "--run", "--distribution-profile", "stable-mvp",
             "--product-mode", "usb", "--system-root", str(self.root),
             "--state-root", str(self.state), "--workspace", str(self.workspace),
-            "--status-port", "0",
+            "--status-port", "8766",
         ]
         store = Mock()
         store.read_enrolled_credential.return_value = {
