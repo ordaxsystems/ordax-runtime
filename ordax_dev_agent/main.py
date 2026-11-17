@@ -19,6 +19,7 @@ from . import __version__
 from .config import AgentConfig
 from .product_central_session import ProductCentralSessionStatus
 from .status_server import start_status_server
+from ordax_connector.capabilities import capability_digest
 
 
 _VERBOSE_JOB_LIFECYCLE_EVENTS = frozenset(
@@ -182,6 +183,83 @@ def _mark_transport_unavailable(runtime: dict, error: Exception) -> None:
         "summary": str(error),
         "at": time.time(),
     }
+
+
+def _product_heartbeat_tick(
+    control: object,
+    host_actions: list[str],
+    runtime: dict,
+    *,
+    agent_version: str,
+    metadata: dict[str, object],
+    status: str,
+) -> bool:
+    """Publish presence without making heartbeat an authorization/claim gate.
+
+    PostgreSQL claim/start remain the authority for each action. A transient
+    heartbeat failure can make presence/readiness stale, but must not create a
+    device-wide queue while already-authorized claims are still available.
+    Device credential rejection remains terminal and is propagated unchanged.
+    """
+    from .remote_protocol import DeviceAuthorizationError
+
+    try:
+        control.heartbeat(
+            host_actions,
+            agent_version=agent_version,
+            metadata=metadata,
+            status=status,
+        )
+    except DeviceAuthorizationError:
+        raise
+    except Exception as error:
+        runtime["last_heartbeat_error"] = {
+            "code": type(error).__name__,
+            "at": time.time(),
+        }
+        return False
+
+    _record_product_heartbeat(runtime)
+    runtime.pop("last_heartbeat_error", None)
+    return True
+
+
+def _recover_terminal_reports_tick(
+    recover_pending_reports: Callable[[], int] | None,
+    runtime: dict,
+) -> bool:
+    """Retry durable terminal receipts without blocking unrelated claims.
+
+    A persisted receipt remains the sole recovery authority for an uncertain
+    effect. Generic recovery failure is diagnostic only for this tick: it must
+    not mark the whole Product transport unhealthy or stop independent queued
+    work from being claimed. Device credential rejection remains terminal.
+    """
+    if not callable(recover_pending_reports):
+        return True
+    from .remote_protocol import DeviceAuthorizationError
+
+    try:
+        recovered = int(recover_pending_reports())
+    except DeviceAuthorizationError:
+        raise
+    except Exception as error:
+        runtime["last_terminal_recovery_error"] = {
+            "code": type(error).__name__,
+            "at": time.time(),
+        }
+        return False
+
+    runtime.pop("last_terminal_recovery_error", None)
+    if recovered:
+        runtime["terminal_reports_recovered"] = (
+            int(runtime.get("terminal_reports_recovered", 0)) + recovered
+        )
+        runtime["last_result"] = {
+            "ok": True,
+            "summary": f"recovered {recovered} pending terminal report(s)",
+        }
+    return True
 
 
 def _mark_identity_loaded(runtime: dict) -> None:
@@ -680,7 +758,7 @@ def _start_local_watchdog(
         str(health_port),
     ]
     if packaged_root:
-        command.extend(['-RestartTaskName', 'OrdaX MCP'])
+        command.extend(['-RestartTaskName', 'OrdaX MCP', '-RequireProductDispatchReadiness'])
     try:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         process = subprocess.Popen(
@@ -850,6 +928,7 @@ def run(
     orchestrator_installation_provider: Callable | None = None,
     native_access_enabled: Callable[[], bool] | None = None,
     project_binding_provider: Callable[[], dict[str, Any] | None] | None = None,
+    status_server_ready: Callable[[int], None] | None = None,
 ) -> int:
     """Run the canonical lifecycle with host-owned configuration and identity.
 
@@ -860,6 +939,8 @@ def run(
     """
     if type(status_port) is not int or not 0 <= status_port <= 65535:
         raise ValueError("Runtime status port is invalid")
+    if status_server_ready is not None and not callable(status_server_ready):
+        raise TypeError("Runtime status server callback must be callable")
     if orchestrator_installation_provider is not None and not callable(orchestrator_installation_provider):
         raise TypeError("Orchestrator installation provider must be host-owned and callable")
     if device_credential_provider is not None:
@@ -906,6 +987,9 @@ def run(
     registry = None
     remote_control_configured = False
     control = None
+    # Exact action names used by Product heartbeat. This is implementation
+    # metadata only; it never represents grants or a client/device binding.
+    host_actions: list[str] = []
 
     def runtime_status_snapshot() -> dict:
         with runtime_lock:
@@ -955,10 +1039,16 @@ def run(
     def readiness_payload() -> dict:
         # Same Runtime for Windows and OS Native. No costly agent_status(),
         # local file scans, remote calls, secrets, or additional supervisor.
+        # capabilities_digest is calculated from the SAME canonical action
+        # names sent by Product heartbeat. It describes implementation only;
+        # authorization and persistent conversation binding remain Platform-owned.
         return {
             "runtime": {
                 "state": runtime["state"],
                 "transport_state": runtime["transport_state"],
+                "capabilities_digest": (
+                    capability_digest(host_actions) if host_actions else None
+                ),
                 **product_dispatch_readiness(
                     runtime,
                     action_registry_ready=registry is not None,
@@ -982,17 +1072,42 @@ def run(
         readiness_provider=readiness_payload,
         capabilities_provider=lambda: registry.names if registry is not None else [],
     )
+    status_server_closed = False
+
+    def close_status_server() -> None:
+        nonlocal status_server_closed
+        if status_server_closed:
+            return
+        status_server_closed = True
+        try:
+            status_server.shutdown()
+        finally:
+            status_server.server_close()
+
+    try:
+        if status_server_ready is not None:
+            status_server_ready(status_server.server_port)
+    except Exception:
+        close_status_server()
+        raise
     _startup_log(config, f"STATUS_SERVER_READY port={status_server.server_port}")
 
-    from .actions import ActionRegistry
-    _startup_log(config, "ACTION_REGISTRY_IMPORT_OK")
-    registry = ActionRegistry(config, computer_adapter=computer_adapter,
-                              allowed_action_names=allowed_action_names)
-    # Host composition owns App installation provenance; never advertise a
-    # capability that this host cannot connect to an installed App.
-    host_actions = sorted({*registry.names, *({"forge.app_read"}
-        if callable(orchestrator_installation_provider) else set())})
-    _startup_log(config, f"ACTION_REGISTRY_READY actions={len(registry.names)}")
+    try:
+        from .actions import ActionRegistry
+        _startup_log(config, "ACTION_REGISTRY_IMPORT_OK")
+        registry = ActionRegistry(config, computer_adapter=computer_adapter,
+                                  allowed_action_names=allowed_action_names)
+        # Host composition owns App installation provenance; never advertise a
+        # capability that this host cannot connect to an installed App.
+        host_actions = sorted({*registry.names, *({"forge.app_read"}
+            if callable(orchestrator_installation_provider) else set())})
+        _startup_log(config, f"ACTION_REGISTRY_READY actions={len(registry.names)}")
+    except Exception:
+        # The loopback status listener starts before the action registry.
+        # Failed native adapter/registry setup must not leak that listener
+        # into the next OS-owned Runtime restart.
+        close_status_server()
+        raise
 
     watchdog_process = _start_local_watchdog(
         config,
@@ -1040,7 +1155,7 @@ def run(
                 stop_requested.wait(2.0)
         finally:
             runtime["state"] = "stopping"
-            status_server.shutdown()
+            close_status_server()
         return 0
 
     from .control_plane import build_control_plane
@@ -1054,9 +1169,19 @@ def run(
             control_kwargs["project_binding_provider"] = project_binding_provider
         control = build_control_plane(config, **control_kwargs)
     except Exception:
-        status_server.shutdown()
+        close_status_server()
         raise
     _startup_log(config, "CONTROL_PLANE_READY")
+
+    def close_remote_control() -> None:
+        # Normal exit and early Native revocation share the same cleanup.
+        # Never leave the status listener open if transport teardown fails.
+        try:
+            close = getattr(control, "close", None)
+            if callable(close):
+                close()
+        finally:
+            close_status_server()
 
 
     recover_pending_reports = getattr(control, "recover_pending_reports", None)
@@ -1066,7 +1191,7 @@ def run(
         while not stop:
             if not _native_local_access_granted(native_access_enabled):
                 runtime["state"] = "local-disabled"
-                status_server.shutdown()
+                close_remote_control()
                 return 0
             try:
                 runtime["state"] = "recovering-terminal-reports"
@@ -1080,7 +1205,7 @@ def run(
                 break
             except DeviceAuthorizationError:
                 runtime["state"] = "credential-recovery-required"
-                status_server.shutdown()
+                close_remote_control()
                 return 43
             except Exception as error:
                 runtime["state"] = "terminal-recovery-error"
@@ -1094,7 +1219,7 @@ def run(
     while not stop:
         if not _native_local_access_granted(native_access_enabled):
             runtime["state"] = "local-disabled"
-            status_server.shutdown()
+            close_remote_control()
             return 0
         try:
             control.pair_if_needed(
@@ -1114,7 +1239,7 @@ def run(
                 continue
 
     if stop:
-        status_server.shutdown()
+        close_remote_control()
         return 0
 
     next_heartbeat = 0.0
@@ -1188,51 +1313,57 @@ def run(
                     callable(recover_pending_reports)
                     and now >= next_terminal_recovery
                 ):
-                    next_terminal_recovery = now + 1.0
-                    recovered = int(recover_pending_reports())
-                    if recovered:
-                        runtime["terminal_reports_recovered"] = (
-                            int(runtime.get("terminal_reports_recovered", 0)) + recovered
-                        )
-                        runtime["last_result"] = {
-                            "ok": True,
-                            "summary": f"recovered {recovered} pending terminal report(s)",
-                        }
+                    recovery_healthy = _recover_terminal_reports_tick(
+                        recover_pending_reports, runtime,
+                    )
+                    # Retry stale/uncertain receipts separately. A failed
+                    # recovery never becomes a global claim backoff.
+                    next_terminal_recovery = now + (
+                        1.0 if recovery_healthy else 5.0
+                    )
 
                 if now >= next_heartbeat:
                     with runtime_lock:
                         has_active_jobs = bool(runtime.get("active_jobs"))
-                    control.heartbeat(
+                    heartbeat_healthy = _product_heartbeat_tick(
+                        control,
                         host_actions,
+                        runtime,
                         agent_version=__version__,
                         metadata=_agent_metadata(config),
                         status="busy" if has_active_jobs else "online",
                     )
-                    _record_product_heartbeat(runtime)
-                    reconcile_project_bindings = getattr(
-                        control, "reconcile_project_bindings", None,
-                    )
-                    if callable(reconcile_project_bindings):
-                        try:
-                            confirmed = int(reconcile_project_bindings())
-                            if confirmed:
-                                runtime["project_bindings_confirmed"] = int(
-                                    runtime.get("project_bindings_confirmed", 0)
-                                ) + confirmed
-                            runtime.pop("last_project_binding_error", None)
-                        except DeviceAuthorizationError:
-                            raise
-                        except Exception as error:
-                            # Project onboarding is fail-closed and independent
-                            # from action dispatch. Never let a missing/stale
-                            # Native Project Catalog bridge become a new global
-                            # queue or make unrelated device actions unavailable.
-                            runtime["last_project_binding_error"] = type(error).__name__
+                    # Project binding reconciliation uses the same remote
+                    # transport. Skip it on a failed presence tick so its
+                    # bounded request cannot compound a transient heartbeat
+                    # outage; claims remain independently authorized below.
+                    if heartbeat_healthy:
+                        reconcile_project_bindings = getattr(
+                            control, "reconcile_project_bindings", None,
+                        )
+                        if callable(reconcile_project_bindings):
+                            try:
+                                confirmed = int(reconcile_project_bindings())
+                                if confirmed:
+                                    runtime["project_bindings_confirmed"] = int(
+                                        runtime.get("project_bindings_confirmed", 0)
+                                    ) + confirmed
+                                runtime.pop("last_project_binding_error", None)
+                            except DeviceAuthorizationError:
+                                raise
+                            except Exception as error:
+                                # Project onboarding is fail-closed and independent
+                                # from action dispatch. Never let a missing/stale
+                                # Native Project Catalog bridge become a new global
+                                # queue or make unrelated device actions unavailable.
+                                runtime["last_project_binding_error"] = type(error).__name__
                     with runtime_lock:
                         if runtime.get("active_jobs") and runtime.get("state") == "ready":
                             runtime["state"] = "busy"
                     runtime.setdefault("startup_seconds", round(time.monotonic() - started_monotonic, 3))
-                    next_heartbeat = now + _PRODUCT_HEARTBEAT_SECONDS
+                    next_heartbeat = now + (
+                        _PRODUCT_HEARTBEAT_SECONDS if heartbeat_healthy else 5.0
+                    )
 
                 if _consume_product_wake(control, wake_listener):
                     next_claim_due = 0.0
@@ -1369,7 +1500,7 @@ def run(
             )
         except Exception:
             pass
-        status_server.shutdown()
+        close_remote_control()
 
     return 0
 

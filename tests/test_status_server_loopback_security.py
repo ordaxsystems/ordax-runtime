@@ -174,6 +174,7 @@ class LocalRuntimeStatusSecurityTests(unittest.TestCase):
                 "transport_state": transport["state"],
                 "product_dispatch_ready": transport["dispatch"],
                 "product_readiness_code": "ready",
+                "capabilities_digest": "a" * 64,
                 "last_transport_error": "SECRET_MUST_NOT_BE_EXPOSED",
             }}
 
@@ -209,6 +210,7 @@ class LocalRuntimeStatusSecurityTests(unittest.TestCase):
                     "transport_state": "connected",
                     "product_dispatch_ready": True,
                     "product_readiness_code": "ready",
+                    "capabilities_digest": "a" * 64,
                 },
                 "client_authorization": "not_verified_by_local_readiness",
             }, json.loads(content))
@@ -217,7 +219,9 @@ class LocalRuntimeStatusSecurityTests(unittest.TestCase):
             transport.update(state="reconnecting", dispatch=False)
             code, content = request("/readiness")
             self.assertEqual(200, code)
-            self.assertFalse(json.loads(content)["local_dispatch_ready"])
+            degraded = json.loads(content)
+            self.assertFalse(degraded["local_dispatch_ready"])
+            self.assertEqual(degraded["runtime"]["capabilities_digest"], "a" * 64)
             forbidden, _ = request("/readiness", host="attacker.example")
             self.assertEqual(403, forbidden)
             self.assertEqual({"full": 1, "readiness": 2}, calls)
@@ -231,7 +235,8 @@ class LocalRuntimeStatusSecurityTests(unittest.TestCase):
         source = (Path(__file__).resolve().parents[1] / "scripts" / "windows"
                   / "ordax-agent-watchdog.ps1").read_text(encoding="utf-8")
         self.assertIn('[int]$HealthPort = 8765', source)
-        self.assertIn('$healthUrl = "http://127.0.0.1:$HealthPort/health"', source)
+        self.assertIn('$probePath = if ($RequireProductDispatchReadiness) { "readiness" } else { "health" }', source)
+        self.assertIn('$healthUrl = "http://127.0.0.1:$HealthPort/$probePath"', source)
         self.assertIn("$runtime.last_job_id", source)
         self.assertNotIn("Get-CimInstance", source)
 

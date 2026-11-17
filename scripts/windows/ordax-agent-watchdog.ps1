@@ -7,12 +7,14 @@ param(
     [int]$MaxBusyMinutes = 15,
     [string]$RestartTaskName = "OrdaX Dev Agent",
     [int]$RestartDelaySeconds = 5,
+    [switch]$RequireProductDispatchReadiness,
     [ValidateRange(1, 65535)]
     [int]$HealthPort = 8765
 )
 
 $ErrorActionPreference = "SilentlyContinue"
-$healthUrl = "http://127.0.0.1:$HealthPort/health"
+$probePath = if ($RequireProductDispatchReadiness) { "readiness" } else { "health" }
+$healthUrl = "http://127.0.0.1:$HealthPort/$probePath"
 $stateDir = Join-Path $env:LOCALAPPDATA "OrdaX\DevAgent"
 $logPath = Join-Path $stateDir "watchdog.log"
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
@@ -67,8 +69,23 @@ function Recover-Agent([string]$Reason) {
     return $true
 }
 
+function Test-CanonicalUpgradeActive {
+    $installer = @(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue)
+    if ($installer.Count -gt 0) { return $true }
+    try {
+        $upgrade = Get-ScheduledTask -TaskName 'OrdaX MCP Verified Upgrade' -ErrorAction SilentlyContinue
+        return $null -ne $upgrade -and $upgrade.State -eq 'Running'
+    } catch {
+        return $false
+    }
+}
+
 function Request-AgentRestartIfNeeded {
     Start-Sleep -Seconds $RestartDelaySeconds
+    if (Test-CanonicalUpgradeActive) {
+        Write-WatchdogLog "RESTART_SKIP canonical MCP upgrade active"
+        return
+    }
 
     # Avoid Win32_Process/CIM here. On the Salvador workstation WMI/CIM
     # process queries have stalled for minutes and prevented recovery itself.
@@ -161,8 +178,36 @@ while ($true) {
         continue
     }
 
-    $consecutiveFailures = 0
     $runtime = $status.runtime
+    if ($RequireProductDispatchReadiness) {
+        $dispatchReady = $runtime -and $runtime.product_dispatch_ready -eq $true
+        $transportState = if ($runtime) { [string]$runtime.transport_state } else { "" }
+        $readinessCode = if ($runtime) { [string]$runtime.product_readiness_code } else { "" }
+        if ($dispatchReady) {
+            if ($consecutiveFailures -gt 0) {
+                Write-WatchdogLog "PRODUCT_READY recovered after $consecutiveFailures stale probes"
+            }
+            $consecutiveFailures = 0
+        } elseif ($transportState -eq "connected" -and $readinessCode -eq "heartbeat_stale") {
+            $consecutiveFailures += 1
+            Write-WatchdogLog "PRODUCT_STALE count=$consecutiveFailures code=$readinessCode pid=$AgentPid"
+            if ($consecutiveFailures -ge $MaxConsecutiveFailures) {
+                [void](Recover-Agent "Product heartbeat remained stale while transport reported connected")
+                exit 22
+            }
+        } else {
+            # Pairing, deliberate local disablement and a control-plane outage
+            # are not evidence that the local Runtime process is hung.
+            if ($consecutiveFailures -gt 0) {
+                Write-WatchdogLog "PRODUCT_STALE_RESET transport=$transportState code=$readinessCode"
+            }
+            $consecutiveFailures = 0
+        }
+        Start-Sleep -Seconds $ProbeIntervalSeconds
+        continue
+    }
+
+    $consecutiveFailures = 0
     $runtimeState = if ($runtime) { [string]$runtime.state } else { "" }
     $currentJob = if ($runtime) { [string]$runtime.last_job_id } else { "" }
 

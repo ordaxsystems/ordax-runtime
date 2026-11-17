@@ -46,6 +46,32 @@ class Central:
 
 
 class ProductDeviceControlPlaneTests(unittest.TestCase):
+    def test_close_releases_both_owned_clients_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            token(root)
+            plane = ProductDeviceControlPlane(config(root))
+            session_http = plane.product_central_session._http
+            self.assertFalse(plane.http.is_closed)
+            self.assertFalse(session_http.is_closed)
+            plane.close()
+            self.assertTrue(plane.http.is_closed)
+            self.assertTrue(session_http.is_closed)
+            plane.close()
+
+    def test_rejected_session_configuration_closes_created_transport(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            token(root)
+            with (
+                patch("ordax_dev_agent.product_device_control_plane.httpx.Client") as http_factory,
+                patch("ordax_dev_agent.product_device_control_plane.ProductCentralSessionClient",
+                      side_effect=ValueError("invalid Product origin")),
+            ):
+                with self.assertRaisesRegex(ValueError, "invalid Product origin"):
+                    ProductDeviceControlPlane(config(root))
+                http_factory.return_value.close.assert_called_once_with()
+
     def test_remote_terminal_and_process_actions_require_canonical_project_attestation(self):
         project_id = "33333333-3333-4333-8333-333333333333"
         space_id = "44444444-4444-4444-8444-444444444444"
@@ -306,6 +332,25 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             self.assertEqual(seen[-1]["capabilities_digest"], first)
             self.assertEqual(first, hashlib.sha256(b'["a","b"]').hexdigest())
             self.assertEqual(plane._heartbeat_capabilities, ("a", "b"))
+            plane.http.close()
+
+    def test_claim_is_independent_from_pending_report_recovery(self):
+        seen = []
+
+        def handler(request):
+            seen.append(request.url.path)
+            return httpx.Response(200, json={"ok": True, "job": None})
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            plane = self.plane(Path(raw_dir), handler)
+            with patch.object(
+                plane,
+                "recover_pending_reports",
+                side_effect=RuntimeError("test-only stale terminal report"),
+            ) as recovery:
+                self.assertIsNone(plane.claim_next_job())
+            recovery.assert_not_called()
+            self.assertEqual(seen, ["/v3/device/transport/claim"])
             plane.http.close()
 
     def test_claim_starts_same_fenced_job_context_with_runtime_provenance(self):

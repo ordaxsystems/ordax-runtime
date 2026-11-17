@@ -291,11 +291,24 @@ class ProductDeviceControlPlane:
                 "user-agent": f"OrdaX-Device-Agent/{DEVICE_AGENT_VERSION}",
             },
         )
-        self.product_central_session = ProductCentralSessionClient(
-            self.base_http_url,
-            self.device_id,
-            self._current_session_device_token,
-        )
+        try:
+            self.product_central_session = ProductCentralSessionClient(
+                self.base_http_url,
+                self.device_id,
+                self._current_session_device_token,
+            )
+        except Exception:
+            # Both HTTP clients are owned by this transport, including when
+            # the session client rejects an invalid origin during startup.
+            self.http.close()
+            raise
+
+    def close(self) -> None:
+        """Release both owned HTTPS clients on Native/Windows Runtime exit."""
+        try:
+            self.product_central_session.close()
+        finally:
+            self.http.close()
 
     @property
     def is_paired(self) -> bool:
@@ -597,7 +610,11 @@ class ProductDeviceControlPlane:
         return job
 
     def claim_next_job(self) -> AgentJob | None:
-        self.recover_pending_reports()
+        # Pending terminal reports are reconciled by the lifecycle recovery
+        # loop, not on the claim critical path. A transient/stale recovery
+        # failure must never become a device-wide queue for independent work.
+        # The persisted report remains fail-closed and is never replayed as a
+        # new effect; recovery can retry it separately.
         payload = self._post("claim", {
             "agent_instance_id": self.agent_instance_id,
             "boot_id": self.boot_id,

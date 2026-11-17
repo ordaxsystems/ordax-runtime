@@ -9,6 +9,7 @@ already verified by the canonical Product device heartbeat.
 """
 from __future__ import annotations
 
+import math
 import re
 import threading
 import time
@@ -80,7 +81,10 @@ class ProductCentralSessionClient:
     ):
         base = str(base_url or "").strip().rstrip("/")
         parsed = httpx.URL(base)
-        if parsed.scheme != "https" or not parsed.host or parsed.query or parsed.fragment:
+        if (parsed.scheme != "https" or not parsed.host
+                or parsed.username or parsed.password
+                or parsed.path not in {"", "/"}
+                or parsed.query or parsed.fragment):
             raise ValueError("Canonical Product MCP URL must be HTTPS origin")
         try:
             canonical_id = str(uuid.UUID(str(device_id)))
@@ -90,7 +94,9 @@ class ProductCentralSessionClient:
             raise ValueError("Canonical Product device UUID must be normalized")
         if not callable(credential_provider):
             raise ValueError("Product credential provider must be callable")
-        if min_poll_seconds < 5 or min_poll_seconds > 300:
+        if (not isinstance(min_poll_seconds, (int, float))
+                or not math.isfinite(min_poll_seconds)
+                or not 5 <= min_poll_seconds <= 300):
             raise ValueError("Product Central session poll interval is invalid")
 
         self.base_url = base
@@ -103,6 +109,9 @@ class ProductCentralSessionClient:
         self._min_poll_seconds = float(min_poll_seconds)
         self._next_poll_at = 0.0
         self._status = ProductCentralSessionStatus(False, False, None, None, None)
+        # Direct tick() calls and heartbeat-scheduled ticks share one flight.
+        # A second poll must not confirm the same challenge concurrently.
+        self._poll_lock = threading.Lock()
         self._tick_lock = threading.Lock()
         self._tick_thread: threading.Thread | None = None
         self._closing = threading.Event()
@@ -124,6 +133,7 @@ class ProductCentralSessionClient:
         with self._tick_lock:
             if (self._closing.is_set()
                     or time.monotonic() < self._next_poll_at
+                    or self._poll_lock.locked()
                     or (self._tick_thread is not None and self._tick_thread.is_alive())):
                 return False
             self._tick_thread = threading.Thread(
@@ -168,6 +178,16 @@ class ProductCentralSessionClient:
         return value
 
     def tick(self, *, now: float | None = None) -> ProductCentralSessionStatus:
+        # Both public entry paths must be single-flight. Nonblocking return
+        # keeps the authoritative heartbeat responsive during slow HTTPS.
+        if not self._poll_lock.acquire(blocking=False):
+            return self._status
+        try:
+            return self._tick_serial(now=now)
+        finally:
+            self._poll_lock.release()
+
+    def _tick_serial(self, *, now: float | None = None) -> ProductCentralSessionStatus:
         if self._closing.is_set():
             return self._status
         current = time.monotonic() if now is None else float(now)
