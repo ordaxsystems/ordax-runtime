@@ -1078,19 +1078,25 @@ def run(
             status_server_ready(status_server.server_port)
     except Exception:
         close_status_server()
-        status_server.server_close()
         raise
     _startup_log(config, f"STATUS_SERVER_READY port={status_server.server_port}")
 
-    from .actions import ActionRegistry
-    _startup_log(config, "ACTION_REGISTRY_IMPORT_OK")
-    registry = ActionRegistry(config, computer_adapter=computer_adapter,
-                              allowed_action_names=allowed_action_names)
-    # Host composition owns App installation provenance; never advertise a
-    # capability that this host cannot connect to an installed App.
-    host_actions = sorted({*registry.names, *({"forge.app_read"}
-        if callable(orchestrator_installation_provider) else set())})
-    _startup_log(config, f"ACTION_REGISTRY_READY actions={len(registry.names)}")
+    try:
+        from .actions import ActionRegistry
+        _startup_log(config, "ACTION_REGISTRY_IMPORT_OK")
+        registry = ActionRegistry(config, computer_adapter=computer_adapter,
+                                  allowed_action_names=allowed_action_names)
+        # Host composition owns App installation provenance; never advertise a
+        # capability that this host cannot connect to an installed App.
+        host_actions = sorted({*registry.names, *({"forge.app_read"}
+            if callable(orchestrator_installation_provider) else set())})
+        _startup_log(config, f"ACTION_REGISTRY_READY actions={len(registry.names)}")
+    except Exception:
+        # The loopback status listener starts before the action registry.
+        # Failed native adapter/registry setup must not leak that listener
+        # into the next OS-owned Runtime restart.
+        close_status_server()
+        raise
 
     watchdog_process = _start_local_watchdog(
         config,
