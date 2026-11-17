@@ -258,6 +258,33 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                     native_access_enabled=lambda: True)
             server.return_value.shutdown.assert_called_once_with()
 
+    def test_native_revocation_after_control_creation_closes_transport(self):
+        enabled = [True]
+        plane = Mock()
+
+        def construct(*_args, **_kwargs):
+            # Revoke after preflight, before recovering any terminal receipt.
+            enabled[0] = False
+            return plane
+
+        with (
+            patch("ordax_dev_agent.control_plane.build_control_plane",
+                  side_effect=construct),
+            patch("ordax_dev_agent.main.start_status_server") as server,
+            patch("ordax_dev_agent.main._start_local_watchdog", return_value=None),
+            patch("ordax_dev_agent.main.signal.signal"),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(
+                run(self.config, device_credential_provider=self.provider,
+                    native_access_enabled=lambda: enabled[0], status_port=0),
+                0,
+            )
+            server.return_value.shutdown.assert_called_once_with()
+            server.return_value.server_close.assert_called_once_with()
+        plane.recover_pending_reports.assert_not_called()
+        plane.close.assert_called_once_with()
+
     def test_existing_loop_executes_native_file_action_and_respects_policy(self):
         # Real registry, filesystem action and local policy; transport is isolated.
         # This is source integration evidence, not a credentialled device E2E.
@@ -311,6 +338,7 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                 if enabled:
                     self.assertEqual(path.read_text(), "native runtime integration\n")
                 self.assertEqual(plane.heartbeat.call_args.kwargs["status"], "offline")
+                plane.close.assert_called_once_with()
                 self.assertFalse(COMPUTER_GRAPHICAL_ACTIONS.intersection(plane.heartbeat.call_args.args[0]))
                 self.assertFalse((self.state / "device-token.cloudflare-v3.txt").exists())
 
@@ -376,6 +404,7 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
             server.return_value.shutdown.assert_called_once_with()
 
         self.assertEqual(maximum_active[0], 2)
+        plane.close.assert_called_once_with()
         self.assertCountEqual(
             completions,
             [("parallel-fail", False), ("parallel-ok", True)],
