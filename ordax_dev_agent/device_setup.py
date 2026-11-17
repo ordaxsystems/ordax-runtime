@@ -16,7 +16,7 @@ import httpx
 
 from .config import DEFAULT_PRODUCT_MCP_URL
 from .device_credentials import resolve_pending_token_path, resolve_token_path
-from .identity import machine_id, desktop_machine_binding
+from .identity import machine_id, desktop_machine_binding, DESKTOP_PRODUCT_DEVICE_NAME
 from .product_ingress import TrustedProductIngress
 
 
@@ -422,7 +422,7 @@ def main() -> int:
                      "OrdaX OS Desktop Local Development" /
                      "native-state" / "product-runtime")
             binding = desktop_machine_binding()
-            device_name = "OrdaX Desktop (" + socket.gethostname() + ")"
+            device_name = DESKTOP_PRODUCT_DEVICE_NAME
         else:
             state = Path(os.environ["LOCALAPPDATA"]) / "OrdaX" / "DevAgent"
             binding = None
