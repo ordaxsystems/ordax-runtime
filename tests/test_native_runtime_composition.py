@@ -246,6 +246,22 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
             self.assertEqual(native_entrypoint(argv), 0)
         graphics.assert_not_called()
         self.assertEqual(loop.call_args.kwargs["computer_adapter"], {})
+        self.assertEqual(loop.call_args.args[0].computer_access_source, "native-unbound")
+        from ordax_dev_agent.computer_filesystem_actions import load_computer_access_policy
+        (loop.call_args.args[0].state_dir / "agent-settings.json").write_text(
+            json.dumps({"computer_access": {
+                "enabled": True, "full_access": True, "full_filesystem": True,
+            }})
+        )
+        with patch.dict(os.environ, {
+            "ORDAX_COMPUTER_ACCESS_ENABLED": "1",
+            "ORDAX_COMPUTER_FULL_ACCESS": "1",
+            "ORDAX_COMPUTER_FULL_FILESYSTEM": "1",
+        }):
+            policy = load_computer_access_policy(loop.call_args.args[0])
+        self.assertFalse(policy.enabled)
+        self.assertFalse(policy.full_access)
+        self.assertFalse(policy.full_filesystem)
         self.assertIs(loop.call_args.kwargs["native_access_enabled"],
                       store.signed_runtime_visibility_enabled)
         self.assertNotIn("ORDAX_COMPUTER_FULL_ACCESS", os.environ)

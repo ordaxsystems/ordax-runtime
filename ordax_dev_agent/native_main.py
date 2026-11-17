@@ -16,7 +16,9 @@ import tempfile
 from .config import AgentConfig, DEFAULT_PRODUCT_MCP_URL
 
 
-def native_config(state: Path, workspace: Path, device_id: str) -> AgentConfig:
+def native_config(
+    state: Path, workspace: Path, device_id: str, *, signed_stable: bool = False,
+) -> AgentConfig:
     return AgentConfig(
         agent_name="OrdaX OS", poll_seconds=12,
         state_dir=state / "product-runtime",
@@ -25,6 +27,11 @@ def native_config(state: Path, workspace: Path, device_id: str) -> AgentConfig:
         bridge_path=workspace / ".unused-bridge",
         projects={}, default_project="", workspace_root=workspace,
         protected_roots=(state,),
+        # Stable may never adopt Owner/Development agent-settings.json, whose
+        # full-access settings are not an attested Native permissions decision.
+        # The existing Native-unbound policy denies execution until the OS
+        # supplies a verified Settings/Permissions capability boundary.
+        computer_access_source="native-unbound" if signed_stable else "windows-local",
         device_id=device_id, product_mcp_url=DEFAULT_PRODUCT_MCP_URL,
     )
 
@@ -298,7 +305,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.full_access:
         os.environ.update({"ORDAX_COMPUTER_ACCESS_ENABLED": "1", "ORDAX_COMPUTER_FULL_ACCESS": "1",
                            "ORDAX_COMPUTER_FULL_FILESYSTEM": "1"})
-    config = native_config(args.state_root, args.workspace, credential["device_id"])
+    config = native_config(
+        args.state_root, args.workspace, credential["device_id"],
+        signed_stable=args.distribution_profile == "stable-mvp",
+    )
     config.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     # The OS lifecycle owner must still verify and install the signed
     # executable. The same cross-process singleton lock is shared with
