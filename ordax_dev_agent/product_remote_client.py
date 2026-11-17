@@ -10,14 +10,16 @@ from urllib.parse import quote, urlparse
 import httpx
 
 from .product_ingress import TrustedProductIngress
-from .product_http_response import MAX_PRODUCT_HTTP_RESPONSE_BYTES, parse_product_json
+from .product_http_response import (
+    MAX_PRODUCT_HTTP_RESPONSE_BYTES, canonical_product_error_code,
+    parse_product_json,
+)
 
 
 _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 _ACTION_STATUSES = _TERMINAL_STATUSES | {"queued", "leased", "running"}
 _MAX_ACTION_POLL_INTERVAL_SECONDS = 2.0
 _REQUEST_ID = re.compile(r"[A-Za-z0-9:_-]{1,128}")
-_ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,127}")
 _UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
     re.IGNORECASE,
@@ -191,10 +193,9 @@ class ProductRemoteClient:
                 "Product MCP returned a non-object JSON body",
             )
         if not response.is_success or body.get("ok") is not True:
-            code = body.get("error")
             raise ProductRemoteError(
-                code if isinstance(code, str) and _ERROR_CODE.fullmatch(code)
-                else "product_remote_error",
+                canonical_product_error_code(body.get("error"))
+                or "product_remote_error",
                 response.status_code,
                 "Product MCP rejected the request",
             )

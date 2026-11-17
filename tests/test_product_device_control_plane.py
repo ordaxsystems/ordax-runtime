@@ -358,6 +358,66 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
                 finally:
                     plane.http.close()
 
+    def test_untrusted_device_error_code_never_leaks_to_diagnostics(self):
+        for untrusted in (
+            "secret-token\ninjected-log",
+            {"secret": "secret-token"},
+            "a" * 300,
+            [],
+        ):
+            for status in (200, 422):
+                with self.subTest(untrusted=untrusted, status=status), tempfile.TemporaryDirectory() as raw:
+                    plane = self.plane(
+                        Path(raw),
+                        lambda _request: httpx.Response(
+                            status, json={"ok": False, "error": untrusted},
+                        ),
+                    )
+                    try:
+                        with self.assertRaises(RuntimeError) as caught:
+                            plane._post("claim", {})
+                        message = str(caught.exception)
+                        self.assertIn("request_rejected", message)
+                        self.assertNotIn("secret-token", message)
+                        self.assertNotIn("injected-log", message)
+                        self.assertNotIn("\n", message)
+                        self.assertLess(len(message), 200)
+                    finally:
+                        plane.http.close()
+
+    def test_device_known_error_code_remains_supported(self):
+        code = "project_device_binding_confirmation_invalid"
+        with tempfile.TemporaryDirectory() as raw:
+            plane = self.plane(
+                Path(raw),
+                lambda _request: httpx.Response(
+                    409, json={"ok": False, "error": code},
+                ),
+            )
+            try:
+                result = plane._post(
+                    "project-binding-confirm", {},
+                    accepted_errors=frozenset({code}),
+                )
+                self.assertEqual(result["error"], code)
+            finally:
+                plane.http.close()
+
+    def test_device_transport_exception_omits_remote_error_detail(self):
+        with tempfile.TemporaryDirectory() as raw:
+            def handler(request):
+                raise httpx.ReadError("secret-device-token\nprivate-host", request=request)
+            plane = self.plane(Path(raw), handler)
+            try:
+                with self.assertRaises(TransientDeliveryError) as caught:
+                    plane._post("claim", {})
+                message = str(caught.exception)
+                self.assertIn("ReadError", message)
+                self.assertNotIn("secret-device-token", message)
+                self.assertNotIn("private-host", message)
+            finally:
+                plane.http.close()
+
     def test_heartbeat_uses_product_transport_only(self):
         seen = []
         def handler(request):

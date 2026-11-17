@@ -225,6 +225,19 @@ class ProductRemoteClientTests(unittest.TestCase):
         self.assertEqual(caught.exception.error_code, "product_grant_not_resolved")
         self.assertEqual(caught.exception.status_code, 403)
 
+    def test_product_errors_do_not_reflect_untrusted_remote_text(self):
+        for raw_code in ("invalid\\nsecret", {"secret": "token"}, "a" * 256):
+            with self.subTest(raw_code=raw_code):
+                response = httpx.Response(
+                    403, json={"ok": False, "error": raw_code},
+                    request=httpx.Request("GET", "https://mcp.example.test/v3/product/targets"),
+                )
+                with self.assertRaises(ProductRemoteError) as caught:
+                    ProductRemoteClient._body(response)
+                self.assertEqual(caught.exception.error_code, "product_remote_error")
+                self.assertNotIn("secret", str(caught.exception))
+                self.assertNotIn("token", str(caught.exception))
+
     def test_requires_https_and_bounded_wait_parameters(self):
         with self.assertRaises(ValueError):
             ProductRemoteClient("http://mcp.example.test")

@@ -31,7 +31,10 @@ from .remote_protocol import (
 )
 from .terminal_outbox import TerminalOutbox
 from .product_ingress import TrustedProductIngress
-from .product_http_response import MAX_PRODUCT_HTTP_RESPONSE_BYTES, parse_product_json
+from .product_http_response import (
+    MAX_PRODUCT_HTTP_RESPONSE_BYTES, canonical_product_error_code,
+    parse_product_json,
+)
 
 
 _PROJECT_SCOPE_ACTIONS = frozenset({
@@ -411,8 +414,10 @@ class ProductDeviceControlPlane:
                 f"/v3/device/transport/{operation}", send,
             )
         except httpx.HTTPError as error:
+            # Never expose the raw HTTP exception: proxy/TLS error text may
+            # contain untrusted endpoint details or other sensitive values.
             raise TransientDeliveryError(
-                f"canonical Product transport failed: {type(error).__name__}: {error}"
+                f"canonical Product transport failed: {type(error).__name__}"
             ) from error
         if status_code in {401, 403}:
             raise DeviceAuthorizationError("DEVICE_CREDENTIAL_REJECTED")
@@ -426,7 +431,7 @@ class ProductDeviceControlPlane:
             raise RuntimeError("canonical Product transport returned invalid JSON") from error
         if not isinstance(payload, dict):
             raise RuntimeError("canonical Product transport returned a non-object response")
-        error_code = str(payload.get("error") or "")
+        error_code = canonical_product_error_code(payload.get("error"))
         if (
             status_code == 404
             and allow_not_found
@@ -444,7 +449,7 @@ class ProductDeviceControlPlane:
         if payload.get("ok") is not True:
             raise RuntimeError(
                 "canonical Product transport rejected request: "
-                + str(payload.get("error") or "request_rejected")[:160]
+                + (error_code or "request_rejected")
             )
         return payload
 
