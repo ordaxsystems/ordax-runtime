@@ -4,6 +4,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import httpx
 
@@ -46,6 +48,7 @@ def _snapshot(*, project: str = PROJECT, space: str = SPACE) -> dict:
         "persistence": "device",
         "links": [{
             "localProjectId": "project-7",
+            "localProjectPath": "/Documentos/ordax-runtime",
             "cloudProjectId": project,
             "spaceId": space,
         }],
@@ -82,6 +85,14 @@ def _confirmed(*, project: str = PROJECT, space: str = SPACE) -> dict:
 
 
 class ProductProjectBindingReconcileTests(unittest.TestCase):
+    def setUp(self):
+        self.workspace_resolver = patch(
+            "ordax_dev_agent.product_device_control_plane.resolve_desktop_project_workspace",
+            return_value=SimpleNamespace(slug="project-7", root=Path("/verified/project-7")),
+        )
+        self.resolve_workspace = self.workspace_resolver.start()
+        self.addCleanup(self.workspace_resolver.stop)
+
     def plane(self, root: Path, handler, provider):
         _write_token(root)
         plane = ProductDeviceControlPlane(

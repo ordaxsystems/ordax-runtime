@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import threading
 import re
+from contextlib import contextmanager
 from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Callable
@@ -187,6 +188,7 @@ class ActionRegistry(
         self.config = config
         self.projects = load_projects(config)
         self._observation_local = threading.local()
+        self._project_execution_local = threading.local()
         self._initialize_application_intelligence()
         self._computer_activity = ComputerActivityTracker(config.state_dir)
         self._concurrency = ActionConcurrencyCoordinator(config.state_dir)
@@ -639,11 +641,39 @@ class ActionRegistry(
         finally:
             concurrency_lease.release()
 
+    @contextmanager
+    def verified_project_execution_scope(self, slug: str, root: str | Path):
+        """Temporarily bind one attested Product job to its verified workspace.
+
+        The scope is thread-local and never mutates the persistent legacy
+        project registry, so concurrent jobs can use distinct project-N roots.
+        """
+        if not isinstance(slug, str) or re.fullmatch(r"project-[1-9][0-9]*", slug) is None:
+            raise ValueError("verified Product project id is invalid")
+        resolved = Path(root).resolve(strict=True)
+        if not resolved.is_dir():
+            raise FileNotFoundError(resolved)
+        if getattr(self._project_execution_local, "project", None) is not None:
+            raise RuntimeError("nested Product project execution scope is forbidden")
+        project = Project(slug=slug, root=resolved)
+        self._project_execution_local.project = project
+        try:
+            yield project
+        finally:
+            self._project_execution_local.project = None
+
     def _project_path(self, payload: dict[str, Any]) -> Path:
         return self._project(payload).root
 
     def _project(self, payload: dict[str, Any]) -> Project:
         slug = payload.get("project") or self.config.default_project
+        scoped = getattr(self._project_execution_local, "project", None)
+        if scoped is not None:
+            if slug != scoped.slug:
+                raise ValueError("Product project scope does not match action project")
+            if not scoped.root.is_dir():
+                raise FileNotFoundError(f"Project directory not found: {scoped.root}")
+            return scoped
         if slug not in self.projects:
             raise ValueError(f"project not registered: {slug}")
         project = self.projects[slug]

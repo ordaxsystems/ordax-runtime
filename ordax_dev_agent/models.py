@@ -10,6 +10,10 @@ class AgentJob:
     action: str
     payload: dict[str, Any] = field(default_factory=dict)
     project_slug: str | None = None
+    # In-memory only. This path is derived from the authenticated Native
+    # Project Catalog/File Space projection after Git origin verification.
+    # It is never accepted from Product payloads or persisted as cloud authority.
+    project_root: str | None = None
     lease_token: str | None = None
     effect_id: str | None = None
     attempt_id: str | None = None
