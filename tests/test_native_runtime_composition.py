@@ -86,6 +86,57 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                     run(config, device_credential_provider=self.provider)
                 server.assert_not_called()
 
+    def test_registry_startup_failure_closes_status_server_once(self):
+        with (
+            patch("ordax_dev_agent.main.start_status_server") as server,
+            patch("ordax_dev_agent.actions.ActionRegistry",
+                  side_effect=RuntimeError("invalid native adapter")) as registry,
+            patch("ordax_dev_agent.main._start_local_watchdog") as watchdog,
+            redirect_stdout(io.StringIO()),
+        ):
+            server.return_value.server_port = 43219
+            with self.assertRaisesRegex(RuntimeError, "invalid native adapter"):
+                run(self.config, device_credential_provider=self.provider,
+                    native_access_enabled=lambda: True, status_port=0)
+            registry.assert_called_once()
+            server.return_value.shutdown.assert_called_once_with()
+            server.return_value.server_close.assert_called_once_with()
+            watchdog.assert_not_called()
+
+    def test_status_ready_callback_failure_does_not_double_close(self):
+        def unavailable(_port):
+            raise RuntimeError("native host refused status port")
+
+        with (
+            patch("ordax_dev_agent.main.start_status_server") as server,
+            patch("ordax_dev_agent.actions.ActionRegistry") as registry,
+            redirect_stdout(io.StringIO()),
+        ):
+            server.return_value.server_port = 43219
+            with self.assertRaisesRegex(RuntimeError, "native host refused status port"):
+                run(self.config, device_credential_provider=self.provider,
+                    native_access_enabled=lambda: True, status_port=0,
+                    status_server_ready=unavailable)
+            server.return_value.shutdown.assert_called_once_with()
+            server.return_value.server_close.assert_called_once_with()
+            registry.assert_not_called()
+
+    def test_status_shutdown_error_still_releases_socket(self):
+        def unavailable(_port):
+            raise RuntimeError("host callback failed")
+
+        with (
+            patch("ordax_dev_agent.main.start_status_server") as server,
+            redirect_stdout(io.StringIO()),
+        ):
+            server.return_value.server_port = 43219
+            server.return_value.shutdown.side_effect = RuntimeError("shutdown failed")
+            with self.assertRaisesRegex(RuntimeError, "shutdown failed"):
+                run(self.config, device_credential_provider=self.provider,
+                    native_access_enabled=lambda: True, status_port=0,
+                    status_server_ready=unavailable)
+            server.return_value.server_close.assert_called_once_with()
+
     def test_native_local_access_status_reuses_os_identity_without_side_effects(self):
         from ordax_dev_agent.native_main import main as native_entrypoint
         argv = [
