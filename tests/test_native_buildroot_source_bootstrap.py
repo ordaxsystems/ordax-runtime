@@ -46,6 +46,9 @@ class NativeBuildrootSourceBootstrapTests(unittest.TestCase):
         if proof is None:
             proof = {
                 "offline_actions_proven": True,
+                "observed_import_origins_verified": True,
+                "canonical_runtime_imported_module_count": 104,
+                "private_os_imported_module_count": 281,
                 "product_httpx_client_constructed": True,
                 "registered_action_count": 110,
                 "network_used": False,
@@ -72,6 +75,31 @@ class NativeBuildrootSourceBootstrapTests(unittest.TestCase):
         self.assertNotIn("ORDAX_DEVICE_TOKEN", kwargs["env"])
         self.assertEqual(kwargs["env"]["PYTHONHOME"], str(self.root / "usr"))
         self.assertEqual(kwargs["timeout"], 60)
+
+    def test_success_without_attested_import_origins_is_invalid(self):
+        fields = {
+            "offline_actions_proven": True,
+            "product_httpx_client_constructed": True,
+            "registered_action_count": 110,
+            "network_used": False,
+            "device_credential_used": False,
+        }
+        for forgery in (
+            {},
+            {"observed_import_origins_verified": True,
+             "canonical_runtime_imported_module_count": 104},
+            {"observed_import_origins_verified": True,
+             "canonical_runtime_imported_module_count": True,
+             "private_os_imported_module_count": 281},
+        ):
+            with self.subTest(forgery=forgery), patch.object(
+                target.subprocess, "run",
+                return_value=self.completed(proof={**fields, **forgery}),
+            ):
+                report = target.probe(self.receipt, self.tar, self.root)
+            self.assertFalse(report["offline_bootstrap_proven"])
+            self.assertEqual(report["failure"], "native_bootstrap_proof_invalid")
+            self.assertFalse(report["device_install_authorized"])
 
     def test_exception_failure_reports_only_type_not_sensitive_traceback(self):
         process = self.completed(
