@@ -320,6 +320,73 @@ class ProductCentralSessionClientTests(unittest.TestCase):
         client.close()
         self.assertFalse(client.schedule_tick(), "closed client must not restart the poll")
 
+    def test_direct_tick_cannot_confirm_scheduled_challenge_twice(self):
+        # The public direct API must not bypass the heartbeat's in-flight
+        # guard, even when an explicit "now" is beyond the poll deadline.
+        token = ["a" * 64]
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def handler(request):
+            calls.append(request.method)
+            if request.method == "GET":
+                if calls.count("GET") == 1:
+                    entered.set()
+                    if not release.wait(3):
+                        raise RuntimeError("fixture GET was not released")
+                return httpx.Response(200, json={
+                    "ok": True, "pending": True, "challenge_id": CHALLENGE_ID,
+                })
+            return httpx.Response(200, json={
+                "ok": True, "status": "bound", "device_id": DEVICE_ID,
+            })
+
+        client = self.make_client(token, handler)
+        self.assertTrue(client.schedule_tick())
+        try:
+            self.assertTrue(entered.wait(2))
+            blocked = client.tick(now=time.monotonic() + 3600)
+            self.assertFalse(blocked.checked)
+            self.assertEqual(calls, ["GET"])
+        finally:
+            release.set()
+        thread = client._tick_thread
+        self.assertIsNotNone(thread)
+        thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(calls, ["GET", "POST"])
+        self.assertTrue(client.status.confirmed)
+
+    def test_scheduled_tick_does_not_race_with_direct_tick(self):
+        token = ["a" * 64]
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def handler(request):
+            calls.append(request.method)
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("fixture GET was not released")
+            return httpx.Response(200, json={"ok": True, "pending": False})
+
+        client = self.make_client(token, handler)
+        thread = threading.Thread(target=lambda: client.tick(now=10.0))
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(2))
+            # The scheduler reads the real clock; the direct test tick uses a
+            # synthetic clock, so cadence alone cannot prevent concurrency.
+            self.assertFalse(client.schedule_tick())
+            self.assertEqual(calls, ["GET"])
+        finally:
+            release.set()
+            thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(calls, ["GET"])
+        self.assertTrue(client.status.checked)
+
     def test_closing_does_not_confirm_inflight_old_challenge(self):
         token = ["a" * 64]
         entered = threading.Event()
