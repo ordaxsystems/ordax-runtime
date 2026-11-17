@@ -9,7 +9,9 @@ import tarfile
 import tempfile
 import unittest
 
-from tools.ci.probe_native_buildroot_agent import stage_verified_target
+from tools.ci.probe_native_buildroot_agent import (
+    stage_verified_target, classify_loaded_module_origins,
+)
 from tools.ci.audit_independent_python_proof import ProofError
 
 
@@ -34,6 +36,62 @@ class BuildrootOfflineProbeTests(unittest.TestCase):
                     info.size = len(content)
                 archive.addfile(info, None if isinstance(content, tuple)
                                 else io.BytesIO(content))
+
+    def test_observed_imports_require_canonical_source_or_private_os_python(self):
+        source = self.root / "source"
+        private = self.root / "private"
+        source.mkdir()
+        (private / "usr" / "lib").mkdir(parents=True)
+        loaded = {
+            **{f"ordax_module_{i}": str(source / f"mod{i}.py") for i in range(5)},
+            **{f"os_module_{i}": str(private / "usr/lib" / f"mod{i}.py")
+               for i in range(5)},
+        }
+        proof = classify_loaded_module_origins(
+            loaded, source_root=source, private_root=private,
+        )
+        self.assertEqual(proof, {
+            "canonical_runtime_imported_module_count": 5,
+            "private_os_imported_module_count": 5,
+            "observed_import_origins_verified": True,
+        })
+        loaded["host_injection"] = str(self.root / "other" / "injected.py")
+        with self.assertRaisesRegex(ProofError, "outside verified roots"):
+            classify_loaded_module_origins(
+                loaded, source_root=source, private_root=private,
+            )
+        del loaded["host_injection"]
+        loaded["relative"] = "../host-injected.py"
+        with self.assertRaisesRegex(ProofError, "relative origin"):
+            classify_loaded_module_origins(
+                loaded, source_root=source, private_root=private,
+            )
+
+    def test_symlink_escape_and_incomplete_inventory_fail_closed(self):
+        source = self.root / "source"
+        private = self.root / "private"
+        source.mkdir()
+        (private / "usr" / "lib").mkdir(parents=True)
+        outside = self.root / "outside.py"
+        outside.write_text("nothing")
+        escape = source / "escape.py"
+        escape.symlink_to(outside)
+        modules = {
+            **{f"source{i}": str(source / f"mod{i}.py") for i in range(5)},
+            **{f"os{i}": str(private / "usr/lib" / f"mod{i}.py")
+               for i in range(5)},
+        }
+        modules["escape"] = str(escape)
+        with self.assertRaisesRegex(ProofError, "outside verified roots"):
+            classify_loaded_module_origins(
+                modules, source_root=source, private_root=private,
+            )
+        del modules["escape"]
+        del modules["os0"]
+        with self.assertRaisesRegex(ProofError, "inventory incomplete"):
+            classify_loaded_module_origins(
+                modules, source_root=source, private_root=private,
+            )
 
     def test_extracts_only_into_new_temporary_directory(self):
         stage_verified_target(self.tar, self.digest, self.destination)
