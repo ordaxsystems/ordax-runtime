@@ -265,6 +265,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("host paths must be absolute")
     if not 1 <= args.status_port <= 65535:
         parser.error("status port must be between 1 and 65535")
+    if args.distribution_profile == "stable-mvp":
+        # Never inherit Owner/Development overrides into the stable process.
+        # Local capability permissions still belong to the existing OS policy.
+        for name in ("ORDAX_COMPUTER_ACCESS_ENABLED",
+                     "ORDAX_COMPUTER_FULL_ACCESS",
+                     "ORDAX_COMPUTER_FULL_FILESYSTEM"):
+            os.environ.pop(name, None)
     if args.full_access and not args.run:
         parser.error("--full-access only applies when starting Native Runtime")
     store = identity_store(args.system_root, args.state_root)
