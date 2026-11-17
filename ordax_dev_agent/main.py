@@ -1070,8 +1070,10 @@ def run(
         if status_server_closed:
             return
         status_server_closed = True
-        status_server.shutdown()
-        status_server.server_close()
+        try:
+            status_server.shutdown()
+        finally:
+            status_server.server_close()
 
     try:
         if status_server_ready is not None:
