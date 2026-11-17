@@ -348,7 +348,7 @@ class SetupTests(unittest.TestCase):
                          "native-state" / "product-runtime")
         kwargs = configure_mock.call_args.kwargs
         self.assertEqual("b" * 64, kwargs["binding"])
-        self.assertEqual("OrdaX Desktop (DESKTOP-TEST)", kwargs["device_name"])
+        self.assertEqual("OrdaX Desktop", kwargs["device_name"])
         self.assertTrue(kwargs["interactive"])
 
 if __name__ == "__main__":
