@@ -1156,6 +1156,16 @@ def run(
         raise
     _startup_log(config, "CONTROL_PLANE_READY")
 
+    def close_remote_control() -> None:
+        # Normal exit and early Native revocation share the same cleanup.
+        # Never leave the status listener open if transport teardown fails.
+        try:
+            close = getattr(control, "close", None)
+            if callable(close):
+                close()
+        finally:
+            close_status_server()
+
 
     recover_pending_reports = getattr(control, "recover_pending_reports", None)
     if callable(recover_pending_reports):
@@ -1164,7 +1174,7 @@ def run(
         while not stop:
             if not _native_local_access_granted(native_access_enabled):
                 runtime["state"] = "local-disabled"
-                close_status_server()
+                close_remote_control()
                 return 0
             try:
                 runtime["state"] = "recovering-terminal-reports"
@@ -1178,7 +1188,7 @@ def run(
                 break
             except DeviceAuthorizationError:
                 runtime["state"] = "credential-recovery-required"
-                close_status_server()
+                close_remote_control()
                 return 43
             except Exception as error:
                 runtime["state"] = "terminal-recovery-error"
@@ -1192,7 +1202,7 @@ def run(
     while not stop:
         if not _native_local_access_granted(native_access_enabled):
             runtime["state"] = "local-disabled"
-            close_status_server()
+            close_remote_control()
             return 0
         try:
             control.pair_if_needed(
@@ -1212,7 +1222,7 @@ def run(
                 continue
 
     if stop:
-        close_status_server()
+        close_remote_control()
         return 0
 
     next_heartbeat = 0.0
@@ -1473,7 +1483,7 @@ def run(
             )
         except Exception:
             pass
-        close_status_server()
+        close_remote_control()
 
     return 0
 
