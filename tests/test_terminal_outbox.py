@@ -137,6 +137,87 @@ class TerminalOutboxTests(unittest.TestCase):
             outbox.acknowledge(path)
             outbox.acknowledge(path)
 
+    def test_native_outbox_flushes_new_receipt_directory_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            outbox = TerminalOutbox(Path(raw), "cloudflare-v3", DEVICE_ID)
+            with mock.patch(
+                "ordax_dev_agent.terminal_outbox.os.fsync", wraps=os.fsync,
+            ) as fsync:
+                receipt = outbox.persist(report())
+            self.assertTrue(receipt.is_file())
+            # The file is fsynced before publication, and on Native POSIX
+            # the final directory entry is fsynced after link + unlink.
+            self.assertEqual(fsync.call_count, 1 if os.name == "nt" else 2)
+            self.assertEqual(outbox.pending()[0][1], report())
+
+    def test_symlinked_terminal_receipt_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw)
+            outbox = TerminalOutbox(state, "cloudflare-v3", DEVICE_ID)
+            receipt = outbox.persist(report())
+            external = state / "external-report.json"
+            external.write_bytes(receipt.read_bytes())
+            receipt.unlink()
+            try:
+                receipt.symlink_to(external)
+            except (NotImplementedError, OSError) as error:
+                self.skipTest(f"symlinks are unavailable on this filesystem: {error}")
+            with self.assertRaisesRegex(RuntimeError, "symlink"):
+                outbox.pending()
+            with self.assertRaisesRegex(RuntimeError, "symlink"):
+                outbox.persist(report())
+
+    def test_broken_symlinked_receipt_is_not_treated_as_acknowledged(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw)
+            outbox = TerminalOutbox(state, "cloudflare-v3", DEVICE_ID)
+            receipt = outbox.persist(report())
+            receipt.unlink()
+            try:
+                receipt.symlink_to(state / "missing-outside.json")
+            except (NotImplementedError, OSError) as error:
+                self.skipTest(f"symlinks are unavailable on this filesystem: {error}")
+            with self.assertRaisesRegex(RuntimeError, "symlink"):
+                outbox.pending()
+
+    def test_read_is_bounded_even_if_file_grows_after_size_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw)
+            outbox = TerminalOutbox(state, "cloudflare-v3", DEVICE_ID)
+            receipt = outbox.persist(report())
+            with receipt.open("wb") as stream:
+                stream.write(b"x" * (1024 * 1024 + 100))
+            original_fstat = os.fstat
+            def stale_size(fd):
+                actual = original_fstat(fd)
+                return mock.Mock(st_mode=actual.st_mode, st_size=1)
+            with mock.patch(
+                "ordax_dev_agent.terminal_outbox.os.fstat", side_effect=stale_size,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "invalid size"):
+                    outbox._read_path(receipt)
+
+    @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "POSIX O_NOFOLLOW is required")
+    def test_symlink_swap_between_check_and_open_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw)
+            outbox = TerminalOutbox(state, "cloudflare-v3", DEVICE_ID)
+            receipt = outbox.persist(report())
+            other = state / "other.json"
+            other.write_bytes(receipt.read_bytes())
+            real_open = os.open
+            def swap_before_open(path, flags, *args, **kwargs):
+                if Path(path) == receipt:
+                    receipt.unlink()
+                    receipt.symlink_to(other)
+                return real_open(path, flags, *args, **kwargs)
+            with mock.patch(
+                "ordax_dev_agent.terminal_outbox.os.open",
+                side_effect=swap_before_open,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "cannot be opened"):
+                    outbox._read_path(receipt)
+
     def test_malformed_entry_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state = Path(raw)
