@@ -29,6 +29,29 @@ class ProductCentralSessionClientTests(unittest.TestCase):
         self.addCleanup(http.close)
         return client
 
+    def test_session_origin_must_not_include_userinfo_or_paths(self):
+        for origin in (
+            "http://mcp.ordax.com.br",
+            "https://user:password@mcp.ordax.com.br",
+            "https://mcp.ordax.com.br/v3/product",
+            "https://mcp.ordax.com.br?session=1",
+            "https://mcp.ordax.com.br/#fragment",
+        ):
+            with self.subTest(origin=origin):
+                with self.assertRaisesRegex(ValueError, "HTTPS origin"):
+                    ProductCentralSessionClient(
+                        origin, DEVICE_ID, lambda: "a" * 64,
+                    )
+
+    def test_session_poll_interval_must_be_finite_and_bounded(self):
+        for interval in (float("nan"), float("inf"), float("-inf"), 4, 301):
+            with self.subTest(interval=interval):
+                with self.assertRaisesRegex(ValueError, "poll interval"):
+                    ProductCentralSessionClient(
+                        "https://mcp.ordax.com.br", DEVICE_ID,
+                        lambda: "a" * 64, min_poll_seconds=interval,
+                    )
+
     def test_poll_without_challenge_is_bounded_and_does_not_post(self):
         token = ["a" * 64]
         calls: list[tuple[str, str]] = []
