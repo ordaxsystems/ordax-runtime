@@ -2,10 +2,10 @@
 
 Este repositório é o owner de código e contratos do Runtime; não copiar autoridade de outros serviços.
 
-## Continuidade canônica Fabric/Aura/MCP — 04/11/2026
+## Continuidade canônica Fabric/Aura/MCP — reconciliada em 17/11/2026
 
 Se a tarefa for conectar apps, Aura ou Product MCP, consultar
-[`ordax-os/INTELLIGENCE-HANDOFF.md`](https://github.com/ordaxsystems/ordax-os/blob/main/INTELLIGENCE-HANDOFF.md)
+[`docs/CURRENT-STATE.md` do OS](https://github.com/ordaxsystems/ordax-os/blob/main/docs/CURRENT-STATE.md)
 e o guia de
 [`Capability Fabric`](https://github.com/ordaxsystems/ordax-os/blob/main/docs/CAPABILITY-FABRIC.md)
 **antes de retomar um plano antigo**. O `README.md` deste repo
