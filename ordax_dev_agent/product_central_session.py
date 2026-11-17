@@ -9,6 +9,7 @@ already verified by the canonical Product device heartbeat.
 """
 from __future__ import annotations
 
+import math
 import re
 import threading
 import time
@@ -80,7 +81,10 @@ class ProductCentralSessionClient:
     ):
         base = str(base_url or "").strip().rstrip("/")
         parsed = httpx.URL(base)
-        if parsed.scheme != "https" or not parsed.host or parsed.query or parsed.fragment:
+        if (parsed.scheme != "https" or not parsed.host
+                or parsed.username or parsed.password
+                or parsed.path not in {"", "/"}
+                or parsed.query or parsed.fragment):
             raise ValueError("Canonical Product MCP URL must be HTTPS origin")
         try:
             canonical_id = str(uuid.UUID(str(device_id)))
@@ -90,7 +94,9 @@ class ProductCentralSessionClient:
             raise ValueError("Canonical Product device UUID must be normalized")
         if not callable(credential_provider):
             raise ValueError("Product credential provider must be callable")
-        if min_poll_seconds < 5 or min_poll_seconds > 300:
+        if (not isinstance(min_poll_seconds, (int, float))
+                or not math.isfinite(min_poll_seconds)
+                or not 5 <= min_poll_seconds <= 300):
             raise ValueError("Product Central session poll interval is invalid")
 
         self.base_url = base
