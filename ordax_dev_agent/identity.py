@@ -6,6 +6,11 @@ import subprocess
 import uuid
 
 
+# Installation name, not the Windows host name. The Desktop's enrollment
+# credential and machine binding remain independent from the physical PC agent.
+DESKTOP_PRODUCT_DEVICE_NAME = "OrdaX Desktop"
+
+
 def machine_id() -> str:
     raw = ""
 
