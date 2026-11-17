@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 import re
 import time
@@ -11,11 +10,11 @@ from urllib.parse import quote, urlparse
 import httpx
 
 from .product_ingress import TrustedProductIngress
+from .product_http_response import MAX_PRODUCT_HTTP_RESPONSE_BYTES, parse_product_json
 
 
 _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 _ACTION_STATUSES = _TERMINAL_STATUSES | {"queued", "leased", "running"}
-_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _MAX_ACTION_POLL_INTERVAL_SECONDS = 2.0
 _REQUEST_ID = re.compile(r"[A-Za-z0-9:_-]{1,128}")
 _ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,127}")
@@ -27,22 +26,6 @@ _PROFILE_KEY = re.compile(r"[a-z][a-z0-9._-]{1,79}")
 _GITHUB_REPOSITORY = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}"
 )
-
-
-def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("Product response contains duplicate JSON object keys")
-        result[key] = value
-    return result
-
-
-def _parse_finite_json_float(value: str) -> float:
-    parsed = float(value)
-    if not math.isfinite(parsed):
-        raise ValueError("Product response contains a non-finite JSON number")
-    return parsed
 
 
 @dataclass
@@ -144,7 +127,7 @@ class ProductRemoteClient:
                             "product_action_wait_timeout", 0,
                             "Product action completion was not confirmed before the wait deadline",
                         )
-                    if len(content) + len(chunk) > _MAX_RESPONSE_BYTES:
+                    if len(content) + len(chunk) > MAX_PRODUCT_HTTP_RESPONSE_BYTES:
                         raise ProductRemoteError(
                             "product_remote_invalid_response", response.status_code,
                             "Product response exceeds the configured response limit",
@@ -190,19 +173,11 @@ class ProductRemoteClient:
 
     @staticmethod
     def _body(response: httpx.Response) -> dict[str, Any]:
-        def reject_nonfinite(_value: str) -> None:
-            raise ValueError("Non-finite JSON number")
-
         try:
             media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             if media_type != "application/json":
                 raise ValueError("Product response must use application/json")
-            body = json.loads(
-                response.content.decode("utf-8"),
-                parse_constant=reject_nonfinite,
-                parse_float=_parse_finite_json_float,
-                object_pairs_hook=_reject_duplicate_json_keys,
-            )
+            body = parse_product_json(response.content)
         except (ValueError, RecursionError) as error:
             raise ProductRemoteError(
                 "product_remote_invalid_response",
