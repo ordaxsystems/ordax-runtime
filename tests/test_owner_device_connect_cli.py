@@ -78,7 +78,7 @@ class OwnerDeviceConnectCliTests(unittest.TestCase):
             self.assertEqual(kwargs["home"], self.state / "private-home")
             self.assertEqual(kwargs["binding"], desktop_machine_binding())
             self.assertNotEqual(kwargs["binding"], machine_id())
-            self.assertTrue(kwargs["device_name"].startswith("OrdaX Desktop ("))
+            self.assertEqual(kwargs["device_name"], "OrdaX Desktop")
             self.assertEqual(kwargs["product_access_token"], "TOP_SECRET_OWNER_ACCESS_TOKEN")
             self.calls.append("configure")
             return {"ok": True, "device_id": "11111111-1111-4111-8111-111111111111", "protocol": "cloudflare-v3"}
