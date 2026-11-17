@@ -7,10 +7,19 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any
 
 
 MAX_PRODUCT_HTTP_RESPONSE_BYTES = 4 * 1024 * 1024
+_PRODUCT_ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,127}\\Z")
+
+
+def canonical_product_error_code(value: object) -> str | None:
+    """Never expose arbitrary server-supplied text in Product diagnostics."""
+    if isinstance(value, str) and _PRODUCT_ERROR_CODE.fullmatch(value):
+        return value
+    return None
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
