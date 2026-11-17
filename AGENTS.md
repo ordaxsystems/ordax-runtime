@@ -18,10 +18,17 @@ grants ou inferência da Aura.
 **Missão encerrada:** [Platform #291](https://github.com/ordaxsystems/ordax-platform/issues/291)
 comprovou MCP DEV funcional no Windows físico e revogou cinco
 devices antigos. Não repetir matrícula, limpeza ou grants.
-**Trabalho diferente ainda pendente:** Native Desktop
+**Handoff reconciliado em 17/11/2026:** a ponte Native Product
 [`ordax-os#2400`](https://github.com/ordaxsystems/ordax-os/pull/2400)
-aberta e com conflito na checagem, e leitura autenticada da Store
-`CURRENT` de outro owner; não montar uma segunda ponte ou inventário.
+foi **integrada em 04/11/2026** (merge `5eb9e2f8d6c95c457c307e872e6f953bd48e2a36`).
+Não reabrir essa PR nem duplicar ponte/dispatcher. A leitura autenticada da
+Store `CURRENT`, prontidão do Runtime no Device, credencial Product e grants
+mantêm gates próprios: validar estado atual nos contratos e recibos dos owners
+antes de alterar o código. Um processo local ou `capabilities_digest` não
+substitui OAuth/consentimento/grant da Platform. A regra transversal de
+composição/adoção permanece em [`ordax-os/docs/DEVELOPMENT-WORKFLOW.md`](https://github.com/ordaxsystems/ordax-os/blob/main/docs/DEVELOPMENT-WORKFLOW.md#integração-multi-repositório--composição-do-produto-2026-11-13)
+e ADR-031; o Runtime não deve manter pins transitivos nem reconstruir source
+alheio para sincronizar revisões.
 O catálogo Product global (93 IDs no source verificado) não prova
 tools habilitadas no dispositivo (snapshot limitado a 64).
 Distinguir metadados estáticos, instalação atual e permissão
