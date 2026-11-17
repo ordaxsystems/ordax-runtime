@@ -189,6 +189,78 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                 native_entrypoint(argv + ["--full-access"])
         self.assertEqual(rejected.exception.code, 2)
 
+    def test_stable_usb_local_status_uses_signed_policy_not_dev_default(self):
+        from ordax_dev_agent.native_main import main as native_entrypoint
+        argv = [
+            "--local-access-status", "--distribution-profile", "stable-mvp",
+            "--product-mode", "usb", "--system-root", str(self.root),
+            "--state-root", str(self.state), "--workspace", str(self.workspace),
+        ]
+        store = Mock()
+        store.read_enrolled_credential.return_value = {
+            "device_id": DEVICE, "device_token": "c" * 64,
+        }
+        for allowed, text, exit_code in (
+            (False, "DISABLED", 3), (True, "ENABLED", 0),
+        ):
+            store.signed_runtime_visibility_enabled.return_value = allowed
+            with (
+                patch("ordax_dev_agent.native_main.identity_store", return_value=store),
+                patch("ordax_dev_agent.native_main.sys.platform", "linux"),
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                self.assertEqual(native_entrypoint(argv), exit_code)
+            self.assertEqual(output.getvalue(), "NATIVE_PRODUCT_LOCAL_ACCESS=" + text + "\n")
+            store.development_visibility_enabled.assert_not_called()
+        store.read_enrolled_credential.return_value = None
+        with (
+            patch("ordax_dev_agent.native_main.identity_store", return_value=store),
+            patch("ordax_dev_agent.native_main.sys.platform", "linux"),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(native_entrypoint(argv), 3)
+        store.signed_runtime_visibility_enabled.reset_mock()
+        store.signed_runtime_visibility_enabled.assert_not_called()
+
+    def test_stable_usb_run_cannot_inherit_owner_dev_full_access(self):
+        from ordax_dev_agent.native_main import main as native_entrypoint
+        argv = [
+            "--run", "--distribution-profile", "stable-mvp",
+            "--product-mode", "usb", "--system-root", str(self.root),
+            "--state-root", str(self.state), "--workspace", str(self.workspace),
+            "--status-port", "8766",
+        ]
+        store = Mock()
+        store.read_enrolled_credential.return_value = {
+            "device_id": DEVICE, "device_token": "c" * 64,
+        }
+        store.signed_runtime_visibility_enabled.return_value = True
+        with (
+            patch("ordax_dev_agent.native_main.identity_store", return_value=store),
+            patch("ordax_dev_agent.native_main.sys.platform", "linux"),
+            patch("ordax_dev_agent.native_main.acquire_native_product_instance_lock", return_value=19),
+            patch("ordax_dev_agent.native_main.os.close"),
+            patch("ordax_dev_agent.native_main.os_graphical_adapter") as graphics,
+            patch("ordax_dev_agent.main.run", return_value=0) as loop,
+        ):
+            self.assertEqual(native_entrypoint(argv), 0)
+        graphics.assert_not_called()
+        self.assertEqual(loop.call_args.kwargs["computer_adapter"], {})
+        self.assertIs(loop.call_args.kwargs["native_access_enabled"],
+                      store.signed_runtime_visibility_enabled)
+        self.assertNotIn("ORDAX_COMPUTER_FULL_ACCESS", os.environ)
+        with (
+            patch("ordax_dev_agent.native_main.sys.platform", "linux"),
+            redirect_stderr(io.StringIO()),
+        ):
+            for forbidden in (
+                argv + ["--full-access"],
+                ["--local-access-status", "--distribution-profile", "stable-mvp",
+                 "--product-mode", "native-disk"],
+            ):
+                with self.assertRaises(SystemExit) as result:
+                    native_entrypoint(forbidden)
+                self.assertEqual(result.exception.code, 2)
     def test_native_switch_deny_by_default_and_fails_closed(self):
         from ordax_dev_agent.main import _native_local_access_granted
         self.assertTrue(_native_local_access_granted(None))

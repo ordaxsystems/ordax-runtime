@@ -238,13 +238,13 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["--persistent-process-worker"]:
         from .persistent_process_runtime import main as worker
         return worker(argv[1:])
-    parser = argparse.ArgumentParser(description="OrdaX OS Product Runtime (Owner USB)")
+    parser = argparse.ArgumentParser(description="OrdaX OS Product Runtime (verified Native launch)")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--self-test", action="store_true")
     mode.add_argument("--run", action="store_true")
     mode.add_argument("--local-access-status", action="store_true",
                       help="read existing OS Owner DEV Connector consent; never contacts Product")
-    parser.add_argument("--distribution-profile", choices=["owner-development"])
+    parser.add_argument("--distribution-profile", choices=["owner-development", "stable-mvp"])
     parser.add_argument("--product-mode", choices=["usb"])
     parser.add_argument("--system-root", type=Path, default=Path("/workspace/ordax/system"))
     parser.add_argument("--state-root", type=Path, default=Path("/state/ordax/native-state"))
@@ -255,29 +255,45 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_test:
         print(json.dumps(self_test(), sort_keys=True))
         return 0
-    if args.distribution_profile != "owner-development" or args.product_mode != "usb":
-        parser.error("explicit Owner/Development USB identity is required")
+    if args.distribution_profile not in ("owner-development", "stable-mvp") or args.product_mode != "usb":
+        parser.error("only Owner/Development USB or verified Stable/MVP USB is supported")
+    if args.full_access and args.distribution_profile != "owner-development":
+        parser.error("full-access is restricted to Owner/Development USB")
     if sys.platform != "linux":
         parser.error("native executable requires the OrdaX kernel ABI")
     if not all(path.is_absolute() for path in (args.system_root, args.state_root, args.workspace)):
         parser.error("host paths must be absolute")
     if not 1 <= args.status_port <= 65535:
         parser.error("status port must be between 1 and 65535")
+    if args.distribution_profile == "stable-mvp":
+        # Never inherit Owner/Development overrides into the stable process.
+        # Local capability permissions still belong to the existing OS policy.
+        for name in ("ORDAX_COMPUTER_ACCESS_ENABLED",
+                     "ORDAX_COMPUTER_FULL_ACCESS",
+                     "ORDAX_COMPUTER_FULL_FILESYSTEM"):
+            os.environ.pop(name, None)
     if args.full_access and not args.run:
         parser.error("--full-access only applies when starting Native Runtime")
     store = identity_store(args.system_root, args.state_root)
     credential = store.read_enrolled_credential()
+    # Stable/MVP may only be launched by the OS Supervisor's verified signed
+    # component slot. No development default-on policy, full-access override,
+    # unsigned fallback or separate account/token owner is permitted here.
+    local_access_enabled = (
+        store.development_visibility_enabled if args.distribution_profile == "owner-development"
+        else store.signed_runtime_visibility_enabled
+    )
     if args.local_access_status:
         # The OS identity store is the single policy authority. A lifecycle
         # supervisor can query this same immutable executable without parsing
         # credentials, duplicating opt-in policy or starting Product transport.
         try:
-            allowed = credential is not None and store.development_visibility_enabled() is True
+            allowed = credential is not None and local_access_enabled() is True
         except (OSError, RuntimeError, ValueError):
             allowed = False
         print("NATIVE_PRODUCT_LOCAL_ACCESS=" + ("ENABLED" if allowed else "DISABLED"))
         return 0 if allowed else 3
-    if credential is None or not store.development_visibility_enabled():
+    if credential is None or local_access_enabled() is not True:
         raise RuntimeError("native_product_identity_or_visibility_unavailable")
     if args.full_access:
         os.environ.update({"ORDAX_COMPUTER_ACCESS_ENABLED": "1", "ORDAX_COMPUTER_FULL_ACCESS": "1",
@@ -296,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
         graphical_handlers = os_graphical_adapter(args.system_root) if args.full_access else {}
         return run(config, device_credential_provider=store.read_enrolled_credential,
                    computer_adapter=graphical_handlers, status_port=args.status_port,
-                   native_access_enabled=store.development_visibility_enabled)
+                   native_access_enabled=local_access_enabled)
     finally:
         os.close(lock)
 
