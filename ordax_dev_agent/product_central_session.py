@@ -103,6 +103,9 @@ class ProductCentralSessionClient:
         self._min_poll_seconds = float(min_poll_seconds)
         self._next_poll_at = 0.0
         self._status = ProductCentralSessionStatus(False, False, None, None, None)
+        # Direct tick() calls and heartbeat-scheduled ticks share one flight.
+        # A second poll must not confirm the same challenge concurrently.
+        self._poll_lock = threading.Lock()
         self._tick_lock = threading.Lock()
         self._tick_thread: threading.Thread | None = None
         self._closing = threading.Event()
@@ -124,6 +127,7 @@ class ProductCentralSessionClient:
         with self._tick_lock:
             if (self._closing.is_set()
                     or time.monotonic() < self._next_poll_at
+                    or self._poll_lock.locked()
                     or (self._tick_thread is not None and self._tick_thread.is_alive())):
                 return False
             self._tick_thread = threading.Thread(
@@ -168,6 +172,16 @@ class ProductCentralSessionClient:
         return value
 
     def tick(self, *, now: float | None = None) -> ProductCentralSessionStatus:
+        # Both public entry paths must be single-flight. Nonblocking return
+        # keeps the authoritative heartbeat responsive during slow HTTPS.
+        if not self._poll_lock.acquire(blocking=False):
+            return self._status
+        try:
+            return self._tick_serial(now=now)
+        finally:
+            self._poll_lock.release()
+
+    def _tick_serial(self, *, now: float | None = None) -> ProductCentralSessionStatus:
         if self._closing.is_set():
             return self._status
         current = time.monotonic() if now is None else float(now)
