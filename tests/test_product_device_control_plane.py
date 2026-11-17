@@ -19,7 +19,7 @@ from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.models import ActionResult
 from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
 from ordax_dev_agent.product_remote import PRODUCT_REMOTE_CAPABILITY
-from ordax_dev_agent.remote_protocol import DeviceAuthorizationError
+from ordax_dev_agent.remote_protocol import DeviceAuthorizationError, TransientDeliveryError
 
 DEVICE_ID = "22222222-2222-4222-8222-222222222222"
 
@@ -286,6 +286,77 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
                 (root / "state" / "device-token.cloudflare-v3.txt").exists()
             )
             plane.http.close()
+
+    def test_device_transport_rejects_oversized_stream_before_reading_all_chunks(self):
+        received_chunks = []
+
+        class OversizedStream(httpx.SyncByteStream):
+            def __iter__(self):
+                for index in range(6):
+                    received_chunks.append(index)
+                    yield b"x" * (1024 * 1024)
+
+        def handler(_request):
+            return httpx.Response(
+                200, stream=OversizedStream(),
+                headers={"content-type": "application/json"},
+            )
+
+        with tempfile.TemporaryDirectory() as raw:
+            plane = self.plane(Path(raw), handler)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "response exceeds limit"):
+                    plane._post("claim", {"lease_seconds": 120})
+            finally:
+                plane.http.close()
+        self.assertEqual(received_chunks, list(range(5)),
+                         "the sixth remote chunk must never be consumed")
+
+    def test_device_transport_rejects_ambiguous_or_nonfinite_json(self):
+        malformed_responses = (
+            b'{"ok":true,"ok":false}',
+            b'{"ok":true,"size":NaN}',
+            b'{"ok":true,"size":Infinity}',
+            b'{"ok":true,"size":1e9999}',
+        )
+        for raw_response in malformed_responses:
+            with self.subTest(raw_response=raw_response), tempfile.TemporaryDirectory() as raw:
+                plane = self.plane(
+                    Path(raw),
+                    lambda _request: httpx.Response(
+                        200, content=raw_response,
+                        headers={"content-type": "application/json"},
+                    ),
+                )
+                try:
+                    with self.assertRaisesRegex(RuntimeError, "returned invalid JSON"):
+                        plane._post("claim", {"lease_seconds": 120})
+                finally:
+                    plane.http.close()
+
+    def test_device_transport_retains_auth_and_retryable_status_precedence(self):
+        class UnreadableStream(httpx.SyncByteStream):
+            def __iter__(self):
+                raise AssertionError("auth/retry response body must not be read")
+                yield b"never"
+
+        for status, expected_error in (
+            (401, DeviceAuthorizationError),
+            (403, DeviceAuthorizationError),
+            (503, TransientDeliveryError),
+        ):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as raw:
+                plane = self.plane(
+                    Path(raw),
+                    lambda _request: httpx.Response(
+                        status, stream=UnreadableStream(),
+                    ),
+                )
+                try:
+                    with self.assertRaises(expected_error):
+                        plane._post("claim", {})
+                finally:
+                    plane.http.close()
 
     def test_heartbeat_uses_product_transport_only(self):
         seen = []

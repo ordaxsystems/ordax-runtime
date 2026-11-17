@@ -31,6 +31,7 @@ from .remote_protocol import (
 )
 from .terminal_outbox import TerminalOutbox
 from .product_ingress import TrustedProductIngress
+from .product_http_response import MAX_PRODUCT_HTTP_RESPONSE_BYTES, parse_product_json
 
 
 _PROJECT_SCOPE_ACTIONS = frozenset({
@@ -384,40 +385,60 @@ class ProductDeviceControlPlane:
         accepted_errors: frozenset[str] = frozenset(),
     ) -> dict[str, Any] | None:
         self._assert_native_credential_current()
+
+        def send(url: str) -> tuple[int, bytes]:
+            # Do not buffer an unbounded Device/claim response. The existing
+            # Owner Product client uses this same 4 MiB protocol limit.
+            with self.http.stream(
+                "POST", url, json=body, timeout=timeout, follow_redirects=False,
+            ) as response:
+                status = response.status_code
+                # Authentication and retryable HTTP status must retain their
+                # established semantics without parsing remote response data.
+                if status in {401, 403, 408, 429, 500, 502, 503, 504}:
+                    return status, b""
+                content = bytearray()
+                for chunk in response.iter_bytes():
+                    if len(content) + len(chunk) > MAX_PRODUCT_HTTP_RESPONSE_BYTES:
+                        raise RuntimeError(
+                            "canonical Product transport response exceeds limit"
+                        )
+                    content.extend(chunk)
+                return status, bytes(content)
+
         try:
-            response = self._trusted_ingress.request(
-                f"/v3/device/transport/{operation}",
-                lambda url: self.http.post(url, json=body, timeout=timeout),
+            status_code, response_body = self._trusted_ingress.request(
+                f"/v3/device/transport/{operation}", send,
             )
         except httpx.HTTPError as error:
             raise TransientDeliveryError(
                 f"canonical Product transport failed: {type(error).__name__}: {error}"
             ) from error
-        if response.status_code in {401, 403}:
+        if status_code in {401, 403}:
             raise DeviceAuthorizationError("DEVICE_CREDENTIAL_REJECTED")
-        if response.status_code in {408, 429, 500, 502, 503, 504}:
+        if status_code in {408, 429, 500, 502, 503, 504}:
             raise TransientDeliveryError(
-                f"canonical Product transport HTTP {response.status_code}"
+                f"canonical Product transport HTTP {status_code}"
             )
         try:
-            payload = response.json()
-        except ValueError as error:
+            payload = parse_product_json(response_body)
+        except (ValueError, RecursionError) as error:
             raise RuntimeError("canonical Product transport returned invalid JSON") from error
         if not isinstance(payload, dict):
             raise RuntimeError("canonical Product transport returned a non-object response")
         error_code = str(payload.get("error") or "")
         if (
-            response.status_code == 404
+            status_code == 404
             and allow_not_found
             and payload.get("ok") is False
             and error_code == "not_found"
         ):
             return None
-        if response.status_code >= 400:
+        if status_code >= 400:
             if payload.get("ok") is False and error_code in accepted_errors:
                 return payload
             raise RuntimeError(
-                f"canonical Product transport HTTP {response.status_code}: "
+                f"canonical Product transport HTTP {status_code}: "
                 f"{error_code or 'request_rejected'}"
             )
         if payload.get("ok") is not True:
