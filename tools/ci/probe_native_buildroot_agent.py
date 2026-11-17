@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from collections.abc import Mapping
 import re
 import stat
 import subprocess
@@ -27,6 +28,44 @@ from tools.ci.audit_independent_python_proof import (
 ROOT = Path(__file__).resolve().parents[2]
 RESULT_SCHEMA = "ordax.native-buildroot-agent-bootstrap-probe/1"
 MARKER = "ORDAX_NATIVE_BOOTSTRAP_PROOF="
+
+def classify_loaded_module_origins(
+    modules: Mapping[str, str], *, source_root: Path, private_root: Path,
+) -> dict[str, int | bool]:
+    """Audit Python module origins observed during a real offline bootstrap.
+
+    Source is the exact checked-out Runtime; stdlib and external packages must
+    come from the OS-issued private Buildroot. This is an observed-import
+    provenance check, not a claim about unexecuted optional action handlers.
+    """
+    source = source_root.resolve(strict=True)
+    private = private_root.resolve(strict=True)
+    if not source.is_dir() or not private.is_dir() or source == private:
+        raise ProofError("private Native Python origin roots invalid")
+    sysroots = (private / "usr", private / "lib", private / "lib64")
+    runtime_count = os_count = 0
+    for name, filename in modules.items():
+        if (not isinstance(name, str) or not name
+                or not isinstance(filename, str) or not filename):
+            raise ProofError("native imported module origin invalid")
+        raw = Path(filename)
+        if not raw.is_absolute():
+            raise ProofError("native imported module uses relative origin")
+        actual = raw.resolve()
+        if actual.is_relative_to(source):
+            runtime_count += 1
+        elif any(actual.is_relative_to(directory) for directory in sysroots):
+            os_count += 1
+        else:
+            raise ProofError("native bootstrap imported module outside verified roots")
+    if runtime_count < 5 or os_count < 5:
+        raise ProofError("native bootstrap import origin inventory incomplete")
+    return {
+        "canonical_runtime_imported_module_count": runtime_count,
+        "private_os_imported_module_count": os_count,
+        "observed_import_origins_verified": True,
+    }
+
 MISSING_MODULE = re.compile(r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]")
 # This subprocess is intentionally NOT an OS action service. No device state,
 # MCP tokens or Product network endpoints may be supplied to it.
@@ -47,6 +86,7 @@ socket.create_connection = network_forbidden
 sys.path.insert(0, sys.argv[1])
 from ordax_dev_agent.native_main import native_config, self_test
 from ordax_dev_agent.product_device_control_plane import ProductDeviceControlPlane
+from tools.ci.probe_native_buildroot_agent import classify_loaded_module_origins
 
 proof = self_test()
 if not proof.get("ok") or proof.get("network_used") or proof.get("device_credential_used"):
@@ -71,7 +111,14 @@ with tempfile.TemporaryDirectory(prefix="ordax-native-device-probe-") as tempora
     finally:
         control.product_central_session.close()
         control.http.close()
+observed = classify_loaded_module_origins(
+    {name: module.__file__ for name, module in tuple(sys.modules.items())
+     if isinstance(getattr(module, "__file__", None), str)
+     and module.__file__},
+    source_root=Path(sys.argv[1]), private_root=Path(sys.argv[2]),
+)
 print("ORDAX_NATIVE_BOOTSTRAP_PROOF=" + json.dumps({
+    **observed,
     "offline_actions_proven": True,
     "product_httpx_client_constructed": True,
     "registered_action_count": proof["registered_action_count"],
@@ -160,7 +207,7 @@ def _execute_in_private_rootfs_container(
             "--user", f"{os.getuid()}:{os.getgid()}",
             "--mount", f"type=bind,source={source_root},target=/ordax-runtime,readonly",
             "--workdir", "/tmp",
-            image_id, "/" + executable, "-I", "-B", "-c", CHILD, "/ordax-runtime",
+            image_id, "/" + executable, "-I", "-B", "-c", CHILD, "/ordax-runtime", "/",
         ]
         return subprocess.run(
             command, cwd=str(source_root), env={
@@ -224,7 +271,7 @@ def probe(receipt_path: Path, target_tar: Path, extracted_root: Path,
             "PYTHONHOME": str(root / "usr"),
             "LD_LIBRARY_PATH": str(root / "lib") + ":" + str(root / "usr/lib"),
         }
-        command = [str(loader), str(binary), "-I", "-B", "-c", CHILD, str(ROOT)]
+        command = [str(loader), str(binary), "-I", "-B", "-c", CHILD, str(ROOT), str(root)]
         if private_container:
             # Reuse CHILD and the canonical proof classifier, but execute in
             # the exact Buildroot userspace so the supervisor's subprocess
@@ -267,6 +314,11 @@ def probe(receipt_path: Path, target_tar: Path, extracted_root: Path,
         summary["failure"] = "native_bootstrap_proof_invalid"
         return summary
     if (proof.get("offline_actions_proven") is not True
+            or proof.get("observed_import_origins_verified") is not True
+            or type(proof.get("canonical_runtime_imported_module_count")) is not int
+            or proof["canonical_runtime_imported_module_count"] < 5
+            or type(proof.get("private_os_imported_module_count")) is not int
+            or proof["private_os_imported_module_count"] < 5
             or proof.get("product_httpx_client_constructed") is not True
             or proof.get("network_used") is not False
             or proof.get("device_credential_used") is not False
@@ -276,6 +328,13 @@ def probe(receipt_path: Path, target_tar: Path, extracted_root: Path,
         return summary
     summary["offline_bootstrap_proven"] = True
     summary["registered_action_count"] = proof["registered_action_count"]
+    summary["observed_import_origins_verified"] = True
+    summary["canonical_runtime_imported_module_count"] = (
+        proof["canonical_runtime_imported_module_count"]
+    )
+    summary["private_os_imported_module_count"] = (
+        proof["private_os_imported_module_count"]
+    )
     return summary
 
 
