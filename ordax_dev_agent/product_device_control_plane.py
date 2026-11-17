@@ -286,11 +286,24 @@ class ProductDeviceControlPlane:
                 "user-agent": f"OrdaX-Device-Agent/{DEVICE_AGENT_VERSION}",
             },
         )
-        self.product_central_session = ProductCentralSessionClient(
-            self.base_http_url,
-            self.device_id,
-            self._current_session_device_token,
-        )
+        try:
+            self.product_central_session = ProductCentralSessionClient(
+                self.base_http_url,
+                self.device_id,
+                self._current_session_device_token,
+            )
+        except Exception:
+            # Both HTTP clients are owned by this transport, including when
+            # the session client rejects an invalid origin during startup.
+            self.http.close()
+            raise
+
+    def close(self) -> None:
+        """Release both owned HTTPS clients on Native/Windows Runtime exit."""
+        try:
+            self.product_central_session.close()
+        finally:
+            self.http.close()
 
     @property
     def is_paired(self) -> bool:
