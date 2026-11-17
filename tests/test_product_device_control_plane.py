@@ -360,7 +360,7 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
 
     def test_untrusted_device_error_code_never_leaks_to_diagnostics(self):
         for untrusted in (
-            "secret-token\\ninjected-log",
+            "secret-token\ninjected-log",
             {"secret": "secret-token"},
             "a" * 300,
             [],
@@ -380,7 +380,7 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
                         self.assertIn("request_rejected", message)
                         self.assertNotIn("secret-token", message)
                         self.assertNotIn("injected-log", message)
-                        self.assertNotIn("\\n", message)
+                        self.assertNotIn("\n", message)
                         self.assertLess(len(message), 200)
                     finally:
                         plane.http.close()
@@ -406,7 +406,7 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
     def test_device_transport_exception_omits_remote_error_detail(self):
         with tempfile.TemporaryDirectory() as raw:
             def handler(request):
-                raise httpx.ReadError("secret-device-token\\nprivate-host", request=request)
+                raise httpx.ReadError("secret-device-token\nprivate-host", request=request)
             plane = self.plane(Path(raw), handler)
             try:
                 with self.assertRaises(TransientDeliveryError) as caught:
