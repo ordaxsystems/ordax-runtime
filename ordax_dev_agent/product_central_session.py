@@ -20,12 +20,14 @@ from typing import Callable
 import httpx
 
 from .product_ingress import TrustedProductIngress
+from .product_http_response import parse_product_json
 
 _UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z",
     re.IGNORECASE,
 )
 _TOKEN = re.compile(r"[!-~]{32,512}\Z")
+_MAX_CENTRAL_RESPONSE_BYTES = 16 * 1024
 _PUBLIC_CENTRAL_ERRORS = frozenset({
     "product_identity_reenrollment_required",
     "product_central_session_unavailable",
@@ -165,13 +167,44 @@ class ProductCentralSessionClient:
             "X-Ordax-Device-Token": credential,
         }
 
+    def _request(
+        self, method: str, credential: str, *, challenge_id: str | None = None,
+    ) -> tuple[int, bytes]:
+        """Stream only one bounded Central response using the existing ingress.
+
+        The same Product identity and connection-stage failover rules apply.
+        A 401 is an identity failure even when its body is malformed or huge.
+        No response, including a POST receipt, can trigger an action retry.
+        """
+        path = "/v3/product/device/central-session"
+
+        def send(url: str) -> tuple[int, bytes]:
+            headers = self._headers(credential)
+            kwargs: dict = {}
+            if method == "POST":
+                headers["Content-Type"] = "application/json"
+                kwargs["json"] = {"challenge_id": challenge_id}
+            with self._http.stream(
+                method, url, headers=headers, follow_redirects=False, **kwargs,
+            ) as response:
+                if response.status_code == 401:
+                    return response.status_code, b""
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    if len(body) + len(chunk) > _MAX_CENTRAL_RESPONSE_BYTES:
+                        raise RuntimeError("product_central_session_response_oversized")
+                    body.extend(chunk)
+                return response.status_code, bytes(body)
+
+        return self._trusted_ingress.request(path, send)
+
     @staticmethod
-    def _json(response: httpx.Response) -> dict:
-        if len(response.content) > 16 * 1024:
+    def _json(raw: bytes) -> dict:
+        if len(raw) > _MAX_CENTRAL_RESPONSE_BYTES:
             raise RuntimeError("product_central_session_response_oversized")
         try:
-            value = response.json()
-        except ValueError as exc:
+            value = parse_product_json(raw)
+        except (ValueError, RecursionError) as exc:
             raise RuntimeError("product_central_session_response_invalid") from exc
         if not isinstance(value, dict):
             raise RuntimeError("product_central_session_response_invalid")
@@ -197,16 +230,11 @@ class ProductCentralSessionClient:
 
         try:
             credential = self._credential(self._credential_provider())
-            polled = self._trusted_ingress.request(
-                "/v3/product/device/central-session",
-                lambda url: self._http.get(
-                    url, headers=self._headers(credential), follow_redirects=False,
-                ),
-            )
-            if polled.status_code == 401:
+            poll_status, poll_body = self._request("GET", credential)
+            if poll_status == 401:
                 raise RuntimeError("product_identity_reenrollment_required")
-            payload = self._json(polled)
-            if polled.status_code != 200 or payload.get("ok") is not True:
+            payload = self._json(poll_body)
+            if poll_status != 200 or payload.get("ok") is not True:
                 raise RuntimeError("product_central_session_unavailable")
             if payload.get("pending") is False:
                 self._status = ProductCentralSessionStatus(
@@ -226,27 +254,18 @@ class ProductCentralSessionClient:
             if self._closing.is_set():
                 return self._status
             credential = self._credential(self._credential_provider())
-            confirmed = self._trusted_ingress.request(
-                "/v3/product/device/central-session",
-                lambda url: self._http.post(
-                    url,
-                    headers={
-                        **self._headers(credential),
-                        "Content-Type": "application/json",
-                    },
-                    json={"challenge_id": challenge_id},
-                    follow_redirects=False,
-                ),
+            confirm_status, confirm_body = self._request(
+                "POST", credential, challenge_id=challenge_id,
             )
-            if confirmed.status_code == 401:
+            if confirm_status == 401:
                 raise RuntimeError("product_identity_reenrollment_required")
-            receipt = self._json(confirmed)
-            if confirmed.status_code == 403:
+            receipt = self._json(confirm_body)
+            if confirm_status == 403:
                 code = receipt.get("error")
                 if isinstance(code, str) and code in {"central_device_grant_revoked", "central_session_revoked"}:
                     raise RuntimeError(code)
                 raise RuntimeError("product_central_session_unavailable")
-            if confirmed.status_code not in {200, 202} or receipt.get("ok") is not True:
+            if confirm_status not in {200, 202} or receipt.get("ok") is not True:
                 code = receipt.get("error")
                 if code in {
                     "central_session_challenge_invalid",
