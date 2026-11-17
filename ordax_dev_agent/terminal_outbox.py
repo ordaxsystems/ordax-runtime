@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import uuid
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,23 @@ class TerminalOutbox:
     def _path_for(self, report: dict[str, Any]) -> Path:
         job_id = self._validate_uuid(report.get("job_id"), "job_id")
         return self.root / f"{job_id}.json"
+
+    def _sync_directory(self) -> None:
+        """Durably publish the hard link before acknowledging a local report.
+
+        Linux Native needs the directory entry flushed, not just the file.
+        Windows cannot fsync a directory using this API; retain its existing
+        atomic hard-link behavior without introducing a second persistence path.
+        """
+        if os.name == "nt":
+            return
+        directory_fd = os.open(
+            self.root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     def persist(self, report: dict[str, Any]) -> Path:
         if not isinstance(report, dict):
@@ -84,6 +102,10 @@ class TerminalOutbox:
                 os.link(pending, target)
             except FileExistsError:
                 return confirm_existing()
+            pending.unlink()
+            # fsync(file) alone does not make the newly linked receipt durable
+            # across a Native OS power loss. Flush the final directory state.
+            self._sync_directory()
             return target
         finally:
             try:
@@ -92,22 +114,37 @@ class TerminalOutbox:
                 pass
 
     def _read_path(self, path: Path) -> dict[str, Any]:
+        # Open once: stat(path) followed by read_text(path) could read an
+        # unrelated replacement file, including one grown past the 1 MiB
+        # safety limit. O_NOFOLLOW blocks symlinked entries on Native Linux.
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
         try:
-            size = path.stat().st_size
+            if path.is_symlink():
+                raise RuntimeError(f"terminal outbox entry is a symlink: {path}")
+            fd = os.open(path, flags)
         except FileNotFoundError:
-            # A concurrent successful delivery may acknowledge this exact
-            # receipt after pending() enumerated it. Preserve that benign race
-            # so the scanner can skip it without marking transport unhealthy.
+            # Successful remote delivery may acknowledge a file between
+            # enumeration and open. Do not misclassify this benign race.
             raise
         except OSError as error:
-            raise RuntimeError(f"terminal outbox entry cannot be inspected: {path}") from error
-        if size <= 0 or size > _MAX_OUTBOX_BYTES:
-            raise RuntimeError(f"terminal outbox entry has invalid size: {path}")
+            raise RuntimeError(f"terminal outbox entry cannot be opened: {path}") from error
         try:
-            envelope = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            raise
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            with os.fdopen(fd, "rb") as handle:
+                metadata = os.fstat(handle.fileno())
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise RuntimeError(f"terminal outbox entry is not a regular file: {path}")
+                if metadata.st_size <= 0 or metadata.st_size > _MAX_OUTBOX_BYTES:
+                    raise RuntimeError(f"terminal outbox entry has invalid size: {path}")
+                raw = handle.read(_MAX_OUTBOX_BYTES + 1)
+                if not raw or len(raw) > _MAX_OUTBOX_BYTES:
+                    raise RuntimeError(f"terminal outbox entry has invalid size: {path}")
+        except OSError as error:
+            raise RuntimeError(f"terminal outbox entry cannot be read: {path}") from error
+        try:
+            envelope = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
             raise RuntimeError(f"terminal outbox entry is invalid: {path}") from error
         if not isinstance(envelope, dict):
             raise RuntimeError(f"terminal outbox envelope must be an object: {path}")
@@ -135,6 +172,8 @@ class TerminalOutbox:
         for path in sorted(self.root.iterdir()):
             if path.name.startswith(".") and path.name.endswith(".next"):
                 continue
+            if path.is_symlink():
+                raise RuntimeError(f"terminal outbox entry is a symlink: {path}")
             if path.suffix != ".json":
                 raise RuntimeError(f"unexpected file in terminal outbox: {path}")
             if not path.is_file():
