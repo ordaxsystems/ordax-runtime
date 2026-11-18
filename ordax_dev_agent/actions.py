@@ -508,6 +508,15 @@ class ActionRegistry(
                     lambda payload, fn=handler: fn(self._project(payload), payload))
             self._adapter_contracts[name] = external_adapter_contract(name)
         if config.computer_access_source == "native-unbound":
+            # Native Stable has no verified Settings/Permissions execution
+            # port yet. The local Computer policy already denies execution,
+            # but publishing every handler in Product heartbeat would falsely
+            # advertise them as usable capabilities. Use the SAME registry
+            # for dispatch and heartbeat, never a second capabilities list.
+            # Keep only the read-only denial/status explanation.
+            for name in tuple(self._actions):
+                if name.startswith("computer.") and name != "computer.access_status":
+                    self._actions.pop(name)
             # A Product-scoped action, never part of the Windows host's
             # generic Computer Control registry or its adapter grants.
             self._actions["ordax.surface.status"] = desktop_surface_status
