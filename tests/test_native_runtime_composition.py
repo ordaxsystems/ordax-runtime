@@ -70,6 +70,40 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         self.provider.assert_called_once_with()
         self.assertFalse((self.state / "device-token.cloudflare-v3.txt").exists())
 
+    def test_stable_registry_never_advertises_native_unbound_computer_actions(self):
+        stable = replace(self.config, computer_access_source="native-unbound")
+        windows_compatible = replace(self.config, computer_access_source="windows-local")
+        with patch.dict(os.environ, {
+            "ORDAX_COMPUTER_ACCESS_ENABLED": "1",
+            "ORDAX_COMPUTER_FULL_ACCESS": "1",
+            "ORDAX_COMPUTER_FULL_FILESYSTEM": "1",
+        }):
+            registry = ActionRegistry(stable, computer_adapter={})
+            from ordax_dev_agent.computer_filesystem_actions import load_computer_access_policy
+            policy = load_computer_access_policy(stable)
+        self.assertFalse(policy.enabled)
+        self.assertFalse(policy.full_access)
+        self.assertFalse(policy.full_filesystem)
+        self.assertEqual(
+            [name for name in registry.names if name.startswith("computer.")],
+            ["computer.access_status"],
+        )
+        self.assertIn("ordax.surface.status", registry.names)
+        self.assertIn("ordax.surface.open", registry.names)
+        self.assertNotIn("computer.terminal_exec", registry.names)
+        self.assertNotIn("computer.click", registry.names)
+        # Product heartbeat and executable dispatch use this exact registry.
+        self.assertFalse(registry.execute("computer.terminal_exec", {
+            "argv": ["/bin/sh", "-c", "true"],
+        }).ok)
+        with self.assertRaisesRegex(ValueError, "trusted host action boundary"):
+            ActionRegistry(
+                stable, computer_adapter={},
+                allowed_action_names=frozenset({"computer.terminal_exec"}),
+            )
+        dev = ActionRegistry(windows_compatible, computer_adapter={})
+        self.assertIn("computer.terminal_exec", dev.names)
+
     def test_native_denial_cannot_fall_back_to_desktop_credential(self):
         (self.state / "device-token.cloudflare-v3.txt").write_text("a" * 64)
         with self.assertRaisesRegex(RuntimeError, "identity mismatch"):
