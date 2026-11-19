@@ -512,6 +512,61 @@ class ProductRemoteClient:
             )
         return body
 
+    def owner_central_dev_target(
+        self, access_token: str, *, client_id: str,
+    ) -> dict[str, Any]:
+        """Read the Owner-saved DEV routing preference, not a capability grant."""
+        oauth_client = self._client_id(client_id)
+        response = self._request(
+            "GET",
+            f"{self.base_url}/v3/owner/central-dev-target",
+            headers=self._headers(access_token),
+            params={"client_id": oauth_client},
+        )
+        body = self._body(response)
+        state = body.get("state")
+        device = body.get("device_id")
+        if (
+            state not in {"none", "preferred", "inactive"}
+            or (state == "none" and device is not None)
+            or (state != "none" and (
+                not isinstance(device, str) or _UUID.fullmatch(device) is None
+            ))
+        ):
+            raise ProductRemoteError(
+                "product_remote_invalid_response", response.status_code,
+                "Owner DEV target is not a canonical preference projection",
+            )
+        return {"ok": True, "state": state, "device_id": device}
+
+    def owner_set_central_dev_target(
+        self, access_token: str, *, client_id: str,
+        device_id: str | None,
+    ) -> dict[str, Any]:
+        """Save or clear only Owner routing intent. No grant or session is issued."""
+        oauth_client = self._client_id(client_id)
+        selected = self._uuid(device_id, "device_id") if device_id is not None else None
+        response = self._request(
+            "PUT",
+            f"{self.base_url}/v3/owner/central-dev-target",
+            headers={**self._headers(access_token), "content-type": "application/json"},
+            json={"client_id": oauth_client, "device_id": selected},
+        )
+        body = self._body(response)
+        expected = "preferred" if selected is not None else "cleared"
+        if (
+            body.get("state") != expected
+            or body.get("device_id") != selected
+            or body.get("attested") is not False
+            or body.get("dispatch_authorized") is not False
+        ):
+            raise ProductRemoteError(
+                "product_remote_invalid_response", response.status_code,
+                "Owner DEV preference returned an inconsistent receipt",
+            )
+        return {"ok": True, "state": expected, "device_id": selected,
+                "attested": False, "dispatch_authorized": False}
+
     def owner_central_session_selections(
         self, access_token: str, *, client_id: str,
     ) -> dict[str, Any]:
