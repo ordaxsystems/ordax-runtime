@@ -294,9 +294,31 @@ switch ($Operation) {
             $start.Arguments = ('/VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/LOG={0}"' -f $log)
             $process = [Diagnostics.Process]::Start($start)
             if ($null -eq $process) { throw 'Unable to start verified Inno installer process' }
-            if (!$process.WaitForExit(900000)) {
-                Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer
-                throw 'Installer exceeded the 15-minute bound; verified installer tree terminated'
+            # A silent Inno Setup may create its temporary child and then
+            # become stuck before *any* file replacement. Three consecutive
+            # physical DEV attempts did exactly this: a tiny installer.log
+            # ended after "Created temporary directory", while the previous
+            # Runtime kept running. Distinguish this from a slow, legitimate
+            # payload install, and never spend 15 minutes waiting at startup.
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            $installationStarted = $false
+            while (!$process.WaitForExit(2000)) {
+                if (!$installationStarted -and (Test-Path -LiteralPath $log -PathType Leaf)) {
+                    # Inno's initial log lines are bounded even for a large
+                    # payload. Never scan the installation's full file log.
+                    $initial = @(Get-Content -LiteralPath $log -TotalCount 50 -ErrorAction SilentlyContinue)
+                    $installationStarted = @($initial | Where-Object {
+                        $_ -like '*Starting the installation process.*'
+                    }).Count -gt 0
+                }
+                if (!$installationStarted -and $clock.Elapsed.TotalSeconds -ge 180) {
+                    Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer
+                    throw 'Inno installer startup stalled before installation; verified installer tree terminated'
+                }
+                if ($clock.Elapsed.TotalSeconds -ge 900) {
+                    Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer
+                    throw 'Installer exceeded the 15-minute bound; verified installer tree terminated'
+                }
             }
             $process.Refresh()
             if ($process.ExitCode -ne 0) {

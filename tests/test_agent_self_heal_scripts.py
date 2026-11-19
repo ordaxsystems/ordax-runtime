@@ -173,7 +173,18 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertIn("Refusing to terminate unverified installer process", lifecycle)
         self.assertIn("WaitForExit(12000)", lifecycle)
         self.assertIn("WaitForExit(8000)", lifecycle)
-        self.assertIn("WaitForExit(900000)", lifecycle)
+        self.assertIn("WaitForExit(2000)", lifecycle)
+        self.assertIn("$clock = [Diagnostics.Stopwatch]::StartNew()", lifecycle)
+        self.assertIn("$clock.Elapsed.TotalSeconds -ge 180", lifecycle)
+        self.assertIn("$clock.Elapsed.TotalSeconds -ge 900", lifecycle)
+        self.assertIn("Starting the installation process.", lifecycle)
+        self.assertIn("Get-Content -LiteralPath $log -TotalCount 50", lifecycle)
+        self.assertIn("Inno installer startup stalled before installation", lifecycle)
+        self.assertLess(
+            lifecycle.index("$clock.Elapsed.TotalSeconds -ge 180"),
+            lifecycle.index("$clock.Elapsed.TotalSeconds -ge 900"),
+        )
+        self.assertNotIn("WaitForExit(900000)", lifecycle)
         self.assertIn("[Diagnostics.ProcessStartInfo]::new()", lifecycle)
         self.assertIn("$start.UseShellExecute = $false", lifecycle)
         self.assertIn("$start.CreateNoWindow = $true", lifecycle)
