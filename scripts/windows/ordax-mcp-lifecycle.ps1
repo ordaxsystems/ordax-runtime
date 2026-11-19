@@ -281,18 +281,35 @@ switch ($Operation) {
             $log = Join-Path $tx 'installer.log'
             # Wait on the exact Inno parent, not the persistent Runtime that
             # may be launched by the installer. Children are scoped to that PID.
-            # Start-Process on Windows may wait for GUI input-idle before
-            # returning the Process handle. This can leave the installer
-            # running while the 15-minute WaitForExit bound has not begun.
-            # Direct Process.Start returns the exact child PID without waiting
-            # for the Inno wizard/message loop to reach input-idle.
+            # The OS can block even the synchronous .NET Process.Start()
+            # call itself, before returning a PID; observed for >20 minutes
+            # on DESKTOP-4UFL03B, with no installer process or installer.log.
+            # Start that exact API on a CLR async delegate (not a second
+            # installer/owner) so the caller can bound the pre-PID phase.
+            # The existing 180s startup and 900s install watchdogs below
+            # still apply after the OS returns a verified Process handle.
             $start = [Diagnostics.ProcessStartInfo]::new()
             $start.FileName = $installer
             $start.WorkingDirectory = $tx
             $start.UseShellExecute = $false
             $start.CreateNoWindow = $true
             $start.Arguments = ('/VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/LOG={0}"' -f $log)
-            $process = [Diagnostics.Process]::Start($start)
+            $startMethod = [Diagnostics.Process].GetMethod(
+                'Start', [Type[]]@([Diagnostics.ProcessStartInfo]))
+            $startDelegate = [Delegate]::CreateDelegate(
+                [Func[Diagnostics.ProcessStartInfo, Diagnostics.Process]], $startMethod)
+            $startAsync = $startDelegate.BeginInvoke($start, $null, $null)
+            try {
+                # Bound the OS process creation itself, not only WaitForExit.
+                # This consumes one installer attempt: never launch another
+                # process when the OS has not returned an installer PID.
+                if (!$startAsync.AsyncWaitHandle.WaitOne(30000)) {
+                    throw 'Inno installer process creation stalled before PID for 30 seconds'
+                }
+                $process = $startDelegate.EndInvoke($startAsync)
+            } finally {
+                $startAsync.AsyncWaitHandle.Close()
+            }
             if ($null -eq $process) { throw 'Unable to start verified Inno installer process' }
             # A silent Inno Setup may create its temporary child and then
             # become stuck before *any* file replacement. Three consecutive
