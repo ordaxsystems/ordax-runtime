@@ -17,9 +17,12 @@ _POWERSHELL_UTF8_PREFIX = (
 )
 
 
-def _windows_utf8_launch_command(command: list[str]) -> list[str]:
+def _windows_utf8_launch_command(command: list[str] | str) -> list[str] | str:
     """Make legacy Windows PowerShell honor the Runtime UTF-8 output contract."""
-    if sys.platform != "win32" or not command:
+    # Windows cmd.exe needs the original command-line string after /c.
+    # Passing it as one list item makes subprocess.list2cmdline escape the
+    # inner quotes, which cmd.exe passes literally to child executables.
+    if isinstance(command, str) or sys.platform != "win32" or not command:
         return command
     executable = command[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
     if executable not in _WINDOWS_POWERSHELL_NAMES:
@@ -33,12 +36,14 @@ def _windows_utf8_launch_command(command: list[str]) -> list[str]:
 
 
 def run_command(
-    command: list[str],
+    command: list[str] | str,
     *,
     cwd: Path | None = None,
     timeout: int = 1800,
     env: dict[str, str] | None = None,
 ) -> ActionResult:
+    if isinstance(command, str) and sys.platform != "win32":
+        raise ValueError("raw command lines are supported only by the Windows native shell")
     creationflags = 0
     start_new_session = False
     if sys.platform == "win32":
