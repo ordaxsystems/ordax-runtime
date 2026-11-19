@@ -193,6 +193,15 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn('function Assert-DevArchive', lifecycle)
         self.assertIn('ordax.mcp-dev-upgrade/2', lifecycle)
         self.assertIn('Portable DEV archive expansion exceeds 1 GiB', lifecycle)
+        self.assertIn("function Read-OwnerJsonDocument", lifecycle)
+        self.assertIn("[IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)", lifecycle)
+        self.assertIn("function Get-OwnerArchiveSha256", lifecycle)
+        self.assertIn("$sha.ComputeHash($stream)", lifecycle)
+        self.assertIn("[IO.FileShare]::Read", lifecycle)
+        # Do not drop SHA-256 or weaken manifest validation for speed.
+        self.assertEqual(lifecycle.count("Get-OwnerArchiveSha256 -Path"), 3)
+        self.assertNotIn("Get-FileHash -LiteralPath", lifecycle)
+        self.assertNotIn("Get-Content -LiteralPath $journalPath -Raw", lifecycle)
         # Upgrade uses the same trusted embedded Python as the Runtime,
         # in one bounded child. No second background updater or unbounded
         # Task Scheduler .NET ZipFile extraction is permitted.

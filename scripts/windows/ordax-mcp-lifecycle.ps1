@@ -22,6 +22,35 @@ $upgradeTaskName = 'OrdaX MCP Verified Upgrade'
 $powershell = Join-Path $PSHOME 'powershell.exe'
 $owner = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 
+function Read-OwnerJsonDocument {
+    param([string]$Path)
+    # On the Windows DEV host, the FileSystem provider's Get-Content
+    # stalls on small transaction journals. Direct .NET I/O has equivalent
+    # exception behavior and does not change the canonical journal format.
+    $raw = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
+    return ($raw | ConvertFrom-Json -ErrorAction Stop)
+}
+
+function Get-OwnerArchiveSha256 {
+    param([string]$Path)
+    # The Get-FileHash cmdlet can stall for minutes on the Windows DEV host.
+    # Preserve full SHA-256 verification with a single bounded file stream.
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [IO.File]::Open(
+            $Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+            [IO.FileShare]::Read
+        )
+        try {
+            return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '')
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha.Dispose()
+    }
+}
+
 function Assert-InstalledSource {
     if ([IO.Path]::GetFullPath($PSCommandPath) -ine $lifecycle) {
         throw 'Lifecycle registration must originate from the canonical OrdaX MCP installation'
@@ -30,7 +59,7 @@ function Assert-InstalledSource {
         throw 'Canonical OrdaX MCP launcher is missing'
     }
     $manifestPath = Join-Path $installRoot 'product-manifest.json'
-    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $manifest = Read-OwnerJsonDocument -Path $manifestPath
     if ($manifest.product -cne 'OrdaX MCP' -or $manifest.runtime -cne 'ORDAX Runtime.exe') {
         throw 'Installed product provenance is not OrdaX MCP'
     }
@@ -433,7 +462,7 @@ switch ($Operation) {
             $source.Length -lt 1000000 -or $source.Length -gt 300000000) {
             throw 'Portable DEV archive path or size invalid'
         }
-        if ((Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash -ine $PackageSha256) {
+        if ((Get-OwnerArchiveSha256 -Path $source.FullName) -ine $PackageSha256) {
             throw 'Portable DEV archive differs from verified CI candidate'
         }
         Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit
@@ -443,7 +472,7 @@ switch ($Operation) {
             foreach ($previous in @(Get-ChildItem -LiteralPath $updatesRoot -Directory -ErrorAction Stop)) {
                 $previousJournal = Join-Path $previous.FullName 'journal.json'
                 if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
-                $prior = Get-Content -LiteralPath $previousJournal -Raw | ConvertFrom-Json -ErrorAction Stop
+                $prior = Read-OwnerJsonDocument -Path $previousJournal
                 if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2')) {
                     throw "Unknown MCP update journal schema: $($previous.Name)"
                 }
@@ -468,7 +497,7 @@ switch ($Operation) {
         New-Item -Path $tx -ItemType Directory -ErrorAction Stop | Out-Null
         $staged = Join-Path $tx $source.Name
         Copy-Item -LiteralPath $source.FullName -Destination $staged -ErrorAction Stop
-        if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ine $PackageSha256) {
+        if ((Get-OwnerArchiveSha256 -Path $staged) -ine $PackageSha256) {
             throw 'Portable DEV archive changed during staging'
         }
         $applyScript = Join-Path $tx 'apply.ps1'
@@ -490,7 +519,7 @@ switch ($Operation) {
             throw 'DEV upgrade executor did not originate from staged transaction'
         }
         $journalPath = Join-Path $tx 'journal.json'
-        $journal = Get-Content -LiteralPath $journalPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        $journal = Read-OwnerJsonDocument -Path $journalPath
         if ($journal.schema -cne 'ordax.mcp-dev-upgrade/2' -or
             $journal.transactionId -cne $TransactionId -or
             $journal.phase -cne 'staged' -or
@@ -500,7 +529,7 @@ switch ($Operation) {
             throw 'DEV upgrade journal identity, phase or package name invalid'
         }
         $package = Join-Path $tx $journal.packageName
-        if ((Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash -cne $journal.sha256) {
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
             throw 'Portable DEV staged package integrity mismatch'
         }
         $journal.phase = 'applying'
@@ -542,7 +571,7 @@ switch ($Operation) {
             while ($activationClock.Elapsed.TotalMinutes -lt 12) {
                 try {
                     $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
-                    $manifest = Get-Content -LiteralPath (Join-Path $installRoot 'product-manifest.json') -Raw | ConvertFrom-Json
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
                     $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
                         try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
                               $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
