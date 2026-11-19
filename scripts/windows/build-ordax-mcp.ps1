@@ -184,6 +184,22 @@ if ($LASTEXITCODE -ne 0) { throw "OrdaX MCP candidate Inno packaging failed" }
 $installer = Join-Path $OutputDirectory "OrdaX-MCP-Setup-$packageVersion-x64.exe"
 if (-not (Test-Path $installer)) { throw "Canonical standalone MCP installer missing" }
 $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+# The DEV updater consumes the very same staged Runtime files as Inno.
+# No separate build/download/installer or duplicate agent. This is the
+# canonical installer-independent DEV delivery for the ONE MCP installation.
+# Stable/public onboarding continues to use the existing Inno Setup artifact.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$devZip = Join-Path $OutputDirectory ("OrdaX-MCP-Dev-{0}.zip" -f $sourceCommit)
+if (Test-Path -LiteralPath $devZip) { Remove-Item -LiteralPath $devZip -Force }
+[IO.Compression.ZipFile]::CreateFromDirectory(
+  $stage, $devZip, [IO.Compression.CompressionLevel]::Optimal, $false)
+if (!(Test-Path -LiteralPath $devZip -PathType Leaf) -or
+    (Get-Item -LiteralPath $devZip).Length -lt 1000000) {
+  throw "Canonical portable DEV Runtime archive missing or incomplete"
+}
+$devHash = (Get-FileHash -LiteralPath $devZip -Algorithm SHA256).Hash.ToLowerInvariant()
 Write-Output "ORDAX_MCP_CANDIDATE=$installer"
 Write-Output "ORDAX_MCP_CANDIDATE_SHA256=$hash"
+Write-Output "ORDAX_MCP_DEV_ARCHIVE=$devZip"
+Write-Output "ORDAX_MCP_DEV_ARCHIVE_SHA256=$devHash"
 Write-Output "ORDAX_MCP_STUDIO_DEPENDENCY=NONE"
