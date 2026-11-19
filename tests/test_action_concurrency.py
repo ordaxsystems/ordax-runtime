@@ -121,6 +121,51 @@ class ActionConcurrencyTests(unittest.TestCase):
                 finally:
                     a.release()
 
+    def test_observation_lane_remains_available_when_execution_is_full(self) -> None:
+        coordinator = ActionConcurrencyCoordinator(self.state, max_slots=2)
+        first = coordinator.try_acquire(
+            "computer.terminal_exec", {"cwd": str(self.state)},
+            project_resolver=self.project,
+        )
+        second = coordinator.try_acquire(
+            "computer.terminal_exec", {"cwd": str(self.state)},
+            project_resolver=self.project,
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        try:
+            self.assertIsNone(coordinator.try_acquire(
+                "computer.terminal_exec", {"cwd": str(self.state)},
+                project_resolver=self.project,
+            ))
+            read = coordinator.try_acquire(
+                "computer.directory_list", {"path": str(self.state)},
+                project_resolver=self.project,
+            )
+            self.assertIsNotNone(read)
+            if read is not None:
+                read.release()
+        finally:
+            if second is not None:
+                second.release()
+            if first is not None:
+                first.release()
+
+    def test_global_maintenance_excludes_observations_too(self) -> None:
+        coordinator = ActionConcurrencyCoordinator(self.state, max_slots=2)
+        update = coordinator.try_acquire(
+            "agent.update", {}, project_resolver=self.project,
+        )
+        self.assertIsNotNone(update)
+        try:
+            self.assertIsNone(coordinator.try_acquire(
+                "computer.directory_list", {"path": str(self.state)},
+                project_resolver=self.project,
+            ))
+        finally:
+            if update is not None:
+                update.release()
+
     def test_runtime_update_remains_globally_exclusive(self) -> None:
         first = self.coordinator()
         second = self.coordinator()
