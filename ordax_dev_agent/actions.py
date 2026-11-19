@@ -336,6 +336,7 @@ class ActionRegistry(
             "blender.live_extract_region": self.blender_live_extract_region,
             "blender.live_cleanup_orphans": self.blender_live_cleanup_orphans,
             "blender.live_create_primitive": self.blender_live_create_primitive,
+            "blender.live_rig_create": self.blender_live_rig_create,
             "blender.live_create_box_with_cutouts": self.blender_live_create_box_with_cutouts,
             "blender.live_add_modifier": self.blender_live_add_modifier,
             "blender.live_surface_scatter": self.blender_live_surface_scatter,
