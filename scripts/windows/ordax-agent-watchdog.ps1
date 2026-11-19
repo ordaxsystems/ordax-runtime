@@ -69,12 +69,55 @@ function Recover-Agent([string]$Reason) {
     return $true
 }
 
+# Isolate Task Scheduler RPC/COM calls in a bounded child. A blocked
+# Get-ScheduledTask must never deadlock the only Runtime recovery watchdog.
+# Only the two existing OrdaX-owned task names are accepted.
+function Invoke-BoundedScheduledTask {
+    param(
+        [ValidateSet('State', 'Start', 'Stop')][string]$Operation,
+        [string]$Name
+    )
+    if ($Name -ne $RestartTaskName -and $Name -ne 'OrdaX MCP Verified Upgrade') {
+        return @{ ok = $false; state = ''; timed_out = $false }
+    }
+    $escaped = $Name.Replace("'", "''")
+    $command = switch ($Operation) {
+        'State' { "\$ErrorActionPreference='Stop'; \$t=Get-ScheduledTask -TaskName '$escaped' -ErrorAction Stop; [Console]::Out.Write([string]\$t.State)" }
+        'Start' { "\$ErrorActionPreference='Stop'; Start-ScheduledTask -TaskName '$escaped' -ErrorAction Stop" }
+        'Stop' { "\$ErrorActionPreference='Stop'; Stop-ScheduledTask -TaskName '$escaped' -ErrorAction Stop" }
+    }
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = Join-Path $PSHOME 'powershell.exe'
+    $info.Arguments = "-NoProfile -NonInteractive -EncodedCommand $encoded"
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $child = $null
+    try {
+        $child = [Diagnostics.Process]::Start($info)
+        if (-not $child.WaitForExit(8000)) {
+            try { $child.Kill() } catch {}
+            Write-WatchdogLog "TASK_TIMEOUT operation=$Operation name=$Name"
+            return @{ ok = $false; state = ''; timed_out = $true }
+        }
+        $state = $child.StandardOutput.ReadToEnd().Trim()
+        return @{ ok = ($child.ExitCode -eq 0); state = $state; timed_out = $false }
+    } catch {
+        Write-WatchdogLog "TASK_ERROR operation=$Operation name=$Name"
+        return @{ ok = $false; state = ''; timed_out = $false }
+    } finally {
+        if ($child) { $child.Dispose() }
+    }
+}
+
 function Test-CanonicalUpgradeActive {
     $installer = @(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue)
     if ($installer.Count -gt 0) { return $true }
     try {
-        $upgrade = Get-ScheduledTask -TaskName 'OrdaX MCP Verified Upgrade' -ErrorAction SilentlyContinue
-        return $null -ne $upgrade -and $upgrade.State -eq 'Running'
+        $upgrade = Invoke-BoundedScheduledTask -Operation State -Name 'OrdaX MCP Verified Upgrade'
+        return $upgrade.ok -and $upgrade.state -eq 'Running'
     } catch {
         return $false
     }
@@ -104,18 +147,23 @@ function Request-AgentRestartIfNeeded {
     # initialize. Avoid killing the new launcher during its legitimate startup.
     $deadline = [DateTime]::UtcNow.AddSeconds(90)
     while ([DateTime]::UtcNow -lt $deadline) {
-        $task = Get-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
-        if (-not $task) {
+        $task = Invoke-BoundedScheduledTask -Operation State -Name $RestartTaskName
+        if (-not $task.ok) {
+            if ($task.timed_out) {
+                Start-Sleep -Seconds 2
+                continue
+            }
             Write-WatchdogLog "RESTART_SKIP scheduled task missing name=$RestartTaskName"
             return
         }
-        if ($task.State -eq "Disabled") {
+        if ($task.state -eq "Disabled") {
             Write-WatchdogLog "RESTART_SKIP scheduled task disabled name=$RestartTaskName"
             return
         }
-        if ($task.State -ne "Running") {
+        if ($task.state -ne "Running") {
             try {
-                Start-ScheduledTask -TaskName $RestartTaskName -ErrorAction Stop
+                $started = Invoke-BoundedScheduledTask -Operation Start -Name $RestartTaskName
+                if (-not $started.ok) { throw 'bounded Task Scheduler start failed' }
                 Write-WatchdogLog "RESTART_REQUEST task=$RestartTaskName"
             } catch {
                 Write-WatchdogLog "RESTART_FAIL task=$RestartTaskName error=$($_.Exception.Message)"
@@ -139,9 +187,11 @@ function Request-AgentRestartIfNeeded {
     # Parent agent is gone, no successor health endpoint appeared, and the
     # task is still marked Running. Restart only this dedicated scheduled task.
     try {
-        Stop-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
+        $stopped = Invoke-BoundedScheduledTask -Operation Stop -Name $RestartTaskName
+        if (-not $stopped.ok) { throw 'bounded Task Scheduler stop failed' }
         Start-Sleep -Seconds 2
-        Start-ScheduledTask -TaskName $RestartTaskName -ErrorAction Stop
+        $started = Invoke-BoundedScheduledTask -Operation Start -Name $RestartTaskName
+        if (-not $started.ok) { throw 'bounded Task Scheduler start failed' }
         Write-WatchdogLog "RESTART_FORCE task=$RestartTaskName"
     } catch {
         Write-WatchdogLog "RESTART_FORCE_FAIL task=$RestartTaskName error=$($_.Exception.Message)"
