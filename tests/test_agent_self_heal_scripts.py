@@ -163,6 +163,25 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         )
         self.assertGreater(restart_index, exit_index)
 
+    def test_mcp_verified_upgrade_cleans_orphan_and_blocks_replay(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        lifecycle = (
+            root / "scripts" / "windows" / "ordax-mcp-lifecycle.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("function Stop-VerifiedInstallerTree", lifecycle)
+        self.assertIn("Installer PID identity or path changed", lifecycle)
+        self.assertIn("Refusing to terminate unverified installer process", lifecycle)
+        self.assertIn("WaitForExit(12000)", lifecycle)
+        self.assertIn("WaitForExit(8000)", lifecycle)
+        self.assertIn("WaitForExit(900000)", lifecycle)
+        self.assertIn("Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer", lifecycle)
+        self.assertIn("verified installer tree terminated", lifecycle)
+        self.assertIn("verified installer cleanup failed", lifecycle)
+        self.assertIn("-ExecutionTimeLimit (New-TimeSpan -Minutes 40)", lifecycle)
+        self.assertIn("Unresolved MCP update must be reconciled before new installation", lifecycle)
+        self.assertIn("$journal.phase = 'recovery-required'", lifecycle)
+        self.assertNotIn("-ExecutionTimeLimit (New-TimeSpan -Minutes 20)", lifecycle)
+
     def test_external_bootstrap_restarts_unexpected_clean_agent_exit(self) -> None:
         root = Path(__file__).resolve().parents[1]
         bootstrap = (
