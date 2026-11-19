@@ -1,4 +1,5 @@
 """Independent Windows OrdaX MCP distribution contracts (no Studio product authority)."""
+import json
 import re
 import subprocess
 import tempfile
@@ -10,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts/windows/build-ordax-mcp.ps1"
 INNO = ROOT / "packaging/windows/ordax-mcp.iss"
 WORKFLOW = ROOT / ".github/workflows/windows-mcp-candidate.yml"
+INNO_COMPILER_LOCK = ROOT / "packaging/windows/inno-compiler.lock.json"
 
 
 class WindowsMcpDistributionTests(unittest.TestCase):
@@ -306,12 +308,42 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn("retention-days: 3", workflow)
         self.assertNotIn("gh release create", workflow)
 
+    def test_inno_compiler_version_and_authority_are_locked_once(self):
+        lock = json.loads(INNO_COMPILER_LOCK.read_text(encoding="utf-8"))
+        self.assertEqual(lock["schema"], "ordax.windows-inno-compiler-source/1")
+        self.assertEqual(lock["version"], "6.7.4")
+        self.assertEqual(lock["release_authority"], "jrsoftware/issrc")
+        self.assertEqual(lock["publisher"], "Pyrsys B.V.")
+        self.assertEqual(
+            lock["url"],
+            "https://github.com/jrsoftware/issrc/releases/download/"
+            "is-6_7_4/innosetup-6.7.4.exe",
+        )
+        self.assertEqual(
+            lock["sha256"],
+            "a549929319f9120716677c685535ca4671e4b937b5fdc87e2585f32d8eb30e8c",
+        )
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        builder = BUILDER.read_text(encoding="utf-8")
+        self.assertIn('"packaging/windows/inno-compiler.lock.json"', workflow)
+        self.assertIn("if ($sha -cne $lock.sha256)", workflow)
+        self.assertIn("$sig.Status -ne 'Valid'", workflow)
+        self.assertIn("$lock.publisher -cne 'Pyrsys B.V.'", workflow)
+        self.assertIn("ORDAX_INNO_COMPILER_PINNED_RELEASE", workflow)
+        self.assertIn("Pinned Inno Setup compiler executable is unexpectedly small", workflow)
+        self.assertIn("Explicit pinned Inno Setup compiler is missing", builder)
+        self.assertIn('[string]$InnoCompilerPath = ""', builder)
+
     def test_candidate_build_proof_is_real_windows_and_never_public_release(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("  pull_request:", workflow)
         self.assertIn("  workflow_dispatch:", workflow)
         self.assertIn("windows-latest", workflow)
-        self.assertIn("choco install innosetup", workflow)
+        self.assertNotIn("choco install innosetup", workflow)
+        self.assertIn("SHA-256 pinned official Inno Setup 6 compiler", workflow)
+        self.assertIn("Official Inno Setup compiler Authenticode publisher invalid", workflow)
+        self.assertIn("Official Inno Setup compiler SHA-256 mismatch", workflow)
+        self.assertIn("-InnoCompilerPath", workflow)
         self.assertIn("build-ordax-mcp.ps1", workflow)
         self.assertIn("OrdaX-MCP-Setup-", workflow)
         self.assertIn("ordax-platform", workflow)

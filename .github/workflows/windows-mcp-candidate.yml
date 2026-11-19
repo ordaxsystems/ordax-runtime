@@ -7,6 +7,7 @@ on:
       - "scripts/windows/build-ordax-mcp.ps1"
       - "scripts/windows/get-locked-embedded-python.ps1"
       - "packaging/windows/embedded-python.lock.json"
+      - "packaging/windows/inno-compiler.lock.json"
       - "tests/test_windows_embedded_python_source.py"
       - "packaging/windows/ordax-mcp.iss"
       - "packaging/windows/ordax_launcher.c"
@@ -124,13 +125,60 @@ jobs:
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: x64
-      - name: Install Inno Setup
+      - name: Install SHA-256 pinned official Inno Setup 6 compiler
         shell: pwsh
-        run: choco install innosetup --yes --no-progress
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lock = Get-Content .\packaging\windows\inno-compiler.lock.json -Raw | ConvertFrom-Json
+          if ($lock.schema -cne 'ordax.windows-inno-compiler-source/1' -or
+              $lock.product -cne 'Inno Setup' -or
+              $lock.version -cne '6.7.4' -or
+              $lock.release_authority -cne 'jrsoftware/issrc' -or
+              $lock.url -cne 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe' -or
+              $lock.sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+              $lock.publisher -cne 'Pyrsys B.V.') {
+            throw 'Unexpected Inno compiler authority or release'
+          }
+          $download = Join-Path $env:RUNNER_TEMP 'ordax-inno-6.7.4.exe'
+          Invoke-WebRequest -Uri $lock.url -OutFile $download -MaximumRetryCount 2 -RetryIntervalSec 3 -ErrorAction Stop
+          $sha = (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -cne $lock.sha256) { throw 'Official Inno Setup compiler SHA-256 mismatch' }
+          $sig = Get-AuthenticodeSignature -LiteralPath $download
+          if ($sig.Status -ne 'Valid' -or
+              -not $sig.SignerCertificate -or
+              $sig.SignerCertificate.Subject -notmatch 'Pyrsys B\.V\.') {
+            throw 'Official Inno Setup compiler Authenticode publisher invalid'
+          }
+          $start = [Diagnostics.ProcessStartInfo]::new()
+          $start.FileName = $download
+          $start.Arguments = '/CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-'
+          $start.UseShellExecute = $false
+          $start.CreateNoWindow = $true
+          $proc = [Diagnostics.Process]::Start($start)
+          if ($null -eq $proc) { throw 'Unable to start verified Inno compiler installer' }
+          try {
+            if (-not $proc.WaitForExit(90000)) {
+              $proc.Kill()
+              [void]$proc.WaitForExit(2500)
+              throw 'Pinned Inno compiler install exceeded 90s'
+            }
+            if ($proc.ExitCode -ne 0) { throw "Pinned Inno compiler install failed: $($proc.ExitCode)" }
+          } finally { $proc.Dispose() }
+          $compiler = Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw 'Pinned Inno Setup 6 compiler missing'
+          }
+          # ISCC.exe's VERSIONINFO reports 0.0.0.0 even when the actual
+          # compiler is newer; the official signed installer, release URL,
+          # SHA-256 and exact per-user installation path are authoritative.
+          if ((Get-Item -LiteralPath $compiler).Length -lt 50000) {
+            throw 'Pinned Inno Setup compiler executable is unexpectedly small'
+          }
+          Write-Host "ORDAX_INNO_COMPILER_PINNED_RELEASE=$($lock.version) SHA256=$sha"
       - name: Build standalone Runtime candidate without Studio checkout
         shell: pwsh
         run: |
-          .\scripts\windows\build-ordax-mcp.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\dist\mcp-windows" -PlatformSource "$env:GITHUB_WORKSPACE\.ordax\platform" -ControlPlaneEnvironment validation-candidate
+          .\scripts\windows\build-ordax-mcp.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\dist\mcp-windows" -PlatformSource "$env:GITHUB_WORKSPACE\.ordax\platform" -ControlPlaneEnvironment validation-candidate -InnoCompilerPath (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Independent OrdaX MCP candidate build failed' }
       - name: Verify installation, private Runtime, lifecycle, and uninstall
         shell: pwsh
