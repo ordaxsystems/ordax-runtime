@@ -117,7 +117,7 @@ function Get-CanonicalScheduledTask {
     $state = switch -Regex ($stateText) {
         '^(Ready|Pronto)$' { 'Ready'; break }
         '^(Running|Em execu)' { 'Running'; break }
-        '^(Disabled|Desativado)$' { 'Disabled'; break }
+        '^(Disabled|Desativado|Desabilitado)$' { 'Disabled'; break }
         '^(Queued|Na fila)' { 'Queued'; break }
         default { throw "Unknown scheduler task state: $Name" }
     }
@@ -508,7 +508,11 @@ switch ($Operation) {
             Invoke-RegisterAndLaunch -Root $installRoot
             $healthy = $false
             $launchedAt = [DateTime]::UtcNow
-            for ($i = 0; $i -lt 60; $i++) {
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
                 try {
                     $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
                     $manifest = Get-Content -LiteralPath (Join-Path $installRoot 'product-manifest.json') -Raw | ConvertFrom-Json
