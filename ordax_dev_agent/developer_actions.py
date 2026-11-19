@@ -12,6 +12,7 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -648,7 +649,14 @@ class DeveloperActions:
             if len(command_raw) > 32768 or "\x00" in command_raw:
                 return ActionResult(False, "command is too long or invalid")
             if sys.platform == "win32":
-                command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command_raw]
+                # cmd.exe /c must receive the unmodified shell expression.
+                # List2cmdline escapes quotes inside a list item, making
+                # quoted paths reach Git and other children as literal quotes.
+                # Assemble the trusted cmd.exe prefix, then append the caller's
+                # shell expression verbatim; subprocess still uses shell=False.
+                command = subprocess.list2cmdline([
+                    os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c",
+                ]) + " " + command_raw
             elif getattr(sys, "_ordax_native_runtime", False):
                 command = ["/bin/sh", "-c", command_raw]
             else:
