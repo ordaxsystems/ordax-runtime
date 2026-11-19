@@ -37,7 +37,22 @@ _VERBOSE_JOB_LIFECYCLE_EVENTS = frozenset(
     }
 )
 
-_MAX_CONCURRENT_PRODUCT_JOBS = 4
+def _product_execution_capacity() -> int:
+    """Local worker capacity; bounded by resources rather than a global FIFO.
+
+    Old installed runtimes still report their actual capacity (four). This
+    value is published by the authenticated device heartbeat and controls
+    both the local executor and remote SQL claim/admission independently.
+    """
+    raw = os.environ.get("ORDAX_PRODUCT_CONCURRENT_JOBS")
+    if raw is not None:
+        if not raw.isascii() or not raw.isdecimal() or not 1 <= int(raw) <= 32:
+            raise ValueError("ORDAX_PRODUCT_CONCURRENT_JOBS must be an integer from 1 to 32")
+        return int(raw)
+    return min(16, max(4, os.cpu_count() or 4))
+
+
+_MAX_CONCURRENT_PRODUCT_JOBS = _product_execution_capacity()
 _PRODUCT_HEARTBEAT_SECONDS = 30.0
 
 
@@ -1362,7 +1377,10 @@ def run(
                         host_actions,
                         runtime,
                         agent_version=__version__,
-                        metadata=_agent_metadata(config),
+                        metadata={
+                            **_agent_metadata(config),
+                            "max_concurrent_jobs": _MAX_CONCURRENT_PRODUCT_JOBS,
+                        },
                         status="busy" if has_active_jobs else "online",
                     )
                     # Project binding reconciliation uses the same remote
