@@ -489,6 +489,15 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
     }
 
     HANDLE job = create_kill_job();
+    // Without an owned job the Runtime cannot guarantee scoped cleanup.
+    if (ORDAX_RUNTIME_LAUNCHER && job == NULL) {
+        DWORD error = GetLastError();
+        CloseHandle(shutdown_event);
+        if (central_event != NULL) CloseHandle(central_event);
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
+        return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : (int)error;
+    }
     DWORD result = 0;
 
     if (!ORDAX_RUNTIME_LAUNCHER) {
@@ -530,6 +539,18 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
                 || WaitForSingleObject(shutdown_event, 0) == WAIT_OBJECT_0) {
                 result = 0;
                 break;
+            }
+
+            if (result == ERROR_TIMEOUT) {
+                // TerminateJobObject fences the entire stalled Python tree.
+                // A terminated job cannot be reused for the next generation.
+                CloseHandle(job);
+                job = create_kill_job();
+                if (job == NULL) {
+                    result = GetLastError();
+                    if (result == ERROR_SUCCESS) result = ERROR_GEN_FAILURE;
+                    break;
+                }
             }
 
             ULONGLONG elapsed = GetTickCount64() - started;
