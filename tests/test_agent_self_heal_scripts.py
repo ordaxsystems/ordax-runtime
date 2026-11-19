@@ -190,9 +190,27 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertIn("-ExecutionTimeLimit (New-TimeSpan -Minutes 40)", lifecycle)
         self.assertIn("Unresolved MCP update must be reconciled:", lifecycle)
         self.assertNotIn("Stop-VerifiedInstallerTree", lifecycle)
-        self.assertNotIn("ProcessStartInfo", lifecycle)
+        self.assertNotIn("$start.FileName = $installer", lifecycle)
         self.assertNotIn("$InstallerPath", lifecycle)
         self.assertNotIn("$InstallerSha256", lifecycle)
+
+    def test_mcp_scheduler_snapshot_uses_bounded_owner_queries(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        lifecycle = (
+            root / "scripts" / "windows" / "ordax-mcp-lifecycle.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("function Invoke-BoundedSchtasks", lifecycle)
+        self.assertIn("function Get-CanonicalScheduledTask", lifecycle)
+        self.assertIn("WaitForExit(10000)", lifecycle)
+        self.assertIn("Scheduler query exceeded its 10-second deadline", lifecycle)
+        self.assertIn("Scheduler task owner mismatch", lifecycle)
+        self.assertIn("Unexpected scheduler task actions", lifecycle)
+        self.assertIn("Inconsistent scheduler task states", lifecycle)
+        self.assertIn("Get-CanonicalScheduledTask -Name $upgradeTaskName", lifecycle)
+        self.assertIn("Get-CanonicalScheduledTask -Name $taskName", lifecycle)
+        self.assertIn("Canonical owner task not registered", lifecycle)
+        self.assertNotIn("Get-ScheduledTask -TaskName", lifecycle)
+        self.assertIn("Assert-OurTask $existing $lifecycle 'Launch'", lifecycle)
 
     def test_mcp_inno_preinstall_phase_trace_is_stage_specific(self) -> None:
         root = Path(__file__).resolve().parents[1]
