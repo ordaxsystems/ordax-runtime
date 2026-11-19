@@ -476,12 +476,17 @@ class ProductDeviceControlPlane:
     def heartbeat(self, actions: list[str], *, agent_version: str,
                   metadata: dict[str, Any] | None = None, status: str = "online",
                   last_error: str | None = None) -> None:
-        del metadata, last_error
+        del last_error
         payload = {
             "status": status,
             "agent_version": agent_version,
             "capabilities_digest": self._capabilities_digest(actions),
         }
+        capacity = (metadata or {}).get("max_concurrent_jobs")
+        if capacity is not None:
+            if type(capacity) is not int or not 1 <= capacity <= 32:
+                raise ValueError("Product Device heartbeat capacity must be 1..32")
+            payload["max_concurrent_jobs"] = capacity
         if self.runtime_kind == "ordax-os":
             # Existing Windows and legacy heartbeat payloads remain unchanged.
             payload["runtime_kind"] = self.runtime_kind
