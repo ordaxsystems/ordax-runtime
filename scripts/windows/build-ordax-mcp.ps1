@@ -4,6 +4,7 @@ param(
   [string]$OutputDirectory = "",
   [string]$PlatformSource = "",
   [string]$PythonVersion = "3.12.10",
+  [string]$InnoCompilerPath = "",
   [ValidateSet("validation-candidate","production")]
   [string]$ControlPlaneEnvironment = "validation-candidate"
 )
@@ -159,14 +160,24 @@ $manifest | ConvertTo-Json -Depth 9 | Set-Content (Join-Path $stage "product-man
 if (Test-Path (Join-Path $stage "presentation")) { throw "Studio presentation leaked into independent MCP distribution" }
 # Accept official machine-wide or user-scoped Inno Setup installations.
 # Never substitute a downloaded compiler or an unverified executable.
-$innoCandidates = @(
-  (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
-  (Join-Path "${env:ProgramFiles(x86)}" "Inno Setup 6\ISCC.exe")
-  (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
-)
-$inno = $innoCandidates | Where-Object {
-  $_ -and (Test-Path -LiteralPath $_ -PathType Leaf)
-} | Select-Object -First 1
+if ($InnoCompilerPath) {
+  # CI provides the already-hash-verified official compiler's exact path.
+  # Never fall back to a potentially outdated ISCC found via PATH.
+  if (-not [IO.Path]::IsPathRooted($InnoCompilerPath) -or
+      -not (Test-Path -LiteralPath $InnoCompilerPath -PathType Leaf)) {
+    throw "Explicit pinned Inno Setup compiler is missing"
+  }
+  $inno = [IO.Path]::GetFullPath($InnoCompilerPath)
+} else {
+  $innoCandidates = @(
+    (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+    (Join-Path "${env:ProgramFiles(x86)}" "Inno Setup 6\ISCC.exe")
+    (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+  )
+  $inno = $innoCandidates | Where-Object {
+    $_ -and (Test-Path -LiteralPath $_ -PathType Leaf)
+  } | Select-Object -First 1
+}
 if (-not $inno) { throw "Inno Setup 6 required" }
 & $inno "/DStageDir=$stage" "/DAppVersion=$packageVersion" "/DOutputDir=$OutputDirectory" (Join-Path $root "packaging\windows\ordax-mcp.iss")
 if ($LASTEXITCODE -ne 0) { throw "OrdaX MCP candidate Inno packaging failed" }
