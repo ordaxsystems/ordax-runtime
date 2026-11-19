@@ -102,6 +102,65 @@ def _process_is_running(pid: int) -> bool:
     return True
 
 
+def _windows_blender_graphics_error_for_pid(pid: int) -> dict[str, str] | None:
+    """Detect only the Blender-owned GPU-incompatible startup dialog.
+
+    No GPU vendor assumptions, synthetic OpenGL capability or other process
+    termination: diagnostics come from the exact new Blender PID's window.
+    """
+    if os.name != "nt" or not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        callback_type = ctypes.WINFUNCTYPE(
+            ctypes.c_bool, wintypes.HWND, wintypes.LPARAM,
+        )
+        user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+        user32.GetWindowThreadProcessId.argtypes = [
+            wintypes.HWND, ctypes.POINTER(wintypes.DWORD),
+        ]
+        user32.GetWindowTextW.argtypes = [
+            wintypes.HWND, ctypes.c_wchar_p, ctypes.c_int,
+        ]
+        user32.EnumChildWindows.argtypes = [
+            wintypes.HWND, callback_type, wintypes.LPARAM,
+        ]
+        details: dict[str, str] = {}
+
+        def read_title(hwnd) -> str:
+            text = ctypes.create_unicode_buffer(1024)
+            user32.GetWindowTextW(hwnd, text, len(text))
+            return text.value.strip()
+
+        @callback_type
+        def enumerate_child(hwnd, unused_lparam):
+            text = read_title(hwnd)
+            if "OpenGL" in text and "required" in text:
+                details["message"] = text[:512]
+            return True
+
+        @callback_type
+        def enumerate_window(hwnd, unused_lparam):
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value != pid:
+                return True
+            title = read_title(hwnd)
+            if title != "Blender - Unsupported Graphics Card Configuration":
+                return True
+            details["title"] = title
+            user32.EnumChildWindows(hwnd, enumerate_child, 0)
+            return False
+
+        user32.EnumWindows(enumerate_window, 0)
+        return details if "title" in details else None
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
 class BlenderLiveBridge:
     """File-protocol bridge to one visible Blender session per registered project."""
 
@@ -346,6 +405,7 @@ class BlenderLiveBridge:
             )
 
         deadline = time.monotonic() + max(3.0, wait_seconds)
+        next_graphics_probe = 0.0
         while time.monotonic() < deadline:
             if self.presence_is_fresh():
                 data = self.status()
@@ -374,6 +434,33 @@ class BlenderLiveBridge:
                         "log_file": str(startup_log),
                     },
                 )
+            now = time.monotonic()
+            if now >= next_graphics_probe:
+                next_graphics_probe = now + 1.0
+                graphics_error = _windows_blender_graphics_error_for_pid(process.pid)
+                if graphics_error is not None:
+                    # This exact process was launched by this action and has
+                    # not opened a scene. Do not leave an orphaned modal.
+                    try:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=2.0)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=2.0)
+                    except (OSError, ValueError, subprocess.TimeoutExpired):
+                        pass
+                    return ActionResult(
+                        False,
+                        "Blender requires a graphics driver with OpenGL 4.3 or higher; the visible companion did not start",
+                        {
+                            "error_code": "blender_graphics_unsupported",
+                            "pid": process.pid,
+                            "log_file": str(startup_log),
+                            "graphics_dialog": graphics_error,
+                            "retryable_on_this_gpu": False,
+                        },
+                    )
             time.sleep(0.10)
 
         return ActionResult(
