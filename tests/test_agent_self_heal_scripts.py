@@ -196,7 +196,7 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertIn("[Diagnostics.ProcessStartInfo]::new()", lifecycle)
         self.assertIn("$start.UseShellExecute = $false", lifecycle)
         self.assertIn("$start.CreateNoWindow = $true", lifecycle)
-        self.assertIn("$process = [Diagnostics.Process]::Start($start)", lifecycle)
+        self.assertIn("$process = $startDelegate.EndInvoke($startAsync)", lifecycle)
         self.assertNotIn("$process = Start-Process -FilePath $installer", lifecycle)
 
         self.assertIn("Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer", lifecycle)
