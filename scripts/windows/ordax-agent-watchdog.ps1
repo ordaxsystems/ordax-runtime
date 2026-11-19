@@ -80,11 +80,10 @@ function Invoke-BoundedScheduledTask {
     if ($Name -ne $RestartTaskName -and $Name -ne 'OrdaX MCP Verified Upgrade') {
         return @{ ok = $false; state = ''; timed_out = $false }
     }
-    $escaped = $Name.Replace("'", "''")
     $command = switch ($Operation) {
-        'State' { "\$ErrorActionPreference='Stop'; \$t=Get-ScheduledTask -TaskName '$escaped' -ErrorAction Stop; [Console]::Out.Write([string]\$t.State)" }
-        'Start' { "\$ErrorActionPreference='Stop'; Start-ScheduledTask -TaskName '$escaped' -ErrorAction Stop" }
-        'Stop' { "\$ErrorActionPreference='Stop'; Stop-ScheduledTask -TaskName '$escaped' -ErrorAction Stop" }
+        'State' { '$ErrorActionPreference="Stop"; $t=Get-ScheduledTask -TaskName "' + $Name + '" -ErrorAction Stop; [Console]::Out.Write([string]$t.State)' }
+        'Start' { '$ErrorActionPreference="Stop"; Start-ScheduledTask -TaskName "' + $Name + '" -ErrorAction Stop' }
+        'Stop' { '$ErrorActionPreference="Stop"; Stop-ScheduledTask -TaskName "' + $Name + '" -ErrorAction Stop' }
     }
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $info = New-Object System.Diagnostics.ProcessStartInfo
