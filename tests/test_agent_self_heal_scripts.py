@@ -194,6 +194,19 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertNotIn("$InstallerPath", lifecycle)
         self.assertNotIn("$InstallerSha256", lifecycle)
 
+    def test_mcp_dev_upgrade_handles_pt_br_disabled_scheduler_and_real_startup_budget(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(encoding="utf-8")
+        self.assertIn("'^(Disabled|Desativado|Desabilitado)$'", script)
+        self.assertIn("$activationClock = [Diagnostics.Stopwatch]::StartNew()", script)
+        self.assertIn("$activationClock.Elapsed.TotalMinutes -lt 12", script)
+        self.assertNotIn("for ($i = 0; $i -lt 60; $i++)", script)
+        self.assertIn("$status.local_dispatch_ready -eq $true", script)
+        self.assertIn("$status.runtime.transport_state -eq 'connected'", script)
+        self.assertIn("$status.runtime.product_dispatch_ready -eq $true", script)
+        self.assertIn("$journal.phase = 'recovery-required'", script)
+        self.assertIn("$journal.phase = 'committed'", script)
+
     def test_mcp_scheduler_snapshot_uses_bounded_owner_queries(self) -> None:
         root = Path(__file__).resolve().parents[1]
         lifecycle = (
