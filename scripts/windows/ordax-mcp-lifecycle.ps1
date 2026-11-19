@@ -5,8 +5,8 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('Install', 'Launch', 'Uninstall', 'Upgrade', 'ApplyUpgrade')]
     [string]$Operation,
-    [string]$InstallerPath = '',
-    [string]$InstallerSha256 = '',
+    [string]$PackagePath = '',
+    [string]$PackageSha256 = '',
     [string]$ExpectedCommit = '',
     [string]$TransactionId = ''
 )
@@ -79,43 +79,103 @@ function Save-Journal {
 }
 
 
-# Terminate only the verified installer process tree. Never terminate by PID
-# alone: PID reuse or a process launched outside this transaction must fail closed.
-function Stop-VerifiedInstallerTree {
-    param(
-        [Parameter(Mandatory = $true)][Diagnostics.Process]$Process,
-        [Parameter(Mandatory = $true)][string]$ExpectedPath
-    )
-    $live = Get-Process -Id $Process.Id -ErrorAction SilentlyContinue
-    if ($null -eq $live -or $live.HasExited) { return }
+# A single portable DEV package holds the exact installed Runtime stage.
+# Validate archive paths and the in-archive source manifest before ever
+# quiescing the installed MCP. This is not a second updater or identity owner.
+function Assert-DevArchive {
+    param([string]$ArchivePath, [string]$Commit, [string]$Destination = '')
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    $total = [long]0
+    $files = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     try {
-        $expected = [IO.Path]::GetFullPath($ExpectedPath)
-        $actual = [IO.Path]::GetFullPath([string]$live.Path)
-        if ($actual -ine $expected -or
-            $live.StartTime.ToUniversalTime().Ticks -ne $Process.StartTime.ToUniversalTime().Ticks) {
-            throw 'Installer PID identity or path changed'
+        if ($zip.Entries.Count -lt 10 -or $zip.Entries.Count -gt 30000) {
+            throw 'Portable DEV archive entry count invalid'
         }
-    } catch {
-        throw "Refusing to terminate unverified installer process: $($_.Exception.Message)"
-    }
-    $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
-    $killer = Start-Process -FilePath $taskkill -ArgumentList @('/PID', [string]$Process.Id, '/T', '/F') -WindowStyle Hidden -PassThru -ErrorAction Stop
-    try {
-        if (-not $killer.WaitForExit(12000)) {
-            $killer.Kill()
-            [void]$killer.WaitForExit(1500)
-            throw 'Verified installer process-tree stop timed out'
+        foreach ($entry in $zip.Entries) {
+            $relative = [string]$entry.FullName.Replace('/', '\')
+            if (!$relative -or $relative.StartsWith('\') -or
+                $relative -match '^[A-Za-z]:' -or $relative.Contains(':')) {
+                throw 'Portable DEV archive contains an absolute or invalid path'
+            }
+            $segments = $relative.TrimEnd('\').Split('\')
+            if ($segments -contains '..' -or $segments -contains '.') {
+                throw 'Portable DEV archive contains path traversal'
+            }
+            $type = ([int64]$entry.ExternalAttributes -shr 16) -band 0xF000
+            if ($type -eq 0xA000) { throw 'Portable DEV archive contains a symlink' }
+            if ($entry.Length -lt 0 -or $entry.Length -gt 200MB) {
+                throw 'Portable DEV archive contains an oversized entry'
+            }
+            $total += [long]$entry.Length
+            if ($total -gt 1024MB) { throw 'Portable DEV archive expansion exceeds 1 GiB' }
+            if (!$files.Add($relative)) { throw 'Portable DEV archive contains duplicate paths' }
+            if ($Destination) {
+                $full = [IO.Path]::GetFullPath((Join-Path $Destination $relative))
+                $prefix = [IO.Path]::GetFullPath($Destination).TrimEnd('\') + '\'
+                if (!$full.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)) {
+                    throw 'Portable DEV archive destination escaped staging root'
+                }
+            }
         }
-        $killer.Refresh()
-        if ($killer.ExitCode -ne 0 -and -not $Process.HasExited) {
-            throw "Verified installer process-tree stop failed exit code $($killer.ExitCode)"
+        foreach ($required in @(
+            'ORDAX Runtime.exe', 'product-manifest.json',
+            'ordax-mcp-lifecycle.ps1', 'ordax-upgrade-quiesce.ps1',
+            'runtime\python.exe', 'runtime\pythonw.exe'
+        )) {
+            if (!$files.Contains($required)) {
+                throw "Portable DEV archive required file absent: $required"
+            }
         }
-    } finally {
-        $killer.Dispose()
+        $manifestEntry = $zip.GetEntry('product-manifest.json')
+        if (!$manifestEntry -or $manifestEntry.Length -gt 65536) {
+            throw 'Portable DEV manifest unavailable'
+        }
+        $reader = [IO.StreamReader]::new($manifestEntry.Open(),[Text.Encoding]::UTF8)
+        try { $manifest = $reader.ReadToEnd() | ConvertFrom-Json -ErrorAction Stop }
+        finally { $reader.Dispose() }
+        if ($manifest.schema -cne 'ordax.mcp-windows-candidate/1' -or
+            $manifest.product -cne 'OrdaX MCP' -or
+            $manifest.runtime -cne 'ORDAX Runtime.exe' -or
+            $manifest.runtime_source_commit -cne $Commit -or
+            $manifest.studio_required -ne $false -or
+            $manifest.signed_public_release -ne $false) {
+            throw 'Portable DEV archive source/provenance does not match pinned commit'
+        }
+    } finally { $zip.Dispose() }
+    if ($Destination) {
+        if (Test-Path -LiteralPath $Destination) {
+            throw 'Portable DEV staging directory already exists'
+        }
+        [IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath,$Destination)
+        foreach ($required in @(
+            'ORDAX Runtime.exe', 'product-manifest.json',
+            'ordax-mcp-lifecycle.ps1', 'ordax-upgrade-quiesce.ps1',
+            'runtime\python.exe', 'runtime\pythonw.exe'
+        )) {
+            if (!(Test-Path -LiteralPath (Join-Path $Destination $required) -PathType Leaf)) {
+                throw "Portable DEV extraction missing file: $required"
+            }
+        }
     }
-    if (-not $Process.WaitForExit(8000)) {
-        throw 'Verified installer tree did not stop after termination request'
+}
+
+function Invoke-QuiesceRoot {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
+    if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
+        throw 'Installed Runtime quiesce controller missing'
     }
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -InstallRoot $Root -TimeoutSeconds 25
+    if ($LASTEXITCODE -ne 0) { throw "Runtime quiesce failed for owner root: $Root" }
+}
+
+function Invoke-RegisterAndLaunch {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-mcp-lifecycle.ps1'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Operation Install
+    if ($LASTEXITCODE -ne 0) { throw 'Canonical MCP scheduled recovery installation failed' }
+    Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
 }
 
 switch ($Operation) {
