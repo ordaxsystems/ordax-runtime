@@ -52,6 +52,17 @@ _PROJECT_SCOPE_ACTIONS = frozenset({
     "process.logs",
     "process.write_stdin",
     "process.stop",
+    # Blender actions share the attested native Project Catalog binding.
+    "blender.live_status",
+    "blender.live_scene_snapshot",
+    "blender.live_object_inspect",
+    "blender.live_modeling_schema",
+    "blender.live_start",
+    "blender.live_object_transform",
+    "blender.live_create_primitive",
+    "blender.live_rig_create",
+    "blender.live_material_apply",
+    "blender.live_save",
 })
 
 _PROJECT_BINDING_CONFIRM_ERRORS = frozenset({

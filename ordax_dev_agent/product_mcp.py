@@ -209,6 +209,7 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(name="blender_start", action="blender.live_start", effect="write", description="Adopt or start the project's visible Blender session without duplicate windows."),
     ProductMcpToolSpec(name="blender_transform", action="blender.live_object_transform", effect="write", description="Apply a validated transform to one Blender object."),
     ProductMcpToolSpec(name="blender_create_primitive", action="blender.live_create_primitive", effect="write", description="Create a bounded validated Blender primitive."),
+    ProductMcpToolSpec(name="blender_rig_create", action="blender.live_rig_create", effect="write", description="Create a validated armature with ordered parented bones."),
     ProductMcpToolSpec(name="blender_apply_material", action="blender.live_material_apply", effect="write", description="Apply a validated material to one Blender object."),
     ProductMcpToolSpec(name="blender_save", action="blender.live_save", effect="write", description="Save the granted Blender project."),
 )
