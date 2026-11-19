@@ -174,6 +174,12 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertIn("WaitForExit(12000)", lifecycle)
         self.assertIn("WaitForExit(8000)", lifecycle)
         self.assertIn("WaitForExit(900000)", lifecycle)
+        self.assertIn("[Diagnostics.ProcessStartInfo]::new()", lifecycle)
+        self.assertIn("$start.UseShellExecute = $false", lifecycle)
+        self.assertIn("$start.CreateNoWindow = $true", lifecycle)
+        self.assertIn("$process = [Diagnostics.Process]::Start($start)", lifecycle)
+        self.assertNotIn("$process = Start-Process -FilePath $installer", lifecycle)
+
         self.assertIn("Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer", lifecycle)
         self.assertIn("verified installer tree terminated", lifecycle)
         self.assertIn("verified installer cleanup failed", lifecycle)

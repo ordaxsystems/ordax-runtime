@@ -281,7 +281,19 @@ switch ($Operation) {
             $log = Join-Path $tx 'installer.log'
             # Wait on the exact Inno parent, not the persistent Runtime that
             # may be launched by the installer. Children are scoped to that PID.
-            $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/LOG=' + $log)) -PassThru -ErrorAction Stop
+            # Start-Process on Windows may wait for GUI input-idle before
+            # returning the Process handle. This can leave the installer
+            # running while the 15-minute WaitForExit bound has not begun.
+            # Direct Process.Start returns the exact child PID without waiting
+            # for the Inno wizard/message loop to reach input-idle.
+            $start = [Diagnostics.ProcessStartInfo]::new()
+            $start.FileName = $installer
+            $start.WorkingDirectory = $tx
+            $start.UseShellExecute = $false
+            $start.CreateNoWindow = $true
+            $start.Arguments = ('/VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/LOG={0}"' -f $log)
+            $process = [Diagnostics.Process]::Start($start)
+            if ($null -eq $process) { throw 'Unable to start verified Inno installer process' }
             if (!$process.WaitForExit(900000)) {
                 Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer
                 throw 'Installer exceeded the 15-minute bound; verified installer tree terminated'
