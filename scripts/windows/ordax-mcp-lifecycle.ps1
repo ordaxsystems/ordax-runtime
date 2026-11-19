@@ -198,7 +198,10 @@ function Register-CanonicalTask {
 </Task>
 "@
     [xml]$parsed = $xml
-    if ($parsed.Task.Actions.Exec.Count -gt 1) { throw 'Canonical scheduler XML has duplicate actions' }
+    $ns = [Xml.XmlNamespaceManager]::new($parsed.NameTable)
+    $ns.AddNamespace('t','http://schemas.microsoft.com/windows/2004/02/mit/task')
+    $exec = $parsed.SelectNodes('/t:Task/t:Actions/t:Exec',$ns)
+    if ($exec.Count -ne 1) { throw 'Canonical scheduler XML must have exactly one action' }
     New-Item -ItemType Directory -Path $updatesRoot -Force | Out-Null
     $temp = Join-Path $updatesRoot ('task.' + [guid]::NewGuid().ToString('N') + '.xml')
     [IO.File]::WriteAllText($temp,$xml,[Text.Encoding]::Unicode)
