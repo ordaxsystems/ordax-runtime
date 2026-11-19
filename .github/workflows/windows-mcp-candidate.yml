@@ -168,9 +168,13 @@ jobs:
           if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
             throw 'Pinned Inno Setup 6 compiler missing'
           }
-          $actual = (Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion
-          if ($actual -notlike '6.7.4*') { throw "Pinned Inno compiler version mismatch: $actual" }
-          Write-Host "ORDAX_INNO_COMPILER_PINNED_VERSION=$actual"
+          # ISCC.exe's VERSIONINFO reports 0.0.0.0 even when the actual
+          # compiler is newer; the official signed installer, release URL,
+          # SHA-256 and exact per-user installation path are authoritative.
+          if ((Get-Item -LiteralPath $compiler).Length -lt 50000) {
+            throw 'Pinned Inno Setup compiler executable is unexpectedly small'
+          }
+          Write-Host "ORDAX_INNO_COMPILER_PINNED_RELEASE=$($lock.version) SHA256=$sha"
       - name: Build standalone Runtime candidate without Studio checkout
         shell: pwsh
         run: |
