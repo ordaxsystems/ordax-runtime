@@ -199,6 +199,27 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertIn("$journal.phase = 'recovery-required'", lifecycle)
         self.assertNotIn("-ExecutionTimeLimit (New-TimeSpan -Minutes 20)", lifecycle)
 
+    def test_mcp_inno_preinstall_phase_trace_is_stage_specific(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        inno = (root / "packaging" / "windows" / "ordax-mcp.iss").read_text(encoding="utf-8")
+        for marker in (
+            "ORDAX_MCP_INIT_ENTER",
+            "ORDAX_MCP_INIT_READY",
+            "ORDAX_MCP_INIT_REJECTED",
+            "ORDAX_MCP_QUIESCE_ENTER",
+            "ORDAX_MCP_QUIESCE_SCRIPT_MISSING",
+            "ORDAX_MCP_QUIESCE_EXEC_ENTER",
+            "ORDAX_MCP_QUIESCE_OK exit=",
+            "ORDAX_MCP_QUIESCE_FAILED exit=",
+            "ORDAX_MCP_PREPARE_ENTER",
+            "ORDAX_MCP_PREPARE_READY",
+            "ORDAX_MCP_PREPARE_BLOCKED",
+        ):
+            self.assertIn(marker, inno)
+        self.assertIn("ewWaitUntilTerminated, Code", inno)
+        self.assertIn("ORDAX_MCP_UNSAFE_SELF_UPGRADE_BLOCKED", inno)
+        self.assertLess(inno.index("ORDAX_MCP_QUIESCE_EXEC_ENTER"), inno.index("ORDAX_MCP_QUIESCE_OK exit="))
+
     def test_external_bootstrap_restarts_unexpected_clean_agent_exit(self) -> None:
         root = Path(__file__).resolve().parents[1]
         bootstrap = (
