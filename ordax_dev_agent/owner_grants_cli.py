@@ -242,7 +242,15 @@ def perform(args: argparse.Namespace, token: str, remote: ProductRemoteClient,
         revision = previous.get("revision") if isinstance(previous, dict) else None
         if not isinstance(revision, str) or not revision:
             raise ValueError("computer_access_revision_unavailable")
-        updated = policy_updater(local, {
+        # Owner/Development opt-in is idempotent. Repeating the canonical
+        # command must not churn the local policy revision or notify watchers
+        # when Full Access is already effective. Remote grants remain the
+        # independent Platform authority and are still explicitly reconciled.
+        already_enabled = all(
+            previous.get(key) is True
+            for key in ("enabled", "full_access", "full_filesystem")
+        )
+        updated = previous if already_enabled else policy_updater(local, {
             "enabled": True,
             "full_access": True,
             "full_filesystem": True,
