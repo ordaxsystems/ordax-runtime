@@ -191,6 +191,8 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn('RESTART_SKIP canonical MCP upgrade active', watchdog)
         self.assertIn('OrdaX MCP Verified Upgrade', lifecycle)
         self.assertIn('WaitForExit(2000)', lifecycle)
+        self.assertIn('$startAsync.AsyncWaitHandle.WaitOne(30000)', lifecycle)
+        self.assertIn('Inno installer process creation stalled before PID', lifecycle)
         self.assertIn('$clock.Elapsed.TotalSeconds -ge 180', lifecycle)
         self.assertIn('$clock.Elapsed.TotalSeconds -ge 900', lifecycle)
         self.assertIn('Inno installer startup stalled before installation', lifecycle)
