@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('Install', 'Launch', 'Uninstall', 'Upgrade', 'ApplyUpgrade')]
+    [ValidateSet('Install', 'Launch', 'Uninstall', 'Upgrade', 'LaunchInstallerChild', 'ApplyUpgrade')]
     [string]$Operation,
     [string]$InstallerPath = '',
     [string]$InstallerSha256 = '',
@@ -254,6 +254,58 @@ switch ($Operation) {
         Start-ScheduledTask -TaskName $upgradeTaskName -ErrorAction Stop
         Write-Output ("ORDAX_MCP_UPGRADE_QUEUED transaction={0} journal={1}" -f $id, (Join-Path $tx 'journal.json'))
     }
+    'LaunchInstallerChild' {
+        # The one existing scheduled task owns this scoped child and journal.
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid installer child transaction ID' }
+        $tx = Join-Path $updatesRoot $TransactionId
+        if ([IO.Path]::GetFullPath($PSCommandPath) -ine (Join-Path $tx 'apply.ps1')) {
+            throw 'Installer child did not originate from its staged transaction'
+        }
+        $journal = Get-Content -LiteralPath (Join-Path $tx 'journal.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($journal.schema -cne 'ordax.mcp-upgrade/1' -or
+            $journal.transactionId -cne $TransactionId -or $journal.phase -cne 'applying' -or
+            $journal.sha256 -cnotmatch '^[0-9A-F]{64}$' -or
+            $journal.installerName -cnotmatch '^OrdaX-MCP-Setup-[0-9]+\.[0-9]+\.[0-9]+-x64\.exe$') {
+            throw 'Installer child transaction phase or identity changed'
+        }
+        $installer = Join-Path $tx $journal.installerName
+        $trace = Join-Path $tx 'installer-launch.log'
+        $utf8 = [Text.UTF8Encoding]::new($false)
+        [IO.File]::AppendAllText($trace, ("{0} CHILD_ENTER pid={1}" -f [DateTime]::UtcNow.ToString('o'), $PID) + [Environment]::NewLine, $utf8)
+        if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -cne $journal.sha256) {
+            throw 'Installer child payload hash mismatch'
+        }
+        $start = [Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = $installer
+        $start.WorkingDirectory = $tx
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.Arguments = ('/VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/LOG={0}"' -f (Join-Path $tx 'installer.log'))
+        $inno = $null
+        try {
+            [IO.File]::AppendAllText($trace, ("{0} INNO_START_ENTER" -f [DateTime]::UtcNow.ToString('o')) + [Environment]::NewLine, $utf8)
+            $inno = [Diagnostics.Process]::Start($start)
+            if ($null -eq $inno) { throw 'Inno Process.Start returned null' }
+            [IO.File]::AppendAllText($trace, ("{0} INNO_PID={1}" -f [DateTime]::UtcNow.ToString('o'), $inno.Id) + [Environment]::NewLine, $utf8)
+            if (!$inno.WaitForExit(960000)) {
+                Stop-VerifiedInstallerTree -Process $inno -ExpectedPath $installer
+                throw 'Installer child exceeded independent fallback deadline'
+            }
+            $inno.Refresh()
+            if ($inno.ExitCode -ne 0) { throw "Inno installer exited $($inno.ExitCode)" }
+            [IO.File]::AppendAllText($trace, ("{0} INNO_EXIT_OK" -f [DateTime]::UtcNow.ToString('o')) + [Environment]::NewLine, $utf8)
+        } catch {
+            $failure = $_.Exception.Message
+            if ($null -ne $inno -and -not $inno.HasExited) {
+                try { Stop-VerifiedInstallerTree -Process $inno -ExpectedPath $installer }
+                catch { $failure += "; scoped cleanup failed: $($_.Exception.Message)" }
+            }
+            [IO.File]::AppendAllText($trace, ("{0} CHILD_FAILED={1}" -f [DateTime]::UtcNow.ToString('o'), $failure) + [Environment]::NewLine, $utf8)
+            throw $failure
+        } finally {
+            if ($null -ne $inno) { $inno.Dispose() }
+        }
+    }
     'ApplyUpgrade' {
         if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid upgrade transaction ID' }
         $tx = Join-Path $updatesRoot $TransactionId
@@ -279,38 +331,19 @@ switch ($Operation) {
         $process = $null
         try {
             $log = Join-Path $tx 'installer.log'
-            # Wait on the exact Inno parent, not the persistent Runtime that
-            # may be launched by the installer. Children are scoped to that PID.
-            # The OS can block even the synchronous .NET Process.Start()
-            # call itself, before returning a PID; observed for >20 minutes
-            # on DESKTOP-4UFL03B, with no installer process or installer.log.
-            # Start that exact API on a CLR async delegate (not a second
-            # installer/owner) so the caller can bound the pre-PID phase.
-            # The existing 180s startup and 900s install watchdogs below
-            # still apply after the OS returns a verified Process handle.
-            $start = [Diagnostics.ProcessStartInfo]::new()
-            $start.FileName = $installer
-            $start.WorkingDirectory = $tx
-            $start.UseShellExecute = $false
-            $start.CreateNoWindow = $true
-            $start.Arguments = ('/VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/LOG={0}"' -f $log)
-            $startMethod = [Diagnostics.Process].GetMethod(
-                'Start', [Type[]]@([Diagnostics.ProcessStartInfo]))
-            $startDelegate = [Delegate]::CreateDelegate(
-                [Func[Diagnostics.ProcessStartInfo, Diagnostics.Process]], $startMethod)
-            $startAsync = $startDelegate.BeginInvoke($start, $null, $null)
-            try {
-                # Bound the OS process creation itself, not only WaitForExit.
-                # This consumes one installer attempt: never launch another
-                # process when the OS has not returned an installer PID.
-                if (!$startAsync.AsyncWaitHandle.WaitOne(30000)) {
-                    throw 'Inno installer process creation stalled before PID for 30 seconds'
-                }
-                $process = $startDelegate.EndInvoke($startAsync)
-            } finally {
-                $startAsync.AsyncWaitHandle.Close()
-            }
-            if ($null -eq $process) { throw 'Unable to start verified Inno installer process' }
+            # The OS can block Inno Process.Start before returning its PID.
+            # Run that call inside one transient PowerShell child of the same
+            # canonical transaction; the existing task bounds its exact PID
+            # and taskkill /T ends its complete Inno descendant tree on timeout.
+            $helperArgs = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -Operation LaunchInstallerChild -TransactionId {1}' -f $PSCommandPath, $TransactionId
+            $helperStart = [Diagnostics.ProcessStartInfo]::new()
+            $helperStart.FileName = $powershell
+            $helperStart.WorkingDirectory = $tx
+            $helperStart.UseShellExecute = $false
+            $helperStart.CreateNoWindow = $true
+            $helperStart.Arguments = $helperArgs
+            $process = [Diagnostics.Process]::Start($helperStart)
+            if ($null -eq $process) { throw 'Cannot start verified Inno helper' }
             # A silent Inno Setup may create its temporary child and then
             # become stuck before *any* file replacement. Three consecutive
             # physical DEV attempts did exactly this: a tiny installer.log
@@ -329,17 +362,17 @@ switch ($Operation) {
                     }).Count -gt 0
                 }
                 if (!$installationStarted -and $clock.Elapsed.TotalSeconds -ge 180) {
-                    Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer
+                    Stop-VerifiedInstallerTree -Process $process -ExpectedPath $powershell
                     throw 'Inno installer startup stalled before installation; verified installer tree terminated'
                 }
                 if ($clock.Elapsed.TotalSeconds -ge 900) {
-                    Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer
+                    Stop-VerifiedInstallerTree -Process $process -ExpectedPath $powershell
                     throw 'Installer exceeded the 15-minute bound; verified installer tree terminated'
                 }
             }
             $process.Refresh()
             if ($process.ExitCode -ne 0) {
-                throw "Inno installer failed exit code $($process.ExitCode)"
+                throw "Inno helper failed exit code $($process.ExitCode)"
             }
             $manifest = Get-Content -LiteralPath (Join-Path $installRoot 'product-manifest.json') -Raw | ConvertFrom-Json
             if ($manifest.product -cne 'OrdaX MCP' -or $manifest.runtime_source_commit -cne $journal.targetCommit) {
@@ -367,7 +400,7 @@ switch ($Operation) {
         } catch {
             $failure = $_.Exception.Message
             if ($null -ne $process -and -not $process.HasExited) {
-                try { Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer }
+                try { Stop-VerifiedInstallerTree -Process $process -ExpectedPath $powershell }
                 catch { $failure += "; verified installer cleanup failed: $($_.Exception.Message)" }
             }
             $journal.phase = 'recovery-required'
