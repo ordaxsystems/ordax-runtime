@@ -12,7 +12,7 @@
 #define ORDAX_MAX_PATH 32768
 // Only the native launcher supervises the pre-agent Python bootstrap.
 // The existing Python watchdog owns health after control-plane initialization.
-#define ORDAX_BOOTSTRAP_TIMEOUT_MS 300000UL
+#define ORDAX_BOOTSTRAP_TIMEOUT_MS 600000UL
 #define ORDAX_BOOTSTRAP_EVENT_ENV L"ORDAX_RUNTIME_BOOTSTRAP_EVENT"
 #define ORDAX_CENTRAL_EVENT L"Local\\ORDAXStudioOpenCentral"
 
