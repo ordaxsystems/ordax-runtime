@@ -57,7 +57,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="ordax-owner-grants", description="Manage authorized OrdaX MCP grants without the Studio UI")
     commands = parser.add_subparsers(dest="operation", required=True)
     for name in ("list", "authorize", "revoke", "diagnose", "dev-enable",
-                 "central-targets", "central-selections", "central-select"):
+                 "central-targets", "central-selections", "central-select",
+                 "central-dev-target", "central-dev-set", "central-dev-clear"):
         sub = commands.add_parser(name)
         sub.add_argument("--device", required=True, type=_uuid)
         if name != "list":
@@ -65,6 +66,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         if name == "central-select":
             sub.add_argument("--challenge", required=True, type=_uuid)
             sub.add_argument("--confirm", action="store_true", help="Confirm this exact Owner session-device choice")
+        if name in {"central-dev-set", "central-dev-clear"}:
+            sub.add_argument("--confirm", action="store_true",
+                             help="Confirm Owner preference for future DEV sessions")
         if name == "authorize":
             sub.add_argument("--profile", required=True, type=_profile)
             sub.add_argument("--space", type=_uuid)
@@ -74,6 +78,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         if name == "revoke":
             sub.add_argument("--group", type=_uuid, required=True)
     args = parser.parse_args(argv)
+    if args.operation in {"central-dev-target", "central-dev-set", "central-dev-clear"} and not args.client:
+        parser.error("DEV preference requires the exact OAuth client with --client")
+    if args.operation in {"central-dev-set", "central-dev-clear"} and not args.confirm:
+        parser.error("DEV preference mutation requires explicit --confirm")
     if args.operation == "central-select" and not args.client:
         parser.error("central-select requires the exact OAuth client with --client")
     if args.operation == "central-select" and not args.confirm:
@@ -202,6 +210,17 @@ def perform(args: argparse.Namespace, token: str, remote: ProductRemoteClient,
         return remote.owner_central_session_targets(token, client_id=client)
     if args.operation == "central-selections":
         return remote.owner_central_session_selections(token, client_id=client)
+    if args.operation == "central-dev-target":
+        return remote.owner_central_dev_target(token, client_id=client)
+    if args.operation in {"central-dev-set", "central-dev-clear"}:
+        # Single Owner preference for future conversations, no grant changes.
+        # A Runtime must still confirm each newly opened challenge.
+        if args.confirm is not True:
+            raise ValueError("owner_dev_preference_explicit_confirmation_required")
+        return remote.owner_set_central_dev_target(
+            token, client_id=client,
+            device_id=args.device if args.operation == "central-dev-set" else None,
+        )
     if args.operation == "central-select":
         # Only this explicit Owner command can ask Platform to choose the
         # previously granted device for one exact pending native challenge.
