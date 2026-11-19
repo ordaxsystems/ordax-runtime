@@ -78,6 +78,46 @@ function Save-Journal {
     }
 }
 
+
+# Terminate only the verified installer process tree. Never terminate by PID
+# alone: PID reuse or a process launched outside this transaction must fail closed.
+function Stop-VerifiedInstallerTree {
+    param(
+        [Parameter(Mandatory = $true)][Diagnostics.Process]$Process,
+        [Parameter(Mandatory = $true)][string]$ExpectedPath
+    )
+    $live = Get-Process -Id $Process.Id -ErrorAction SilentlyContinue
+    if ($null -eq $live -or $live.HasExited) { return }
+    try {
+        $expected = [IO.Path]::GetFullPath($ExpectedPath)
+        $actual = [IO.Path]::GetFullPath([string]$live.Path)
+        if ($actual -ine $expected -or
+            $live.StartTime.ToUniversalTime().Ticks -ne $Process.StartTime.ToUniversalTime().Ticks) {
+            throw 'Installer PID identity or path changed'
+        }
+    } catch {
+        throw "Refusing to terminate unverified installer process: $($_.Exception.Message)"
+    }
+    $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+    $killer = Start-Process -FilePath $taskkill -ArgumentList @('/PID', [string]$Process.Id, '/T', '/F') -WindowStyle Hidden -PassThru -ErrorAction Stop
+    try {
+        if (-not $killer.WaitForExit(12000)) {
+            $killer.Kill()
+            [void]$killer.WaitForExit(1500)
+            throw 'Verified installer process-tree stop timed out'
+        }
+        $killer.Refresh()
+        if ($killer.ExitCode -ne 0 -and -not $Process.HasExited) {
+            throw "Verified installer process-tree stop failed exit code $($killer.ExitCode)"
+        }
+    } finally {
+        $killer.Dispose()
+    }
+    if (-not $Process.WaitForExit(8000)) {
+        throw 'Verified installer tree did not stop after termination request'
+    }
+}
+
 switch ($Operation) {
     'Install' {
         Assert-InstalledSource
@@ -163,6 +203,21 @@ switch ($Operation) {
         if ((Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash -ine $InstallerSha256) {
             throw 'Installer SHA-256 differs from verified candidate'
         }
+        # An interrupted transaction is not permission to start another one.
+        # Reconcile it to recovery-required using confirmed on-disk state first.
+        if (Test-Path -LiteralPath $updatesRoot -PathType Container) {
+            foreach ($previous in @(Get-ChildItem -LiteralPath $updatesRoot -Directory -ErrorAction Stop)) {
+                $previousJournal = Join-Path $previous.FullName 'journal.json'
+                if (-not (Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
+                $prior = Get-Content -LiteralPath $previousJournal -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if ($prior.schema -cne 'ordax.mcp-upgrade/1') {
+                    throw "Unknown MCP update journal schema: $($previous.Name)"
+                }
+                if ($prior.phase -in @('staged', 'applying')) {
+                    throw "Unresolved MCP update must be reconciled before new installation: $($previous.Name)"
+                }
+            }
+        }
         $existing = Get-ScheduledTask -TaskName $upgradeTaskName -ErrorAction SilentlyContinue
         if ($existing -and $existing.State -eq 'Running') {
             throw 'Another canonical MCP upgrade is already active'
@@ -193,7 +248,7 @@ switch ($Operation) {
         $args = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -Operation ApplyUpgrade -TransactionId {1}' -f $applyScript, $id
         $action = New-ScheduledTaskAction -Execute $powershell -Argument $args -WorkingDirectory $tx
         $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1))
-        $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
+        $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 40)
         $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings -Principal (New-OwnerPrincipal)
         Register-ScheduledTask -TaskName $upgradeTaskName -InputObject $task -Force | Out-Null
         Start-ScheduledTask -TaskName $upgradeTaskName -ErrorAction Stop
@@ -221,13 +276,16 @@ switch ($Operation) {
         }
         $journal.phase = 'applying'
         Save-Journal $journalPath $journal
+        $process = $null
         try {
             $log = Join-Path $tx 'installer.log'
-            # Start-Process -Wait waits for the entire process tree, including the
-            # intentionally persistent Runtime launched by Inno [Run]. Wait for
-            # only the installer PID so successful upgrades can actually commit.
+            # Wait on the exact Inno parent, not the persistent Runtime that
+            # may be launched by the installer. Children are scoped to that PID.
             $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/LOG=' + $log)) -PassThru -ErrorAction Stop
-            if (!$process.WaitForExit(900000)) { throw 'Installer exceeded the 15-minute bound' }
+            if (!$process.WaitForExit(900000)) {
+                Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer
+                throw 'Installer exceeded the 15-minute bound; verified installer tree terminated'
+            }
             $process.Refresh()
             if ($process.ExitCode -ne 0) {
                 throw "Inno installer failed exit code $($process.ExitCode)"
@@ -256,10 +314,17 @@ switch ($Operation) {
             $journal.phase = 'committed'
             Save-Journal $journalPath $journal
         } catch {
+            $failure = $_.Exception.Message
+            if ($null -ne $process -and -not $process.HasExited) {
+                try { Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer }
+                catch { $failure += "; verified installer cleanup failed: $($_.Exception.Message)" }
+            }
             $journal.phase = 'recovery-required'
-            $journal | Add-Member -NotePropertyName error -NotePropertyValue $_.Exception.Message -Force
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
             Save-Journal $journalPath $journal
-            throw
+            throw $failure
+        } finally {
+            if ($null -ne $process) { $process.Dispose() }
         }
     }
 }
