@@ -64,6 +64,28 @@ O `ProductRemoteClient` do Runtime é o único cliente HTTP, usando:
 PostgreSQL/Platform permanece autoridade final, inclusive revogação.
 `device-native-terminal` e `full-computer-control` exigem Full Access ativado na política local. Ambos passam pela autoridade canônica PostgreSQL/Platform, com OAuth Owner explícito. O primeiro concede somente execução de terminal no dispositivo, sem GitHub/Space, e não habilita outras famílias de ações.
 
+## Preferência persistente de computador MCP no DEV (Platform PR #411)
+
+Depois que a Platform publicar a rota Owner canônica, o proprietário pode
+definir **uma vez** o computador do canal `development` para novas conversas
+do **cliente OAuth exato**, sem criar outro grant nem copiar a identidade de outro dispositivo:
+
+```powershell
+& '.\runtime\python.exe' -m ordax_dev_agent.owner_grants_cli central-dev-set --device <DEVICE_UUID> --client <CLIENT_UUID> --confirm
+& '.\runtime\python.exe' -m ordax_dev_agent.owner_grants_cli central-dev-target --device <DEVICE_UUID> --client <CLIENT_UUID>
+& '.\runtime\python.exe' -m ordax_dev_agent.owner_grants_cli central-dev-clear --device <DEVICE_UUID> --client <CLIENT_UUID> --confirm
+```
+
+O CLI autentica o Owner via PKCE existente, valida o cliente consentido e usa
+exclusivamente a API `/v3/owner/central-dev-target` da Platform. A preferência
+não muda o destino de uma conversa já atestada; para cada **nova** conversa,
+a Platform ainda cria o challenge nativo, exige confirmação pelo Runtime e
+revalida o grant antes de cada ação. Dispositivo Stable, revogado, de outro Owner,
+ou sem grant válido não pode ser selecionado automaticamente. Revogar a
+preferência não revoga grants já existentes. O parâmetro `--device` no comando
+de limpeza identifica o dispositivo cuja autoridade Owner será consultada, não
+um alvo a ser vinculado novamente.
+
 ## Escolha de dispositivo para sessão Central (fonte candidata, OFF)
 
 Os comandos abaixo pertencem **ao mesmo CLI e OAuth Owner PKCE**. São integração de
