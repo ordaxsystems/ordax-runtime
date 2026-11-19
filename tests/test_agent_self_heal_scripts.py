@@ -174,6 +174,14 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertIn("WaitForExit(12000)", lifecycle)
         self.assertIn("WaitForExit(8000)", lifecycle)
         self.assertIn("WaitForExit(2000)", lifecycle)
+        self.assertIn("$startDelegate.BeginInvoke($start, $null, $null)", lifecycle)
+        self.assertIn("$startAsync.AsyncWaitHandle.WaitOne(30000)", lifecycle)
+        self.assertIn("$startDelegate.EndInvoke($startAsync)", lifecycle)
+        self.assertIn("Inno installer process creation stalled before PID", lifecycle)
+        self.assertLess(
+            lifecycle.index("$startAsync.AsyncWaitHandle.WaitOne(30000)"),
+            lifecycle.index("WaitForExit(2000)"),
+        )
         self.assertIn("$clock = [Diagnostics.Stopwatch]::StartNew()", lifecycle)
         self.assertIn("$clock.Elapsed.TotalSeconds -ge 180", lifecycle)
         self.assertIn("$clock.Elapsed.TotalSeconds -ge 900", lifecycle)
