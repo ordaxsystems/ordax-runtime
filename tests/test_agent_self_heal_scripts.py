@@ -126,12 +126,21 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertIn("Stop-Process -InputObject $current -Force", watchdog)
         self.assertIn("Same-AgentProcess $current", watchdog)
         self.assertIn("Invoke-RestMethod -Uri $healthUrl", watchdog)
+        self.assertIn("function Invoke-BoundedScheduledTask", watchdog)
+        self.assertIn("WaitForExit(8000)", watchdog)
+        self.assertIn("$child.Kill(); [void]$child.WaitForExit(1000)", watchdog)
+        self.assertIn("TASK_TIMEOUT operation=$Operation name=$Name", watchdog)
+        self.assertIn("Name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,127}$'", watchdog)
         self.assertIn(
-            "Start-ScheduledTask -TaskName $RestartTaskName",
+            "Invoke-BoundedScheduledTask -Operation State -Name 'OrdaX MCP Verified Upgrade'",
             watchdog,
         )
-        self.assertIn('$task.State -ne "Running"', watchdog)
-        self.assertIn('$task.State -eq "Disabled"', watchdog)
+        self.assertIn("Invoke-BoundedScheduledTask -Operation State -Name $RestartTaskName", watchdog)
+        self.assertIn("Invoke-BoundedScheduledTask -Operation Start -Name $RestartTaskName", watchdog)
+        self.assertIn("Invoke-BoundedScheduledTask -Operation Stop -Name $RestartTaskName", watchdog)
+        self.assertIn('$task.state -ne "Running"', watchdog)
+        self.assertIn('$task.state -eq "Disabled"', watchdog)
+        self.assertNotIn("Get-ScheduledTask -TaskName $RestartTaskName", watchdog)
         self.assertNotIn("Get-CimInstance", watchdog)
         self.assertNotIn("taskkill.exe", watchdog)
 
