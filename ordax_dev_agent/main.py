@@ -41,6 +41,37 @@ _MAX_CONCURRENT_PRODUCT_JOBS = 4
 _PRODUCT_HEARTBEAT_SECONDS = 30.0
 
 
+def _signal_native_launcher_bootstrap_ready() -> None:
+    """Release the one-shot native startup guard; never grant device access.
+
+    The C launcher owns the child process and its timeout. Python signals
+    only after the canonical local control plane has been constructed.
+    Ordinary source runs and non-Windows hosts do not carry this event.
+    """
+    event_name = os.environ.pop("ORDAX_RUNTIME_BOOTSTRAP_EVENT", "")
+    if not event_name:
+        return
+    if os.name != "nt" or not event_name.startswith("Local\\OrdaXRuntimeBootstrap_"):
+        raise RuntimeError("Invalid native bootstrap event")
+    import ctypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenEventW.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p]
+    kernel.OpenEventW.restype = ctypes.c_void_p
+    kernel.SetEvent.argtypes = [ctypes.c_void_p]
+    kernel.SetEvent.restype = ctypes.c_int
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel.CloseHandle.restype = ctypes.c_int
+    handle = kernel.OpenEventW(0x0002, False, event_name)  # EVENT_MODIFY_STATE
+    if not handle:
+        raise OSError(ctypes.get_last_error(), "Native bootstrap event is unavailable")
+    try:
+        if not kernel.SetEvent(handle):
+            raise OSError(ctypes.get_last_error(), "Native bootstrap acknowledgement failed")
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def _startup_log(config: AgentConfig | None, message: str) -> None:
     try:
         if config is not None:
@@ -1172,6 +1203,7 @@ def run(
         close_status_server()
         raise
     _startup_log(config, "CONTROL_PLANE_READY")
+    _signal_native_launcher_bootstrap_ready()
 
     def close_remote_control() -> None:
         # Normal exit and early Native revocation share the same cleanup.

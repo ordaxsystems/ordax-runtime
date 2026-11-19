@@ -10,6 +10,10 @@
 #endif
 
 #define ORDAX_MAX_PATH 32768
+// Only the native launcher supervises the pre-agent Python bootstrap.
+// The existing Python watchdog owns health after control-plane initialization.
+#define ORDAX_BOOTSTRAP_TIMEOUT_MS 600000UL
+#define ORDAX_BOOTSTRAP_EVENT_ENV L"ORDAX_RUNTIME_BOOTSTRAP_EVENT"
 #define ORDAX_CENTRAL_EVENT L"Local\\ORDAXStudioOpenCentral"
 
 // WinMain's lpCmdLine is not a reliably tokenized argv array. Use the
@@ -285,6 +289,23 @@ static DWORD run_python_child(
         return ERROR_INSUFFICIENT_BUFFER;
     }
 
+    // Each Python child must acknowledge that its existing control plane is
+    // initialized. Without this, a process can be alive but stuck in imports
+    // forever; Python's own watchdog has not started at that point.
+    wchar_t bootstrap_name[128];
+    if (_snwprintf_s(
+            bootstrap_name, 128, _TRUNCATE,
+            L"Local\\OrdaXRuntimeBootstrap_%lu_%llu",
+            GetCurrentProcessId(), (unsigned long long)GetTickCount64()) < 0) {
+        return ERROR_INSUFFICIENT_BUFFER;
+    }
+    HANDLE bootstrap_event = CreateEventW(NULL, TRUE, FALSE, bootstrap_name);
+    if (bootstrap_event == NULL) return GetLastError();
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(bootstrap_event);
+        return ERROR_ALREADY_EXISTS;
+    }
+
     STARTUPINFOW startup;
     PROCESS_INFORMATION process;
     ZeroMemory(&startup, sizeof(startup));
@@ -292,22 +313,23 @@ static DWORD run_python_child(
     startup.cb = sizeof(startup);
 
     DWORD flags = CREATE_UNICODE_ENVIRONMENT;
-    if (hidden) {
-        flags |= CREATE_NO_WINDOW;
-    }
+    if (hidden) flags |= CREATE_NO_WINDOW;
 
-    if (!CreateProcessW(
-            NULL,
-            command,
-            NULL,
-            NULL,
-            FALSE,
-            flags,
-            NULL,
-            root,
-            &startup,
-            &process)) {
-        return GetLastError();
+    // This parent is single-threaded. Only the exact child inherits this
+    // one-shot name; remove it before any subsequent launcher operation.
+    if (!SetEnvironmentVariableW(ORDAX_BOOTSTRAP_EVENT_ENV, bootstrap_name)) {
+        DWORD error = GetLastError();
+        CloseHandle(bootstrap_event);
+        return error;
+    }
+    BOOL created = CreateProcessW(
+        NULL, command, NULL, NULL, FALSE, flags,
+        NULL, root, &startup, &process);
+    DWORD create_error = created ? ERROR_SUCCESS : GetLastError();
+    SetEnvironmentVariableW(ORDAX_BOOTSTRAP_EVENT_ENV, NULL);
+    if (!created) {
+        CloseHandle(bootstrap_event);
+        return create_error;
     }
 
     if (job != NULL && !AssignProcessToJobObject(job, process.hProcess)) {
@@ -316,30 +338,41 @@ static DWORD run_python_child(
         WaitForSingleObject(process.hProcess, 5000);
         CloseHandle(process.hThread);
         CloseHandle(process.hProcess);
+        CloseHandle(bootstrap_event);
         return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error;
     }
 
-    HANDLE wait_handles[2] = { process.hProcess, shutdown_event };
-    DWORD wait_result = WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
-    DWORD exit_code = 1;
+    // The startup budget is scoped to each Python PID, not to the launcher
+    // lifetime. If imports or device identity setup stall before the existing
+    // watchdog is live, terminate ONLY this job-owned child and retry.
+    HANDLE bootstrap_wait[3] = {
+        process.hProcess, shutdown_event, bootstrap_event
+    };
+    DWORD wait_result = WaitForMultipleObjects(
+        3, bootstrap_wait, FALSE, ORDAX_BOOTSTRAP_TIMEOUT_MS);
+    CloseHandle(bootstrap_event);
+    if (wait_result == WAIT_OBJECT_0 + 2) {
+        HANDLE running_wait[2] = { process.hProcess, shutdown_event };
+        wait_result = WaitForMultipleObjects(2, running_wait, FALSE, INFINITE);
+    }
 
-    if (wait_result == WAIT_OBJECT_0 + 1) {
-        if (job != NULL) {
-            TerminateJobObject(job, 0);
-        } else {
-            TerminateProcess(process.hProcess, 0);
-        }
+    DWORD exit_code = 1;
+    if (wait_result == WAIT_TIMEOUT) {
+        if (job != NULL) TerminateJobObject(job, ERROR_TIMEOUT);
+        else TerminateProcess(process.hProcess, ERROR_TIMEOUT);
+        WaitForSingleObject(process.hProcess, 5000);
+        exit_code = ERROR_TIMEOUT;
+    } else if (wait_result == WAIT_OBJECT_0 + 1) {
+        if (job != NULL) TerminateJobObject(job, 0);
+        else TerminateProcess(process.hProcess, 0);
         WaitForSingleObject(process.hProcess, 5000);
         exit_code = ERROR_CANCELLED;
     } else if (wait_result == WAIT_OBJECT_0) {
         GetExitCodeProcess(process.hProcess, &exit_code);
     } else {
         DWORD error = GetLastError();
-        if (job != NULL) {
-            TerminateJobObject(job, error);
-        } else {
-            TerminateProcess(process.hProcess, error);
-        }
+        if (job != NULL) TerminateJobObject(job, error);
+        else TerminateProcess(process.hProcess, error);
         WaitForSingleObject(process.hProcess, 5000);
         exit_code = error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error;
     }
@@ -456,6 +489,15 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
     }
 
     HANDLE job = create_kill_job();
+    // Without an owned job the Runtime cannot guarantee scoped cleanup.
+    if (ORDAX_RUNTIME_LAUNCHER && job == NULL) {
+        DWORD error = GetLastError();
+        CloseHandle(shutdown_event);
+        if (central_event != NULL) CloseHandle(central_event);
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
+        return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : (int)error;
+    }
     DWORD result = 0;
 
     if (!ORDAX_RUNTIME_LAUNCHER) {
@@ -497,6 +539,18 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_lin
                 || WaitForSingleObject(shutdown_event, 0) == WAIT_OBJECT_0) {
                 result = 0;
                 break;
+            }
+
+            if (result == ERROR_TIMEOUT) {
+                // TerminateJobObject fences the entire stalled Python tree.
+                // A terminated job cannot be reused for the next generation.
+                CloseHandle(job);
+                job = create_kill_job();
+                if (job == NULL) {
+                    result = GetLastError();
+                    if (result == ERROR_SUCCESS) result = ERROR_GEN_FAILURE;
+                    break;
+                }
             }
 
             ULONGLONG elapsed = GetTickCount64() - started;
