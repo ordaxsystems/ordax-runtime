@@ -128,12 +128,89 @@ function Get-CanonicalScheduledTask {
     }
 }
 
-function New-OwnerSettings {
-    return New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+# The same two canonical Windows tasks are owned through schtasks.exe.
+# PowerShell ScheduledTasks CIM cmdlets can hang indefinitely on the DEV host.
+function Invoke-CanonicalTaskAction {
+    param([string]$Name,[ValidateSet('Run','Enable','Disable','Delete')][string]$Action)
+    if ($Name -cnotin @($taskName,$upgradeTaskName)) { throw 'Unknown canonical scheduler task' }
+    $args = switch ($Action) {
+        'Run' { @('/Run','/TN',$Name) }
+        'Enable' { @('/Change','/TN',$Name,'/ENABLE') }
+        'Disable' { @('/Change','/TN',$Name,'/DISABLE') }
+        'Delete' { @('/Delete','/TN',$Name,'/F') }
+    }
+    $out = Invoke-BoundedSchtasks -Arguments $args
+    if ($out.ExitCode -ne 0) { throw "Canonical scheduler $Action failed for task: $Name" }
 }
 
-function New-OwnerPrincipal {
-    return New-ScheduledTaskPrincipal -UserId $owner -LogonType Interactive -RunLevel Limited
+function Register-CanonicalTask {
+    param(
+        [string]$Name, [string]$Script, [string]$Operation, [string]$WorkingDirectory,
+        [string]$TransactionId = ''
+    )
+    if ($Name -cnotin @($taskName,$upgradeTaskName)) { throw 'Unknown canonical scheduler registration' }
+    $isUpgrade = $Name -ceq $upgradeTaskName
+    if (($isUpgrade -and ($Operation -cne 'ApplyUpgrade' -or $TransactionId -cnotmatch '^[0-9a-f]{32}$')) -or
+        (!$isUpgrade -and ($Operation -cne 'Launch' -or $TransactionId))) {
+        throw 'Scheduler operation and transaction mismatch'
+    }
+    if (![IO.Path]::IsPathRooted($Script) -or ![IO.Path]::IsPathRooted($WorkingDirectory)) {
+        throw 'Canonical scheduler action paths must be absolute'
+    }
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $xmlEscape = { param([string]$value) [Security.SecurityElement]::Escape($value) }
+    $safeName = & $xmlEscape $Name
+    $safeUser = & $xmlEscape $owner
+    $safeSid = & $xmlEscape $sid
+    $safeCommand = & $xmlEscape $powershell
+    $args = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -Operation {1}' -f $Script, $Operation
+    if ($isUpgrade) { $args += ' -TransactionId ' + $TransactionId }
+    $safeArgs = & $xmlEscape $args
+    $safeDirectory = & $xmlEscape $WorkingDirectory
+    $startBoundary = [DateTimeOffset]::Now.AddMinutes(1).ToString('yyyy-MM-ddTHH:mm:sszzz')
+    if ($isUpgrade) {
+        $trigger = "<TimeTrigger><StartBoundary>$startBoundary</StartBoundary></TimeTrigger>"
+        $limit = 'PT40M'
+        $restart = ''
+        $description = ''
+    } else {
+        $trigger = "<LogonTrigger><UserId>$safeUser</UserId></LogonTrigger><TimeTrigger><StartBoundary>$startBoundary</StartBoundary><Repetition><Interval>PT1M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>true</StopAtDurationEnd></Repetition></TimeTrigger>"
+        $limit = 'PT0S'
+        $restart = '<RestartOnFailure><Count>999</Count><Interval>PT1M</Interval></RestartOnFailure>'
+        $description = '<Description>Single OrdaX MCP Runtime: automatic launcher recovery without a second agent</Description>'
+    }
+    $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>$description<URI>\$safeName</URI></RegistrationInfo>
+  <Principals><Principal id="Author"><UserId>$safeSid</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>$limit</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    $restart
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
+  </Settings>
+  <Triggers>$trigger</Triggers>
+  <Actions Context="Author"><Exec><Command>$safeCommand</Command><Arguments>$safeArgs</Arguments><WorkingDirectory>$safeDirectory</WorkingDirectory></Exec></Actions>
+</Task>
+"@
+    [xml]$parsed = $xml
+    if ($parsed.Task.Actions.Exec.Count -gt 1) { throw 'Canonical scheduler XML has duplicate actions' }
+    New-Item -ItemType Directory -Path $updatesRoot -Force | Out-Null
+    $temp = Join-Path $updatesRoot ('task.' + [guid]::NewGuid().ToString('N') + '.xml')
+    [IO.File]::WriteAllText($temp,$xml,[Text.Encoding]::Unicode)
+    try {
+        $result = Invoke-BoundedSchtasks -Arguments @('/Create','/F','/TN',$Name,'/XML',$temp)
+        if ($result.ExitCode -ne 0) { throw "Failed to register canonical scheduler task: $Name" }
+    } finally {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+    }
+    $actual = Get-CanonicalScheduledTask -Name $Name
+    if ($null -eq $actual) { throw "New canonical scheduler task is missing: $Name" }
+    Assert-OurTask $actual $Script $Operation
 }
 
 function Save-Journal {
@@ -256,7 +333,7 @@ function Invoke-RegisterAndLaunch {
     $script = Join-Path $Root 'ordax-mcp-lifecycle.ps1'
     & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Operation Install
     if ($LASTEXITCODE -ne 0) { throw 'Canonical MCP scheduled recovery installation failed' }
-    Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    Invoke-CanonicalTaskAction -Name $taskName -Action Run
 }
 
 switch ($Operation) {
@@ -264,14 +341,7 @@ switch ($Operation) {
         Assert-InstalledSource
         $existing = Get-CanonicalScheduledTask -Name $taskName
         Assert-OurTask $existing $lifecycle 'Launch'
-        $actionArgs = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -Operation Launch' -f $lifecycle
-        $action = New-ScheduledTaskAction -Execute $powershell -Argument $actionArgs -WorkingDirectory $installRoot
-        $triggers = @(
-            (New-ScheduledTaskTrigger -AtLogOn -User $owner),
-            (New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650))
-        )
-        $task = New-ScheduledTask -Action $action -Trigger $triggers -Settings (New-OwnerSettings) -Principal (New-OwnerPrincipal) -Description 'Single OrdaX MCP Runtime: automatic launcher recovery without a second agent'
-        Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null
+        Register-CanonicalTask -Name $taskName -Script $lifecycle -Operation Launch -WorkingDirectory $installRoot
         $registered = Get-CanonicalScheduledTask -Name $taskName
         if ($null -eq $registered) { throw 'Canonical owner task not registered' }
         Assert-OurTask $registered $lifecycle 'Launch'
@@ -312,7 +382,7 @@ switch ($Operation) {
         $existing = Get-CanonicalScheduledTask -Name $taskName
         Assert-OurTask $existing $lifecycle 'Launch'
         if ($null -ne $existing) {
-            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
+            Invoke-CanonicalTaskAction -Name $taskName -Action Delete
         }
         Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
         Write-Output 'ORDAX_MCP_LIFECYCLE_UNREGISTERED'
@@ -379,13 +449,8 @@ switch ($Operation) {
             targetCommit = $ExpectedCommit; updatedAt = ''
         }
         Save-Journal (Join-Path $tx 'journal.json') $journal
-        $args = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -Operation ApplyUpgrade -TransactionId {1}' -f $applyScript, $id
-        $action = New-ScheduledTaskAction -Execute $powershell -Argument $args -WorkingDirectory $tx
-        $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1))
-        $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 40)
-        $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings -Principal (New-OwnerPrincipal)
-        Register-ScheduledTask -TaskName $upgradeTaskName -InputObject $task -Force | Out-Null
-        Start-ScheduledTask -TaskName $upgradeTaskName -ErrorAction Stop
+        Register-CanonicalTask -Name $upgradeTaskName -Script $applyScript -Operation ApplyUpgrade -WorkingDirectory $tx -TransactionId $id
+        Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run
         Write-Output ("ORDAX_MCP_DEV_UPGRADE_QUEUED transaction={0} journal={1}" -f $id, (Join-Path $tx 'journal.json'))
     }
     'ApplyUpgrade' {
@@ -429,7 +494,7 @@ switch ($Operation) {
             $existing = Get-CanonicalScheduledTask -Name $taskName
             Assert-OurTask $existing $lifecycle 'Launch'
             if ($existing) {
-                Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
                 $ownerDisabled = $true
             }
             Invoke-QuiesceRoot -Root $installRoot
@@ -475,7 +540,7 @@ switch ($Operation) {
                 try {
                     if ($newMoved) {
                         $running = Get-CanonicalScheduledTask -Name $taskName
-                        if ($running) { Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null }
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
                         Invoke-QuiesceRoot -Root $installRoot
                         if (Test-Path -LiteralPath $failed) {
                             throw 'Previously failed DEV candidate directory exists'
@@ -492,8 +557,8 @@ switch ($Operation) {
                 }
             } elseif ($ownerDisabled) {
                 try {
-                    Enable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
-                    Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
                 } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
             }
             $journal.phase = 'recovery-required'
