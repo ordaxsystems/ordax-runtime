@@ -308,7 +308,34 @@ function Assert-DevArchive {
         if (Test-Path -LiteralPath $Destination) {
             throw 'Portable DEV staging directory already exists'
         }
-        [IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath,$Destination)
+        # The Task Scheduler background .NET extraction can advance only
+        # one copy buffer per several seconds on the DEV workstation. Reuse
+        # the already installed, trusted embedded Python in a *bounded child*
+        # rather than creating a second updater or changing any project data.
+        # The entire ZIP was validated above, before invoking this extractor.
+        $privatePython = Join-Path $installRoot 'runtime\python.exe'
+        if (!(Test-Path -LiteralPath $privatePython -PathType Leaf)) {
+            throw 'Installed private Runtime Python unavailable for archive extraction'
+        }
+        $extractCode = 'import sys,zipfile;zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])'
+        $start = [Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = $privatePython
+        $start.Arguments = '-I -c "' + $extractCode + '" "' + $ArchivePath + '" "' + $Destination + '"'
+        $start.WorkingDirectory = $installRoot
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $child = [Diagnostics.Process]::Start($start)
+        if ($null -eq $child) { throw 'Portable DEV archive extractor did not start' }
+        try {
+            if (!$child.WaitForExit(180000)) {
+                $child.Kill()
+                [void]$child.WaitForExit(5000)
+                throw 'Portable DEV archive extraction exceeded its 180-second deadline'
+            }
+            if ($child.ExitCode -ne 0) {
+                throw "Portable DEV archive extraction failed with exit code $($child.ExitCode)"
+            }
+        } finally { $child.Dispose() }
         foreach ($required in @(
             'ORDAX Runtime.exe', 'product-manifest.json',
             'ordax-mcp-lifecycle.ps1', 'ordax-upgrade-quiesce.ps1',
