@@ -47,6 +47,87 @@ function Assert-OurTask {
     }
 }
 
+function Invoke-BoundedSchtasks {
+    param([string[]]$Arguments)
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+    $start.Arguments = ($Arguments | ForEach-Object { '"' + $_.Replace('"','\"') + '"' }) -join ' '
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $enc = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+    $start.StandardOutputEncoding = $enc
+    $start.StandardErrorEncoding = $enc
+    $process = [Diagnostics.Process]::Start($start)
+    if ($null -eq $process) { throw 'Scheduler query could not start' }
+    try {
+        if (!$process.WaitForExit(10000)) {
+            $process.Kill()
+            [void]$process.WaitForExit(2000)
+            throw 'Scheduler query exceeded its 10-second deadline'
+        }
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Stdout = $process.StandardOutput.ReadToEnd()
+            Stderr = $process.StandardError.ReadToEnd()
+        }
+    } finally { $process.Dispose() }
+}
+function Get-CanonicalScheduledTask {
+    param([string]$Name)
+    $xmlResult = Invoke-BoundedSchtasks -Arguments @('/Query','/TN',$Name,'/XML')
+    if ($xmlResult.ExitCode -ne 0) {
+        if ($xmlResult.ExitCode -eq 1 -and $xmlResult.Stderr -match '(?i)(cannot find|encontrar|does not exist)') {
+            return $null
+        }
+        throw "Scheduler task metadata unavailable: $Name"
+    }
+    [xml]$doc = $xmlResult.Stdout
+    $ns = [Xml.XmlNamespaceManager]::new($doc.NameTable)
+    $ns.AddNamespace('t','http://schemas.microsoft.com/windows/2004/02/mit/task')
+    $execNodes = $doc.SelectNodes('/t:Task/t:Actions/t:Exec',$ns)
+    if ($execNodes.Count -ne 1) { throw "Unexpected scheduler task actions: $Name" }
+    $commands = @($execNodes | ForEach-Object {
+        [pscustomobject]@{
+            Execute = $_.SelectSingleNode('t:Command',$ns).InnerText
+            Arguments = $_.SelectSingleNode('t:Arguments',$ns).InnerText
+        }
+    })
+    $principal = $doc.SelectSingleNode('/t:Task/t:Principals/t:Principal/t:UserId',$ns)
+    $selfSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    if ($null -eq $principal -or $principal.InnerText -cne $selfSid) {
+        throw "Scheduler task owner mismatch: $Name"
+    }
+    $stateResult = Invoke-BoundedSchtasks -Arguments @('/Query','/TN',$Name,'/FO','CSV','/V')
+    if ($stateResult.ExitCode -ne 0) { throw "Scheduler task state unavailable: $Name" }
+    $rows = @($stateResult.Stdout | ConvertFrom-Csv)
+    if ($rows.Count -lt 1) { throw "Scheduler task state result is empty: $Name" }
+    $stateValues = @()
+    foreach ($row in $rows) {
+        $fields = @($row.PSObject.Properties)
+        if ($fields.Count -lt 4 -or [string]$fields[1].Value -cne ('\' + $Name)) {
+            throw "Scheduler task state includes another task: $Name"
+        }
+        $stateValues += [string]$fields[3].Value
+    }
+    $uniqueStates = @($stateValues | Select-Object -Unique)
+    if ($uniqueStates.Count -ne 1) { throw "Inconsistent scheduler task states: $Name" }
+    $stateText = $uniqueStates[0]
+    $state = switch -Regex ($stateText) {
+        '^(Ready|Pronto)$' { 'Ready'; break }
+        '^(Running|Em execu)' { 'Running'; break }
+        '^(Disabled|Desativado)$' { 'Disabled'; break }
+        '^(Queued|Na fila)' { 'Queued'; break }
+        default { throw "Unknown scheduler task state: $Name" }
+    }
+    return [pscustomobject]@{
+        TaskName = $Name
+        State = $state
+        Actions = $commands
+    }
+}
+
 function New-OwnerSettings {
     return New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
 }
@@ -181,7 +262,7 @@ function Invoke-RegisterAndLaunch {
 switch ($Operation) {
     'Install' {
         Assert-InstalledSource
-        $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        $existing = Get-CanonicalScheduledTask -Name $taskName
         Assert-OurTask $existing $lifecycle 'Launch'
         $actionArgs = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -Operation Launch' -f $lifecycle
         $action = New-ScheduledTaskAction -Execute $powershell -Argument $actionArgs -WorkingDirectory $installRoot
@@ -191,7 +272,8 @@ switch ($Operation) {
         )
         $task = New-ScheduledTask -Action $action -Trigger $triggers -Settings (New-OwnerSettings) -Principal (New-OwnerPrincipal) -Description 'Single OrdaX MCP Runtime: automatic launcher recovery without a second agent'
         Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null
-        $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        $registered = Get-CanonicalScheduledTask -Name $taskName
+        if ($null -eq $registered) { throw 'Canonical owner task not registered' }
         Assert-OurTask $registered $lifecycle 'Launch'
         # The scheduled task is now the only autostart owner. Remove old logon-only fallback.
         Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
@@ -227,7 +309,7 @@ switch ($Operation) {
         }
     }
     'Uninstall' {
-        $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        $existing = Get-CanonicalScheduledTask -Name $taskName
         Assert-OurTask $existing $lifecycle 'Launch'
         if ($null -ne $existing) {
             Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
@@ -270,7 +352,7 @@ switch ($Operation) {
                 }
             }
         }
-        $existing = Get-ScheduledTask -TaskName $upgradeTaskName -ErrorAction SilentlyContinue
+        $existing = Get-CanonicalScheduledTask -Name $upgradeTaskName
         if ($existing -and $existing.State -eq 'Running') {
             throw 'Canonical MCP upgrade already running'
         }
@@ -344,7 +426,7 @@ switch ($Operation) {
             if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
                 throw 'DEV Runtime atomic activation requires same volume'
             }
-            $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            $existing = Get-CanonicalScheduledTask -Name $taskName
             Assert-OurTask $existing $lifecycle 'Launch'
             if ($existing) {
                 Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
@@ -392,7 +474,7 @@ switch ($Operation) {
             if ($oldMoved) {
                 try {
                     if ($newMoved) {
-                        $running = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                        $running = Get-CanonicalScheduledTask -Name $taskName
                         if ($running) { Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null }
                         Invoke-QuiesceRoot -Root $installRoot
                         if (Test-Path -LiteralPath $failed) {
