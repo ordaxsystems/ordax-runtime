@@ -81,6 +81,7 @@ Filename: "{app}\runtime\pythonw.exe"; Parameters: "-m ordax_dev_agent.owner_dev
 // contract and proof; this guard is deliberately temporary and fail-closed.
 function InitializeSetup(): Boolean;
 begin
+  Log('ORDAX_MCP_INIT_ENTER');
   Result := True;
   // Prevent self-update from terminating the process tree that spawned setup.
   // The verified upgrade handoff uses an independent Windows scheduled task.
@@ -97,6 +98,10 @@ begin
     SuppressibleMsgBox('Esta versao independente do OrdaX MCP ainda nao pode ser instalada em paralelo ao ORDAX Studio legado. A migracao do Runtime compartilhado requer um atualizador verificado. Nenhum dado ou instalacao existente foi modificado.', mbError, MB_OK, IDOK);
     Result := False;
   end;
+  if Result then
+    Log('ORDAX_MCP_INIT_READY')
+  else
+    Log('ORDAX_MCP_INIT_REJECTED');
 end;
 
 function QuiesceOwnedRuntime(const Root: String): Boolean;
@@ -104,14 +109,17 @@ var
   Code: Integer;
   Script: String;
 begin
+  Log('ORDAX_MCP_QUIESCE_ENTER');
   Script := AddBackslash(Root) + 'ordax-upgrade-quiesce.ps1';
   if not FileExists(Script) then
   begin
+    Log('ORDAX_MCP_QUIESCE_SCRIPT_MISSING');
     // First install, before the staged script exists, has nothing to stop.
     Result := not FileExists(AddBackslash(Root) + '{#RuntimeExe}');
     Exit;
   end;
   Code := -1;
+  Log('ORDAX_MCP_QUIESCE_EXEC_ENTER');
   Result := Exec(
     ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
@@ -119,7 +127,9 @@ begin
     '', SW_HIDE, ewWaitUntilTerminated, Code);
   Result := Result and (Code = 0);
   if not Result then
-    Log('ORDAX_MCP_QUIESCE_FAILED exit=' + IntToStr(Code));
+    Log('ORDAX_MCP_QUIESCE_FAILED exit=' + IntToStr(Code))
+  else
+    Log('ORDAX_MCP_QUIESCE_OK exit=' + IntToStr(Code));
 end;
 
 function RunMcpLifecycle(const Operation, Root: String): Boolean;
@@ -148,9 +158,14 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
+  Log('ORDAX_MCP_PREPARE_ENTER');
   Result := '';
   if not QuiesceOwnedRuntime(ExpandConstant('{app}')) then
     Result := 'Nao foi possivel encerrar o Runtime instalado com seguranca.';
+  if Result = '' then
+    Log('ORDAX_MCP_PREPARE_READY')
+  else
+    Log('ORDAX_MCP_PREPARE_BLOCKED');
 end;
 
 function InitializeUninstall(): Boolean;
