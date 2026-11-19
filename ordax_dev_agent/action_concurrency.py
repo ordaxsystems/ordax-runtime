@@ -36,8 +36,8 @@ _GUI_EXCLUSIVE_ACTIONS = frozenset({
 })
 
 # Observational operations do not mutate device state and must not inherit the
-# conservative global lock used for unknown action domains. They still consume
-# a bounded execution slot, so monitoring cannot starve the Runtime.
+# conservative global lock used for unknown action domains. They consume
+# bounded observation slots rather than competing with long-running jobs.
 _DEVICE_OBSERVATION_ACTIONS = frozenset({
     "computer.access_status",
     "computer.active_window",
@@ -116,9 +116,10 @@ class ActionConcurrencyLease:
 class ActionConcurrencyCoordinator:
     """Acquire only the locks required by one local action.
 
-    Ordinary actions occupy one of a bounded set of cross-process slots plus
-    resource-specific locks. Runtime replacement/repair acquires every slot, so
-    it remains exclusive without forcing unrelated work through one global lane.
+    State-changing actions occupy a bounded execution lane plus resource-specific
+    locks. Read-only device observations have a separate bounded lane, so long
+    commands cannot starve monitoring. Runtime replacement/repair acquires both
+    lanes, preserving exclusive replacement without a global FIFO queue.
     """
 
     def __init__(self, state_dir: Path, *, max_slots: int = _MAX_EXECUTION_SLOTS):
@@ -234,20 +235,26 @@ class ActionConcurrencyCoordinator:
         # expanding concurrency beyond a resource boundary we cannot identify.
         return True, ()
 
-    def _acquire_slots(self, *, exclusive: bool) -> list[ExecutionLock] | None:
+    def _acquire_slots(
+        self, *, exclusive: bool, observational: bool = False,
+    ) -> list[ExecutionLock] | None:
         acquired: list[ExecutionLock] = []
         if exclusive:
-            for index in range(self.max_slots):
-                lock = ExecutionLock(self.state_dir, f"execution-slot:{index}")
-                if not lock.acquire():
-                    for held in reversed(acquired):
-                        held.release()
-                    return None
-                acquired.append(lock)
+            # Global maintenance must exclude both ordinary and observation
+            # operations; do not let monitoring race Runtime replacement.
+            for lane in ("execution-slot", "observation-slot"):
+                for index in range(self.max_slots):
+                    lock = ExecutionLock(self.state_dir, f"{lane}:{index}")
+                    if not lock.acquire():
+                        for held in reversed(acquired):
+                            held.release()
+                        return None
+                    acquired.append(lock)
             return acquired
 
+        lane = "observation-slot" if observational else "execution-slot"
         for index in range(self.max_slots):
-            lock = ExecutionLock(self.state_dir, f"execution-slot:{index}")
+            lock = ExecutionLock(self.state_dir, f"{lane}:{index}")
             if lock.acquire():
                 return [lock]
         return None
@@ -278,7 +285,10 @@ class ActionConcurrencyCoordinator:
                     return None
                 process_locks.append(lock)
 
-            acquired_slots = self._acquire_slots(exclusive=exclusive)
+            acquired_slots = self._acquire_slots(
+                exclusive=exclusive,
+                observational=action in _DEVICE_OBSERVATION_ACTIONS,
+            )
             if acquired_slots is None:
                 return None
             slot_locks.extend(acquired_slots)
