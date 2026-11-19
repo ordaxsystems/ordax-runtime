@@ -76,6 +76,24 @@ class DeviceTerminalExecTests(unittest.TestCase):
             self.assertFalse(result.ok)
             runner.assert_not_called()
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows cmd.exe command-line quoting")
+    def test_windows_shell_preserves_quotes_around_existing_path(self):
+        # Reproduces the installed DEV bug: cmd.exe /s /c received a list
+        # with a quoted path as its final argument; the file existed, but
+        # the child saw literal quotes and silently skipped the IF body.
+        with tempfile.TemporaryDirectory(prefix="ORDAX shell quoted ") as root:
+            probe = Path(root) / "probe file.txt"
+            probe.write_text("present", encoding="utf-8")
+            result = self.actions.computer_terminal_exec({
+                "cwd": root,
+                "shell": True,
+                "command": f'if exist "{probe}" (echo ORDAX_QUOTED_PATH_OK)',
+            })
+        self.assertTrue(result.ok, result.summary)
+        self.assertIn("ORDAX_QUOTED_PATH_OK", result.data["stdout"])
+        self.assertEqual(result.data["returncode"], 0)
+        self.assertNotIn("command", result.data)
+
     def test_shell_command_and_argv_are_mutually_exclusive(self):
         with patch("ordax_dev_agent.developer_actions._run") as runner:
             result = self.actions.computer_terminal_exec({"argv": ["echo"], "command": "test", "shell": True})
