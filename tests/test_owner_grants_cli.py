@@ -39,6 +39,16 @@ class FakeOwner:
         self.calls.append(("revoke", token, kwargs))
         return {"ok": True}
 
+    def owner_central_dev_target(self, token, *, client_id):
+        self.calls.append(("dev-target", token, client_id))
+        return {"ok": True, "state": "preferred", "device_id": DEVICE}
+
+    def owner_set_central_dev_target(self, token, *, client_id, device_id):
+        self.calls.append(("dev-set", token, client_id, device_id))
+        return {"ok": True, "state": "preferred" if device_id else "cleared",
+                "device_id": device_id, "attested": False,
+                "dispatch_authorized": False}
+
 
 def canonical_diag_grants():
     return [
@@ -53,6 +63,32 @@ def canonical_diag_grants():
 
 
 class OwnerGrantsCliTests(unittest.TestCase):
+    def test_dev_target_preference_requires_exact_client_and_explicit_owner_choice(self):
+        for operation in ("central-dev-target", "central-dev-set", "central-dev-clear"):
+            args = [operation, "--device", DEVICE, "--client", CLIENT]
+            if operation != "central-dev-target":
+                args.append("--confirm")
+            parsed = parse_args(args)
+            remote = FakeOwner()
+            result = perform(parsed, "owner-pkce-token", remote)
+            self.assertTrue(result["ok"])
+            self.assertEqual(remote.calls[0][0], "authority")
+            if operation == "central-dev-target":
+                self.assertEqual(remote.calls[1], ("dev-target", "owner-pkce-token", CLIENT))
+                self.assertEqual(result["device_id"], DEVICE)
+            else:
+                self.assertEqual(remote.calls[1],
+                    ("dev-set", "owner-pkce-token", CLIENT,
+                     DEVICE if operation == "central-dev-set" else None))
+                self.assertFalse(result["dispatch_authorized"])
+                self.assertFalse(result["attested"])
+        for operation in ("central-dev-target", "central-dev-set", "central-dev-clear"):
+            with self.assertRaises(SystemExit):
+                parse_args([operation, "--device", DEVICE])
+        for operation in ("central-dev-set", "central-dev-clear"):
+            with self.assertRaises(SystemExit):
+                parse_args([operation, "--device", DEVICE, "--client", CLIENT])
+
     def test_device_scoped_grant_does_not_need_project_or_space(self):
         args = parse_args(["authorize", "--device", DEVICE, "--profile", "interactive-computer-control"])
         self.assertEqual((args.space, args.project, args.days), (None, None, 30))
