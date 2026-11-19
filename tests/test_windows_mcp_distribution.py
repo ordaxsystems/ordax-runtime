@@ -329,7 +329,8 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn("if ($sha -cne $lock.sha256)", workflow)
         self.assertIn("$sig.Status -ne 'Valid'", workflow)
         self.assertIn("$lock.publisher -cne 'Pyrsys B.V.'", workflow)
-        self.assertIn("Pinned Inno compiler version mismatch", workflow)
+        self.assertIn("ORDAX_INNO_COMPILER_PINNED_RELEASE", workflow)
+        self.assertIn("Pinned Inno Setup compiler executable is unexpectedly small", workflow)
         self.assertIn("Explicit pinned Inno Setup compiler is missing", builder)
         self.assertIn('[string]$InnoCompilerPath = ""', builder)
 
