@@ -143,6 +143,11 @@ _MATERIAL_CONTRACTS = _load_companion_asset_module(
 )
 _normalize_material_request = _MATERIAL_CONTRACTS.normalize_material_request
 
+_RIGGING_CONTRACTS = _load_companion_asset_module(
+    "blender_rigging_contracts.py", "_ordax_blender_rigging_contracts",
+)
+_normalize_rig_create = _RIGGING_CONTRACTS.normalize_rig_create
+
 CFG = _args()
 CONTROL_ROOT = Path(CFG.ordax_control_root).resolve()
 PROJECT_ROOT = Path(CFG.ordax_project_root).resolve()
@@ -171,6 +176,7 @@ CAPABILITIES = [
     "extract_region",
     "cleanup_orphans",
     "create_primitive",
+    "rig_create",
     "create_box_with_cutouts",
     "add_modifier",
     "surface_scatter",
@@ -1561,6 +1567,81 @@ def _modeling_create_primitive(command: dict) -> None:
         )
     finally:
         bm.free()
+
+
+def _rig_create(command: dict) -> None:
+    """Create an armature in the existing Blender scene, with local rollback."""
+    command_id = command["id"]
+    armature = None
+    obj = None
+    previous_active = None
+    selected_before = []
+    try:
+        _modeling_runtime_preconditions()
+        args = _normalize_rig_create(
+            command, transport_fields={"id", "operation"},
+        )
+        if bpy.data.objects.get(args["name"]) is not None:
+            raise ValueError("object name already exists; rig creation refused")
+        previous_active = bpy.context.view_layer.objects.active
+        selected_before = list(bpy.context.selected_objects)
+        armature = bpy.data.armatures.new(args["name"] + "_Data")
+        obj = bpy.data.objects.new(args["name"], armature)
+        bpy.context.scene.collection.objects.link(obj)
+        for selected in selected_before:
+            selected.select_set(False)
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode="EDIT")
+        created = {}
+        for entry in args["bones"]:
+            bone = armature.edit_bones.new(entry["name"])
+            bone.head = entry["head"]
+            bone.tail = entry["tail"]
+            if entry["parent"] is not None:
+                bone.parent = created[entry["parent"]]
+            created[entry["name"]] = bone
+        bpy.ops.object.mode_set(mode="OBJECT")
+        obj.location = args["location"]
+        bpy.context.view_layer.update()
+        _response(
+            command_id, True, "Blender armature created",
+            operation="rig_create", object=_object_details(obj),
+            bone_count=len(args["bones"]),
+            bones=[{"name": item["name"], "parent": item["parent"]} for item in args["bones"]],
+        )
+    except Exception as error:
+        if obj is not None and bpy.context.mode != "OBJECT":
+            try:
+                bpy.ops.object.mode_set(mode="OBJECT")
+            except Exception:
+                pass
+        if obj is not None:
+            try:
+                bpy.data.objects.remove(obj, do_unlink=True)
+            except Exception:
+                pass
+        if armature is not None and getattr(armature, "users", 0) == 0:
+            try:
+                bpy.data.armatures.remove(armature)
+            except Exception:
+                pass
+        _response(
+            command_id, False,
+            str(error) if isinstance(error, ValueError) else f"{type(error).__name__}: {error}",
+            operation="rig_create",
+        )
+    finally:
+        try:
+            for item in list(bpy.context.selected_objects):
+                item.select_set(False)
+            for item in selected_before:
+                if bpy.data.objects.get(item.name) is item:
+                    item.select_set(True)
+            if previous_active is not None and bpy.data.objects.get(previous_active.name) is previous_active:
+                bpy.context.view_layer.objects.active = previous_active
+        except Exception:
+            pass
 
 
 def _modeling_add_modifier(command: dict) -> None:
@@ -6757,6 +6838,8 @@ def _process(path: Path) -> None:
             _cleanup_orphans(command)
         elif operation == "create_primitive":
             _modeling_create_primitive(command)
+        elif operation == "rig_create":
+            _rig_create(command)
         elif operation == "create_box_with_cutouts":
             _create_box_with_cutouts(command)
         elif operation == "add_modifier":

@@ -1059,6 +1059,28 @@ def blender_create_primitive(device_id: str, project: str, name: str, primitive:
     return _invoke(device_id=device_id, action="blender.live_create_primitive", project=project, space_id=space_id, arguments=arguments)
 
 
+def blender_rig_create(
+    device_id: str,
+    project: str,
+    name: str,
+    bones: list[dict[str, Any]],
+    location: list[float] | None = None,
+    timeout_seconds: float = 60.0,
+    space_id: str | None = None,
+) -> dict[str, Any]:
+    """Use canonical Product MCP dispatch; this does not register a public tool."""
+    arguments: dict[str, Any] = {
+        "project": project, "name": name, "bones": bones,
+        "timeout_seconds": timeout_seconds,
+    }
+    if location is not None:
+        arguments["location"] = location
+    return _invoke(
+        device_id=device_id, action="blender.live_rig_create",
+        project=project, space_id=space_id, arguments=arguments,
+    )
+
+
 def blender_apply_material(device_id: str, project: str, material_name: str, object_name: str | None = None, ordax_object_id: str | None = None, base_color: list[float] | None = None, roughness: float = 0.4, metallic: float = 0.0, transmission: float = 0.0, alpha: float = 1.0, ior: float = 1.45, surface_render_method: str | None = None, transparency_overlap: bool = True, timeout_seconds: float = 30.0, space_id: str | None = None) -> dict[str, Any]:
     arguments: dict[str, Any] = {"project": project, "material_name": material_name, "roughness": roughness, "metallic": metallic, "transmission": transmission, "alpha": alpha, "ior": ior, "transparency_overlap": transparency_overlap, "timeout_seconds": timeout_seconds}
     values = {"object_name": object_name, "ordax_object_id": ordax_object_id, "base_color": base_color, "surface_render_method": surface_render_method}

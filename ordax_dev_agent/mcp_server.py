@@ -430,6 +430,20 @@ def add_primitive(
 
 
 @mcp.tool()
+def create_armature(
+    project: str | None = None,
+    name: str = "",
+    bones: list[dict] | None = None,
+    location: list[float] | None = None,
+) -> dict:
+    """Create a typed armature and parented bones in a live Blender project."""
+    args: dict = {"name": name, "bones": bones or []}
+    if location is not None:
+        args["location"] = location
+    return _blender_action("blender.live_rig_create", project, args)
+
+
+@mcp.tool()
 def modify_object(
     project: str | None = None,
     object_name: str = "",

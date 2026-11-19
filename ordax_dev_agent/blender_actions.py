@@ -24,6 +24,7 @@ from .assets.blender_modeling_contracts import (
     plan_modeling_operation,
 )
 from .assets.blender_material_contracts import normalize_material_request
+from .assets.blender_rigging_contracts import normalize_rig_create
 from .blender_asset_sources import polyhaven_file_manifest, search_polyhaven
 from .blender_adoption import BlenderAdoptionManager
 from .blender_live_bridge import BlenderLiveBridge, blender_companion_bundle_fingerprint
@@ -1166,6 +1167,21 @@ class BlenderActions:
             timeout_seconds=float(payload.get("timeout_seconds", 30)),
         )
 
+    def blender_live_rig_create(self, payload: dict[str, Any]) -> ActionResult:
+        """Validate armature creation and reuse the current project-scoped bridge."""
+        try:
+            args = normalize_rig_create(
+                payload, transport_fields={"project", "timeout_seconds"},
+            )
+            timeout = float(payload.get("timeout_seconds", 60))
+            if not math.isfinite(timeout) or not (1 <= timeout <= 300):
+                raise ValueError("timeout_seconds must be between 1 and 300")
+        except (TypeError, ValueError) as error:
+            return ActionResult(False, str(error))
+        return self._blender_live(payload).request(
+            "rig_create", args, timeout_seconds=timeout,
+        )
+
     def blender_live_add_modifier(self, payload: dict[str, Any]) -> ActionResult:
         try:
             plan = plan_modeling_operation("add_modifier", payload)
@@ -1558,6 +1574,7 @@ class BlenderActions:
             "extract_region": self.blender_live_extract_region,
             "cleanup_orphans": self.blender_live_cleanup_orphans,
             "create_primitive": self.blender_live_create_primitive,
+            "rig_create": self.blender_live_rig_create,
             "create_box_with_cutouts": self.blender_live_create_box_with_cutouts,
             "add_modifier": self.blender_live_add_modifier,
             "surface_scatter": self.blender_live_surface_scatter,
