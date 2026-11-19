@@ -27,7 +27,7 @@ class WindowsRuntimeSelfHealContractTests(unittest.TestCase):
     def test_native_launcher_bounds_stalled_python_before_agent_watchdog(self) -> None:
         launcher = (ROOT / "packaging/windows/ordax_launcher.c").read_text(encoding="utf-8")
         agent = (ROOT / "ordax_dev_agent/main.py").read_text(encoding="utf-8")
-        self.assertIn("ORDAX_BOOTSTRAP_TIMEOUT_MS 300000UL", launcher)
+        self.assertIn("ORDAX_BOOTSTRAP_TIMEOUT_MS 600000UL", launcher)
         self.assertIn("Local\\\\OrdaXRuntimeBootstrap_", launcher)
         self.assertIn("SetEnvironmentVariableW(ORDAX_BOOTSTRAP_EVENT_ENV, bootstrap_name)", launcher)
         self.assertIn("SetEnvironmentVariableW(ORDAX_BOOTSTRAP_EVENT_ENV, NULL)", launcher)
@@ -37,7 +37,7 @@ class WindowsRuntimeSelfHealContractTests(unittest.TestCase):
         self.assertIn("def _signal_native_launcher_bootstrap_ready", agent)
         self.assertIn('os.environ.pop("ORDAX_RUNTIME_BOOTSTRAP_EVENT", "")', agent)
         self.assertIn("kernel.SetEvent(handle)", agent)
-        self.assertIn('    _startup_log(config, "CONTROL_PLANE_READY")\\n    _signal_native_launcher_bootstrap_ready()', agent)
+        self.assertIn('    _startup_log(config, "CONTROL_PLANE_READY")' + chr(10) + '    _signal_native_launcher_bootstrap_ready()', agent)
         self.assertLess(agent.index('    _startup_log(config, "CONTROL_PLANE_READY")'),
                         agent.index('    _signal_native_launcher_bootstrap_ready()'))
         self.assertNotIn("ORDAX_RUNTIME_BOOTSTRAP_EVENT", (ROOT / "scripts/windows/ordax-agent-watchdog.ps1").read_text(encoding="utf-8"))
