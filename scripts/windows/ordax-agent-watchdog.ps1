@@ -97,7 +97,7 @@ function Invoke-BoundedScheduledTask {
     try {
         $child = [Diagnostics.Process]::Start($info)
         if (-not $child.WaitForExit(8000)) {
-            try { $child.Kill() } catch {}
+            try { $child.Kill(); [void]$child.WaitForExit(1000) } catch {}
             Write-WatchdogLog "TASK_TIMEOUT operation=$Operation name=$Name"
             return @{ ok = $false; state = ''; timed_out = $true }
         }
