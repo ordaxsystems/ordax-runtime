@@ -193,6 +193,17 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn('function Assert-DevArchive', lifecycle)
         self.assertIn('ordax.mcp-dev-upgrade/2', lifecycle)
         self.assertIn('Portable DEV archive expansion exceeds 1 GiB', lifecycle)
+        # Upgrade uses the same trusted embedded Python as the Runtime,
+        # in one bounded child. No second background updater or unbounded
+        # Task Scheduler .NET ZipFile extraction is permitted.
+        self.assertIn("Join-Path $installRoot 'runtime\\python.exe'", lifecycle)
+        self.assertIn("zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])", lifecycle)
+        self.assertIn("$child.WaitForExit(180000)", lifecycle)
+        self.assertIn("$child.Kill()", lifecycle)
+        self.assertNotIn(
+            "[IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath,$Destination)",
+            lifecycle,
+        )
         self.assertIn('[IO.Directory]::Move($installRoot,$previous)', lifecycle)
         self.assertIn('[IO.Directory]::Move($previous,$installRoot)', lifecycle)
         self.assertNotIn('Inno installer process creation stalled before PID', lifecycle)
