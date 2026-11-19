@@ -163,49 +163,36 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         )
         self.assertGreater(restart_index, exit_index)
 
-    def test_mcp_verified_upgrade_cleans_orphan_and_blocks_replay(self) -> None:
+    def test_mcp_portable_dev_upgrade_is_single_owner_atomic_and_recoverable(self) -> None:
         root = Path(__file__).resolve().parents[1]
         lifecycle = (
             root / "scripts" / "windows" / "ordax-mcp-lifecycle.ps1"
         ).read_text(encoding="utf-8")
-        self.assertIn("function Stop-VerifiedInstallerTree", lifecycle)
-        self.assertIn("Installer PID identity or path changed", lifecycle)
-        self.assertIn("Refusing to terminate unverified installer process", lifecycle)
-        self.assertIn("WaitForExit(12000)", lifecycle)
-        self.assertIn("WaitForExit(8000)", lifecycle)
-        self.assertIn("WaitForExit(2000)", lifecycle)
-        self.assertIn("$startDelegate.BeginInvoke($start, $null, $null)", lifecycle)
-        self.assertIn("$startAsync.AsyncWaitHandle.WaitOne(30000)", lifecycle)
-        self.assertIn("$startDelegate.EndInvoke($startAsync)", lifecycle)
-        self.assertIn("Inno installer process creation stalled before PID", lifecycle)
-        self.assertLess(
-            lifecycle.index("$startAsync.AsyncWaitHandle.WaitOne(30000)"),
-            lifecycle.index("WaitForExit(2000)"),
-        )
-        self.assertIn("$clock = [Diagnostics.Stopwatch]::StartNew()", lifecycle)
-        self.assertIn("$clock.Elapsed.TotalSeconds -ge 180", lifecycle)
-        self.assertIn("$clock.Elapsed.TotalSeconds -ge 900", lifecycle)
-        self.assertIn("Starting the installation process.", lifecycle)
-        self.assertIn("Get-Content -LiteralPath $log -TotalCount 50", lifecycle)
-        self.assertIn("Inno installer startup stalled before installation", lifecycle)
-        self.assertLess(
-            lifecycle.index("$clock.Elapsed.TotalSeconds -ge 180"),
-            lifecycle.index("$clock.Elapsed.TotalSeconds -ge 900"),
-        )
-        self.assertNotIn("WaitForExit(900000)", lifecycle)
-        self.assertIn("[Diagnostics.ProcessStartInfo]::new()", lifecycle)
-        self.assertIn("$start.UseShellExecute = $false", lifecycle)
-        self.assertIn("$start.CreateNoWindow = $true", lifecycle)
-        self.assertIn("$process = $startDelegate.EndInvoke($startAsync)", lifecycle)
-        self.assertNotIn("$process = Start-Process -FilePath $installer", lifecycle)
-
-        self.assertIn("Stop-VerifiedInstallerTree -Process $process -ExpectedPath $installer", lifecycle)
-        self.assertIn("verified installer tree terminated", lifecycle)
-        self.assertIn("verified installer cleanup failed", lifecycle)
-        self.assertIn("-ExecutionTimeLimit (New-TimeSpan -Minutes 40)", lifecycle)
-        self.assertIn("Unresolved MCP update must be reconciled before new installation", lifecycle)
+        builder = (root / "scripts/windows/build-ordax-mcp.ps1").read_text(encoding="utf-8")
+        self.assertIn("OrdaX-MCP-Dev-{0}.zip", lifecycle)
+        self.assertIn("OrdaX-MCP-Dev-{0}.zip", builder)
+        self.assertIn("function Assert-DevArchive", lifecycle)
+        self.assertIn("Portable DEV archive contains path traversal", lifecycle)
+        self.assertIn("Portable DEV archive contains a symlink", lifecycle)
+        self.assertIn("Portable DEV archive contains duplicate paths", lifecycle)
+        self.assertIn("Portable DEV archive expansion exceeds 1 GiB", lifecycle)
+        self.assertIn("Portable DEV archive source/provenance does not match pinned commit", lifecycle)
+        self.assertIn("Assert-OurTask $existing $lifecycle 'Launch'", lifecycle)
+        self.assertIn("Disable-ScheduledTask -TaskName $taskName", lifecycle)
+        self.assertIn("Invoke-QuiesceRoot -Root $installRoot", lifecycle)
+        self.assertIn("[IO.Directory]::Move($installRoot,$previous)", lifecycle)
+        self.assertIn("[IO.Directory]::Move($expanded,$installRoot)", lifecycle)
+        self.assertIn("Invoke-RegisterAndLaunch -Root $installRoot", lifecycle)
+        self.assertIn("New portable DEV MCP failed local and remote readiness", lifecycle)
+        self.assertIn("[IO.Directory]::Move($previous,$installRoot)", lifecycle)
+        self.assertIn("$journal.phase = 'committed'", lifecycle)
         self.assertIn("$journal.phase = 'recovery-required'", lifecycle)
-        self.assertNotIn("-ExecutionTimeLimit (New-TimeSpan -Minutes 20)", lifecycle)
+        self.assertIn("-ExecutionTimeLimit (New-TimeSpan -Minutes 40)", lifecycle)
+        self.assertIn("Unresolved MCP update must be reconciled:", lifecycle)
+        self.assertNotIn("Stop-VerifiedInstallerTree", lifecycle)
+        self.assertNotIn("ProcessStartInfo", lifecycle)
+        self.assertNotIn("$InstallerPath", lifecycle)
+        self.assertNotIn("$InstallerSha256", lifecycle)
 
     def test_mcp_inno_preinstall_phase_trace_is_stage_specific(self) -> None:
         root = Path(__file__).resolve().parents[1]

@@ -180,6 +180,32 @@ jobs:
         run: |
           .\scripts\windows\build-ordax-mcp.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\dist\mcp-windows" -PlatformSource "$env:GITHUB_WORKSPACE\.ordax\platform" -ControlPlaneEnvironment validation-candidate -InnoCompilerPath (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Independent OrdaX MCP candidate build failed' }
+      - name: Verify portable DEV archive uses the exact Runtime stage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archives = @(Get-ChildItem .\dist\mcp-windows\OrdaX-MCP-Dev-*.zip -File)
+          if ($archives.Count -ne 1 -or $archives[0].Name -cne "OrdaX-MCP-Dev-$env:GITHUB_SHA.zip") {
+            throw 'One exact main-SHA portable DEV archive required'
+          }
+          $sha = (Get-FileHash -LiteralPath $archives[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $probe = Join-Path $env:RUNNER_TEMP 'ordax-mcp-dev-zip-smoke'
+          New-Item -ItemType Directory -Force -Path $probe | Out-Null
+          Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath $probe -Force
+          $m = Get-Content (Join-Path $probe 'product-manifest.json') -Raw | ConvertFrom-Json
+          if ($m.product -cne 'OrdaX MCP' -or $m.schema -cne 'ordax.mcp-windows-candidate/1' -or
+              $m.runtime_source_commit -cne $env:GITHUB_SHA -or $m.studio_required -ne $false -or
+              $m.signed_public_release -ne $false -or
+              !(Test-Path (Join-Path $probe 'ORDAX Runtime.exe')) -or
+              !(Test-Path (Join-Path $probe 'ordax-mcp-lifecycle.ps1'))) {
+            throw 'Portable DEV archive missing exact MCP Runtime provenance'
+          }
+          & (Join-Path $probe 'runtime\python.exe') -m ordax_dev_agent.owner_grants_cli --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Portable DEV embedded Owner CLI broken' }
+          & .\scripts\windows\assert-runtime-package-capabilities.ps1 -PrivatePython (Join-Path $probe 'runtime\python.exe') -RuntimeRoot (Join-Path $probe 'runtime') -Phase staged
+          if ($LASTEXITCODE -ne 0) { throw 'Portable DEV Runtime capability proof failed' }
+          Write-Host "ORDAX_MCP_PORTABLE_DEV_ARCHIVE=PASS SHA256=$sha"
+
       - name: Verify installation, private Runtime, lifecycle, and uninstall
         shell: pwsh
         run: |
@@ -290,6 +316,13 @@ jobs:
           if (Test-Path -LiteralPath $shortcutPath) { throw 'MCP connect shortcut remained after uninstall' }
           if (Test-Path -LiteralPath $diagnosticShortcutPath) { throw 'MCP network diagnostic shortcut remained after uninstall' }
           Write-Host "ORDAX_MCP_STANDALONE_INSTALL_SMOKE=PASS SHA256=$hash"
+      - name: Retain portable DEV delivery from same validated Runtime stage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ordax-mcp-dev-portable-${{ github.sha }}
+          path: dist/mcp-windows/OrdaX-MCP-Dev-*.zip
+          if-no-files-found: error
+          retention-days: 3
       - name: Retain unsigned validation candidate (never publish public release)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
