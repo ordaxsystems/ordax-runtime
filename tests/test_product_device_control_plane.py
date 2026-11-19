@@ -431,10 +431,6 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
                 metadata={"max_concurrent_jobs": 12},
             )
             self.assertEqual(seen[-1]["max_concurrent_jobs"], 12)
-            self.assertNotIn("max_concurrent_jobs", {
-                key: value for key, value in seen[-1].items()
-                if key not in ("max_concurrent_jobs",)
-            })
             with self.assertRaises(ValueError):
                 plane.heartbeat(["agent.status"], agent_version="1.2.3",
                                 metadata={"max_concurrent_jobs": True})
