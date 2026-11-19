@@ -72,6 +72,22 @@ class OwnerDevelopmentAccessTests(unittest.TestCase):
         self.assertIsNone(grant["project_id"])
         self.assertIn("+00:00", grant["valid_until"])
 
+    def test_repeated_dev_enable_does_not_rewrite_already_enabled_local_policy(self):
+        def already_enabled(_config):
+            return {
+                "enabled": True, "full_access": True,
+                "full_filesystem": True, "revision": "unchanged",
+            }
+
+        result = self.perform(checker=already_enabled)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["local_policy"], {
+            "enabled": True, "full_access": True, "full_filesystem": True,
+        })
+        self.assertEqual(self.updates, [], "do not rewrite a fully enabled DEV policy")
+        self.assertEqual([call[0] for call in self.owner.calls], ["authority", "grant"],
+                         "reconcile the existing Platform grant independently")
+
     def test_cannot_change_another_computers_local_settings(self):
         with self.assertRaisesRegex(ValueError, "development_access_must_run_on_target_device"):
             self.perform(config=SimpleNamespace(device_id=DESKTOP))
