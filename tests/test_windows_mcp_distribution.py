@@ -2,6 +2,8 @@
 import json
 import re
 import subprocess
+import sys
+import zipfile
 import tempfile
 import tomllib
 import unittest
@@ -232,6 +234,36 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertNotIn("OrdaX Dev Agent.lnk", installer)
         self.assertNotIn("Register-ScheduledTask", installer)
         self.assertNotIn("DeleteFile", installer)
+
+    def test_portable_dev_extractor_reuses_private_python_with_bounded_parallel_files(self):
+        lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(
+            encoding="utf-8"
+        )
+        code = re.search(r"\\$extractCode = @'\\n([\\s\\S]*?)\\n'@", lifecycle)
+        self.assertIsNotNone(code, "embedded Python extractor missing")
+        compiled = compile(code.group(1), "<ordax-dev-extractor>", "exec")
+        self.assertIsNotNone(compiled)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "source.zip"
+            destination = root / "extracted"
+            with zipfile.ZipFile(archive, "w") as compressed:
+                for folder in range(5):
+                    for file_number in range(8):
+                        compressed.writestr(
+                            f"folder-{folder}/nested/file-{file_number}.txt",
+                            f"content-{folder}-{file_number}",
+                        )
+            finished = subprocess.run(
+                [sys.executable, "-I", "-c", code.group(1), str(archive), str(destination)],
+                capture_output=True, text=True, timeout=40, check=False,
+            )
+            self.assertEqual(finished.returncode, 0, finished.stderr)
+            self.assertEqual(
+                (destination / "folder-4/nested/file-7.txt").read_text(encoding="utf-8"),
+                "content-4-7",
+            )
+            self.assertEqual(len(list(destination.rglob("*.txt"))), 40)
 
     def test_dev_upgrade_releases_only_the_owned_scheduled_task_directory_lock(self):
         lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(
