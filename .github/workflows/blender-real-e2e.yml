@@ -1,0 +1,143 @@
+name: Blender 5.3 Real Companion E2E
+
+# No duplicate build/agent. Runs only on Blender code or this smoke's changes.
+on:
+  pull_request:
+    paths:
+      - "ordax_dev_agent/assets/blender_*.py"
+      - "ordax_dev_agent/blender_*.py"
+      - "tests/blender_real_rig_e2e.py"
+      - ".github/workflows/blender-real-e2e.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ordax_dev_agent/assets/blender_*.py"
+      - "ordax_dev_agent/blender_*.py"
+      - "tests/blender_real_rig_e2e.py"
+      - ".github/workflows/blender-real-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  blender-real-companion-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: "llvmpipe"
+    steps:
+      - name: Checkout exact Runtime source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Cache official Blender binary archive
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/blender-5.3.0-linux-x64.tar.xz
+          key: ordax-blender-official-5.3.0-linux-x64-v1
+
+      - name: Download and verify official Blender 5.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://download.blender.org/release/Blender5.3"
+          archive="$RUNNER_TEMP/blender-5.3.0-linux-x64.tar.xz"
+          checksums="$RUNNER_TEMP/blender-5.3.0.sha256"
+          curl -fsSL --retry 3 --connect-timeout 20 --max-time 180 "$base/blender-5.3.0.sha256" -o "$checksums"
+          if [ ! -f "$archive" ]; then
+            curl -fsSL --retry 3 --connect-timeout 20 --max-time 420 "$base/blender-5.3.0-linux-x64.tar.xz" -o "$archive"
+          fi
+          python3 - "$archive" "$checksums" <<'PY'
+          import hashlib
+          import pathlib
+          import re
+          import sys
+          archive = pathlib.Path(sys.argv[1])
+          sha_list = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+          matches = [
+              parts[0].lower()
+              for line in sha_list.splitlines()
+              if (parts := line.strip().split())
+              and len(parts) == 2
+              and parts[1].lstrip("*").endswith("blender-5.3.0-linux-x64.tar.xz")
+              and re.fullmatch(r"[0-9a-fA-F]{64}", parts[0])
+          ]
+          if len(matches) != 1:
+              raise SystemExit("Official Blender checksum unavailable or ambiguous")
+          with archive.open("rb") as stream:
+              digest = hashlib.file_digest(stream, "sha256").hexdigest()
+          if digest != matches[0]:
+              raise SystemExit("Official Blender SHA-256 mismatch")
+          print("BLENDER_OFFICIAL_SHA256=" + digest)
+          PY
+
+      - name: Prepare disposable CPU-only Blender runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libxi6 libxkbcommon0 libxxf86vm1 libxfixes3 libxrender1 libgl1 libegl1 libsm6 libx11-6
+          mkdir -p "$RUNNER_TEMP/blender-5.3" "$RUNNER_TEMP/blender-e2e"
+          tar -xJf "$RUNNER_TEMP/blender-5.3.0-linux-x64.tar.xz" -C "$RUNNER_TEMP/blender-5.3" --strip-components=1
+          "$RUNNER_TEMP/blender-5.3/blender" --background --version
+
+      - name: Real companion rig creation and negative controls
+        shell: bash
+        env:
+          ORDAX_BLENDER_REAL_E2E_PHASE: create
+          ORDAX_BLENDER_REAL_E2E_ROOT: ${{ runner.temp }}/blender-e2e
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=5s 100s \
+            "$RUNNER_TEMP/blender-5.3/blender" --background --factory-startup --python-exit-code 1 \
+            --python tests/blender_real_rig_e2e.py \
+            -- --ordax-control-root "$ORDAX_BLENDER_REAL_E2E_ROOT/control" \
+            --ordax-project-root "$ORDAX_BLENDER_REAL_E2E_ROOT" \
+            --ordax-scripts-root "$ORDAX_BLENDER_REAL_E2E_ROOT/scripts" \
+            --ordax-artifacts-root "$ORDAX_BLENDER_REAL_E2E_ROOT/artifacts" \
+            --ordax-project-slug "ordax-ci-blender-53-smoke"
+
+      - name: Reopen the actual .blend in another Blender process
+        shell: bash
+        env:
+          ORDAX_BLENDER_REAL_E2E_PHASE: verify
+          ORDAX_BLENDER_REAL_E2E_ROOT: ${{ runner.temp }}/blender-e2e
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=5s 100s \
+            "$RUNNER_TEMP/blender-5.3/blender" --background --python-exit-code 1 \
+            "$ORDAX_BLENDER_REAL_E2E_ROOT/ordax-rig-e2e.blend" \
+            --python tests/blender_real_rig_e2e.py \
+            -- --ordax-control-root "$ORDAX_BLENDER_REAL_E2E_ROOT/control" \
+            --ordax-project-root "$ORDAX_BLENDER_REAL_E2E_ROOT" \
+            --ordax-scripts-root "$ORDAX_BLENDER_REAL_E2E_ROOT/scripts" \
+            --ordax-artifacts-root "$ORDAX_BLENDER_REAL_E2E_ROOT/artifacts" \
+            --ordax-project-slug "ordax-ci-blender-53-smoke"
+          python3 - "$ORDAX_BLENDER_REAL_E2E_ROOT" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+          root = Path(sys.argv[1])
+          created = json.loads((root / "evidence-create.json").read_text())
+          reopened = json.loads((root / "evidence-verify.json").read_text())
+          if not (created["ok"] and reopened["ok"] and reopened["reopened"]):
+              raise SystemExit("Blender real E2E did not finish")
+          if created["saved_sha256"] != reopened["saved_sha256"]:
+              raise SystemExit("Saved/reopened .blend integrity mismatch")
+          print("ORDAX_REAL_BLENDER_E2E_VERIFIED_SHA256=" + reopened["saved_sha256"])
+          PY
+
+      - name: Publish only real scene and evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: blender-5-3-real-rig-e2e-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/blender-e2e/evidence-*.json
+            ${{ runner.temp }}/blender-e2e/ordax-rig-e2e.blend
+            ${{ runner.temp }}/blender-e2e/control/results/ci-*.json
