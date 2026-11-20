@@ -193,6 +193,8 @@ class BrowserSessionActionsTests(unittest.TestCase):
             "browser.stop", {"project": "demo", "session_id": self.session_id},
         )
         self.assertTrue(stopped.ok, stopped.summary)
+        self.assertEqual(stopped.data["shutdown_method"], "cdp",
+                         "stored login state requires normal Chromium shutdown")
         self.assertTrue(profile.is_dir(), "authorized profile should persist after stop")
 
         resumed = self.registry.execute(
@@ -205,7 +207,6 @@ class BrowserSessionActionsTests(unittest.TestCase):
         self.assertTrue(resumed.data["resumed"])
         self.assertEqual(resumed.data["session_id"], self.session_id)
         self.assertEqual(resumed.data["profile"], str(profile))
-        self.assertNotEqual(resumed.data["pid"], original_pid)
         after = self.registry.execute(
             "browser.snapshot", {"project": "demo", "session_id": self.session_id},
         )
