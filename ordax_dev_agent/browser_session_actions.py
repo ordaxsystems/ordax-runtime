@@ -866,7 +866,7 @@ class BrowserSessionActions:
             details = _http_json(f"http://127.0.0.1:{port}/json/version", timeout=2.0)
             target = str(details.get("webSocketDebuggerUrl") or "")
             parsed = urllib.parse.urlsplit(target)
-            if (parsed.scheme != "ws" or parsed.hostname != "127.0.0.1"
+            if (parsed.scheme != "ws" or parsed.hostname not in {"127.0.0.1", "localhost"}
                 or parsed.port != port or not parsed.path.startswith("/devtools/browser/")):
                 return False
             from websockets.sync.client import connect
