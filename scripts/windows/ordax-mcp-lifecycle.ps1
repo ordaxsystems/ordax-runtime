@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('Install', 'Launch', 'Uninstall', 'Upgrade', 'ApplyUpgrade')]
+    [ValidateSet('Install', 'Launch', 'Uninstall', 'Upgrade', 'ApplyUpgrade', 'ReconcileUpgrade')]
     [string]$Operation,
     [string]$PackagePath = '',
     [string]$PackageSha256 = '',
@@ -400,6 +400,364 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     }
 }
 
+# The existing private Python hashes prepared files by name, length and bytes.
+# This seals staging before scheduling activation and detects later changes.
+function Get-PreparedTreeDigest {
+    param([string]$Root)
+    if (!(Test-Path -LiteralPath $Root -PathType Container)) {
+        throw 'Prepared DEV tree missing'
+    }
+    $privatePython = Join-Path $installRoot 'runtime\python.exe'
+    if (!(Test-Path -LiteralPath $privatePython -PathType Leaf)) {
+        throw 'Private Runtime Python missing for staged verification'
+    }
+    $digestCode = @'
+import hashlib, os, sys
+root = os.path.abspath(sys.argv[1])
+entries = []
+for base, dirs, files in os.walk(root):
+    for name in dirs + files:
+        path = os.path.join(base, name)
+        if os.path.islink(path):
+            raise ValueError('Prepared DEV tree contains symlinks')
+    for name in files:
+        path = os.path.join(base, name)
+        entries.append((os.path.relpath(path, root).replace(os.sep, '/'), path))
+if not 10 <= len(entries) <= 30000:
+    raise ValueError('Prepared DEV tree count invalid')
+digest = hashlib.sha256()
+for name, path in sorted(entries):
+    encoded = name.encode('utf-8')
+    size = os.path.getsize(path)
+    if len(encoded) > 4096 or size < 0 or size > 200 * 1024 * 1024:
+        raise ValueError('Prepared DEV file invalid')
+    digest.update(len(encoded).to_bytes(4, 'big'))
+    digest.update(encoded)
+    digest.update(size.to_bytes(8, 'big'))
+    with open(path, 'rb') as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(chunk)
+print(digest.hexdigest().upper())
+'@
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $privatePython
+    $start.Arguments = '-I -c "' + $digestCode + '" "' + $Root + '"'
+    $start.WorkingDirectory = $installRoot
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $child = [Diagnostics.Process]::Start($start)
+    if ($null -eq $child) { throw 'Prepared DEV digest process unavailable' }
+    try {
+        if (!$child.WaitForExit(480000)) {
+            $child.Kill()
+            [void]$child.WaitForExit(5000)
+            throw 'Prepared DEV tree verification exceeded its deadline'
+        }
+        $digest = $child.StandardOutput.ReadToEnd().Trim()
+        if ($child.ExitCode -ne 0 -or $digest -cnotmatch '^[0-9A-F]{64}
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
+    if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
+        throw 'Installed Runtime quiesce controller missing'
+    }
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -InstallRoot $Root -TimeoutSeconds 25
+    if ($LASTEXITCODE -ne 0) { throw "Runtime quiesce failed for owner root: $Root" }
+}
+
+function Invoke-RegisterAndLaunch {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-mcp-lifecycle.ps1'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Operation Install
+    if ($LASTEXITCODE -ne 0) { throw 'Canonical MCP scheduled recovery installation failed' }
+    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+}
+
+switch ($Operation) {
+    'Install' {
+        Assert-InstalledSource
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        Register-CanonicalTask -Name $taskName -Script $lifecycle -Operation Launch -WorkingDirectory $updatesRoot
+        $registered = Get-CanonicalScheduledTask -Name $taskName
+        if ($null -eq $registered) { throw 'Canonical owner task not registered' }
+        Assert-OurTask $registered $lifecycle 'Launch'
+        # The scheduled task is now the only autostart owner. Remove old logon-only fallback.
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_REGISTERED'
+    }
+    'Launch' {
+        Assert-InstalledSource
+        # Never execute files while the trusted Inno installer is replacing them.
+        if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+            Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+            return
+        }
+        # During an upgrade, the installer may have started this launcher
+        # before the scheduled task. Adopt its process as the single owner:
+        # do not repeatedly spawn duplicate launcher attempts each minute.
+        $existingLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+            try { [IO.Path]::GetFullPath($_.Path) -ieq $launcher } catch { $false }
+        })
+        if ($existingLaunchers.Count -gt 0) {
+            $existingLaunchers[0].WaitForExit()
+            # Quiesce intentionally stopped it. Do not race the file replacement.
+            if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+                Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+                return
+            }
+        }
+        # The launcher owns the singleton mutex and Python restart loop.
+        # Waiting on its exact PID keeps the Task Scheduler action alive.
+        $runtime = Start-Process -FilePath $launcher -WorkingDirectory $installRoot -PassThru -ErrorAction Stop
+        $runtime.WaitForExit()
+        if ($runtime.ExitCode -ne 0) {
+            throw "OrdaX MCP supervisor ended with exit code $($runtime.ExitCode)"
+        }
+    }
+    'Uninstall' {
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        if ($null -ne $existing) {
+            Invoke-CanonicalTaskAction -Name $taskName -Action Delete
+        }
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_UNREGISTERED'
+    }
+    'Upgrade' {
+        Assert-InstalledSource
+        if ($PackageSha256 -cnotmatch '^[0-9a-fA-F]{64}$' -or
+            $ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Exact portable DEV package SHA-256 and Runtime commit are mandatory'
+        }
+        if (![IO.Path]::IsPathRooted($PackagePath) -or
+            !(Test-Path -LiteralPath $PackagePath -PathType Leaf) -or
+            (Split-Path $PackagePath -Leaf) -cne ("OrdaX-MCP-Dev-{0}.zip" -f $ExpectedCommit)) {
+            throw 'Portable DEV candidate filename/source is not canonical'
+        }
+        $source = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
+        if (($source.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $source.Length -lt 1000000 -or $source.Length -gt 300000000) {
+            throw 'Portable DEV archive path or size invalid'
+        }
+        if ((Get-OwnerArchiveSha256 -Path $source.FullName) -ine $PackageSha256) {
+            throw 'Portable DEV archive differs from verified CI candidate'
+        }
+        Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit
+        # The previous Inno DEV attempts remain historical receipts only.
+        # A live journal in either schema still forbids overlapping upgrades.
+        if (Test-Path -LiteralPath $updatesRoot -PathType Container) {
+            foreach ($previous in @(Get-ChildItem -LiteralPath $updatesRoot -Directory -ErrorAction Stop)) {
+                $previousJournal = Join-Path $previous.FullName 'journal.json'
+                if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
+                $prior = Read-OwnerJsonDocument -Path $previousJournal
+                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3')) {
+                    throw "Unknown MCP update journal schema: $($previous.Name)"
+                }
+                if ($prior.phase -in @('staged','applying')) {
+                    throw "Unresolved MCP update must be reconciled: $($previous.Name)"
+                }
+            }
+        }
+        $existing = Get-CanonicalScheduledTask -Name $upgradeTaskName
+        if ($existing -and $existing.State -eq 'Running') {
+            throw 'Canonical MCP upgrade already running'
+        }
+        if ($existing) {
+            $actions = @($existing.Actions)
+            if ($actions.Count -ne 1 -or [string]$actions[0].Arguments -notmatch ' -Operation ApplyUpgrade ') {
+                throw 'Upgrade task name belongs to another program'
+            }
+        }
+        New-Item -Path $updatesRoot -ItemType Directory -Force | Out-Null
+        $id = [guid]::NewGuid().ToString('N')
+        $tx = Join-Path $updatesRoot $id
+        New-Item -Path $tx -ItemType Directory -ErrorAction Stop | Out-Null
+        $staged = Join-Path $tx $source.Name
+        Copy-Item -LiteralPath $source.FullName -Destination $staged -ErrorAction Stop
+        if ((Get-OwnerArchiveSha256 -Path $staged) -ine $PackageSha256) {
+            throw 'Portable DEV archive changed during staging'
+        }
+        # Interactive Upgrade performs verified extraction before scheduling.
+        # The background task now only rechecks content and activates roots.
+        $expanded = Join-Path $tx 'expanded-runtime'
+        try {
+            Assert-DevArchive -ArchivePath $staged -Commit $ExpectedCommit -Destination $expanded
+            $treeDigest = Get-PreparedTreeDigest -Root $expanded
+        } catch {
+            # No journal or task exists yet: discard only this incomplete stage.
+            Remove-Item -LiteralPath $tx -Recurse -Force -ErrorAction SilentlyContinue
+            throw
+        }
+        $applyScript = Join-Path $tx 'apply.ps1'
+        Copy-Item -LiteralPath $lifecycle -Destination $applyScript -ErrorAction Stop
+        $journal = [pscustomobject]@{
+            schema = 'ordax.mcp-dev-upgrade/3'; transactionId = $id; phase = 'staged'
+            packageName = $source.Name; sha256 = $PackageSha256.ToUpperInvariant()
+            targetCommit = $ExpectedCommit; preparedTreeSha256 = $treeDigest; updatedAt = ''
+        }
+        Save-Journal (Join-Path $tx 'journal.json') $journal
+        Register-CanonicalTask -Name $upgradeTaskName -Script $applyScript -Operation ApplyUpgrade -WorkingDirectory $tx -TransactionId $id
+        Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run
+        Write-Output ("ORDAX_MCP_DEV_UPGRADE_QUEUED transaction={0} journal={1}" -f $id, (Join-Path $tx 'journal.json'))
+    }
+    'ReconcileUpgrade' {
+        # Reconcile a stopped transaction only when the old installation
+        # remains intact. No success/rollback receipt can be fabricated.
+        Assert-InstalledSource
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid upgrade transaction ID' }
+        $tx = Join-Path $updatesRoot $TransactionId
+        if ([IO.Path]::GetFullPath($PSCommandPath) -ine (Join-Path $tx 'apply.ps1')) {
+            throw 'DEV upgrade executor did not originate from staged transaction'
+        }
+        $journalPath = Join-Path $tx 'journal.json'
+        $journal = Read-OwnerJsonDocument -Path $journalPath
+        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/3' -or
+            $journal.transactionId -cne $TransactionId -or
+            $journal.phase -cne 'staged' -or
+            $journal.sha256 -cnotmatch '^[0-9A-F]{64}
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        # Full archive identity and prepared file bytes are checked before
+        # changing any running Runtime, scheduled task or install directory.
+        Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit
+        $expanded = Join-Path $tx 'expanded-runtime'
+        if ((Get-PreparedTreeDigest -Root $expanded) -cne $journal.preparedTreeSha256) {
+            throw 'Prepared DEV tree changed after validated staging'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            # Staging already prepared and content-verified before this task.
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+) {
+            throw 'Prepared DEV tree integrity verification failed'
+        }
+        return $digest
+    } finally { $child.Dispose() }
+}
+
 function Invoke-QuiesceRoot {
     param([string]$Root)
     $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
@@ -496,7 +854,2926 @@ switch ($Operation) {
                 $previousJournal = Join-Path $previous.FullName 'journal.json'
                 if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
                 $prior = Read-OwnerJsonDocument -Path $previousJournal
-                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2')) {
+                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3')) {
+                    throw "Unknown MCP update journal schema: $($previous.Name)"
+                }
+                if ($prior.phase -in @('staged','applying')) {
+                    throw "Unresolved MCP update must be reconciled: $($previous.Name)"
+                }
+            }
+        }
+        $existing = Get-CanonicalScheduledTask -Name $upgradeTaskName
+        if ($existing -and $existing.State -eq 'Running') {
+            throw 'Canonical MCP upgrade already running'
+        }
+        if ($existing) {
+            $actions = @($existing.Actions)
+            if ($actions.Count -ne 1 -or [string]$actions[0].Arguments -notmatch ' -Operation ApplyUpgrade ') {
+                throw 'Upgrade task name belongs to another program'
+            }
+        }
+        New-Item -Path $updatesRoot -ItemType Directory -Force | Out-Null
+        $id = [guid]::NewGuid().ToString('N')
+        $tx = Join-Path $updatesRoot $id
+        New-Item -Path $tx -ItemType Directory -ErrorAction Stop | Out-Null
+        $staged = Join-Path $tx $source.Name
+        Copy-Item -LiteralPath $source.FullName -Destination $staged -ErrorAction Stop
+        if ((Get-OwnerArchiveSha256 -Path $staged) -ine $PackageSha256) {
+            throw 'Portable DEV archive changed during staging'
+        }
+        $applyScript = Join-Path $tx 'apply.ps1'
+        Copy-Item -LiteralPath $lifecycle -Destination $applyScript -ErrorAction Stop
+        $journal = [pscustomobject]@{
+            schema = 'ordax.mcp-dev-upgrade/2'; transactionId = $id; phase = 'staged'
+            packageName = $source.Name; sha256 = $PackageSha256.ToUpperInvariant()
+            targetCommit = $ExpectedCommit; updatedAt = ''
+        }
+        Save-Journal (Join-Path $tx 'journal.json') $journal
+        Register-CanonicalTask -Name $upgradeTaskName -Script $applyScript -Operation ApplyUpgrade -WorkingDirectory $tx -TransactionId $id
+        Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run
+        Write-Output ("ORDAX_MCP_DEV_UPGRADE_QUEUED transaction={0} journal={1}" -f $id, (Join-Path $tx 'journal.json'))
+    }
+    'ApplyUpgrade' {
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid upgrade transaction ID' }
+        $tx = Join-Path $updatesRoot $TransactionId
+        if ([IO.Path]::GetFullPath($PSCommandPath) -ine (Join-Path $tx 'apply.ps1')) {
+            throw 'DEV upgrade executor did not originate from staged transaction'
+        }
+        $journalPath = Join-Path $tx 'journal.json'
+        $journal = Read-OwnerJsonDocument -Path $journalPath
+        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/2' -or
+            $journal.transactionId -cne $TransactionId -or
+            $journal.phase -cne 'staged' -or
+            $journal.sha256 -cnotmatch '^[0-9A-F]{64}$' -or
+            $journal.targetCommit -cnotmatch '^[0-9a-f]{40}$' -or
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+ -or
+            $journal.preparedTreeSha256 -cnotmatch '^[0-9A-F]{64}
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+) {
+            throw 'Prepared DEV tree integrity verification failed'
+        }
+        return $digest
+    } finally { $child.Dispose() }
+}
+
+function Invoke-QuiesceRoot {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
+    if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
+        throw 'Installed Runtime quiesce controller missing'
+    }
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -InstallRoot $Root -TimeoutSeconds 25
+    if ($LASTEXITCODE -ne 0) { throw "Runtime quiesce failed for owner root: $Root" }
+}
+
+function Invoke-RegisterAndLaunch {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-mcp-lifecycle.ps1'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Operation Install
+    if ($LASTEXITCODE -ne 0) { throw 'Canonical MCP scheduled recovery installation failed' }
+    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+}
+
+switch ($Operation) {
+    'Install' {
+        Assert-InstalledSource
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        Register-CanonicalTask -Name $taskName -Script $lifecycle -Operation Launch -WorkingDirectory $updatesRoot
+        $registered = Get-CanonicalScheduledTask -Name $taskName
+        if ($null -eq $registered) { throw 'Canonical owner task not registered' }
+        Assert-OurTask $registered $lifecycle 'Launch'
+        # The scheduled task is now the only autostart owner. Remove old logon-only fallback.
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_REGISTERED'
+    }
+    'Launch' {
+        Assert-InstalledSource
+        # Never execute files while the trusted Inno installer is replacing them.
+        if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+            Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+            return
+        }
+        # During an upgrade, the installer may have started this launcher
+        # before the scheduled task. Adopt its process as the single owner:
+        # do not repeatedly spawn duplicate launcher attempts each minute.
+        $existingLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+            try { [IO.Path]::GetFullPath($_.Path) -ieq $launcher } catch { $false }
+        })
+        if ($existingLaunchers.Count -gt 0) {
+            $existingLaunchers[0].WaitForExit()
+            # Quiesce intentionally stopped it. Do not race the file replacement.
+            if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+                Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+                return
+            }
+        }
+        # The launcher owns the singleton mutex and Python restart loop.
+        # Waiting on its exact PID keeps the Task Scheduler action alive.
+        $runtime = Start-Process -FilePath $launcher -WorkingDirectory $installRoot -PassThru -ErrorAction Stop
+        $runtime.WaitForExit()
+        if ($runtime.ExitCode -ne 0) {
+            throw "OrdaX MCP supervisor ended with exit code $($runtime.ExitCode)"
+        }
+    }
+    'Uninstall' {
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        if ($null -ne $existing) {
+            Invoke-CanonicalTaskAction -Name $taskName -Action Delete
+        }
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_UNREGISTERED'
+    }
+    'Upgrade' {
+        Assert-InstalledSource
+        if ($PackageSha256 -cnotmatch '^[0-9a-fA-F]{64}$' -or
+            $ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Exact portable DEV package SHA-256 and Runtime commit are mandatory'
+        }
+        if (![IO.Path]::IsPathRooted($PackagePath) -or
+            !(Test-Path -LiteralPath $PackagePath -PathType Leaf) -or
+            (Split-Path $PackagePath -Leaf) -cne ("OrdaX-MCP-Dev-{0}.zip" -f $ExpectedCommit)) {
+            throw 'Portable DEV candidate filename/source is not canonical'
+        }
+        $source = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
+        if (($source.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $source.Length -lt 1000000 -or $source.Length -gt 300000000) {
+            throw 'Portable DEV archive path or size invalid'
+        }
+        if ((Get-OwnerArchiveSha256 -Path $source.FullName) -ine $PackageSha256) {
+            throw 'Portable DEV archive differs from verified CI candidate'
+        }
+        Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit
+        # The previous Inno DEV attempts remain historical receipts only.
+        # A live journal in either schema still forbids overlapping upgrades.
+        if (Test-Path -LiteralPath $updatesRoot -PathType Container) {
+            foreach ($previous in @(Get-ChildItem -LiteralPath $updatesRoot -Directory -ErrorAction Stop)) {
+                $previousJournal = Join-Path $previous.FullName 'journal.json'
+                if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
+                $prior = Read-OwnerJsonDocument -Path $previousJournal
+                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3')) {
+                    throw "Unknown MCP update journal schema: $($previous.Name)"
+                }
+                if ($prior.phase -in @('staged','applying')) {
+                    throw "Unresolved MCP update must be reconciled: $($previous.Name)"
+                }
+            }
+        }
+        $existing = Get-CanonicalScheduledTask -Name $upgradeTaskName
+        if ($existing -and $existing.State -eq 'Running') {
+            throw 'Canonical MCP upgrade already running'
+        }
+        if ($existing) {
+            $actions = @($existing.Actions)
+            if ($actions.Count -ne 1 -or [string]$actions[0].Arguments -notmatch ' -Operation ApplyUpgrade ') {
+                throw 'Upgrade task name belongs to another program'
+            }
+        }
+        New-Item -Path $updatesRoot -ItemType Directory -Force | Out-Null
+        $id = [guid]::NewGuid().ToString('N')
+        $tx = Join-Path $updatesRoot $id
+        New-Item -Path $tx -ItemType Directory -ErrorAction Stop | Out-Null
+        $staged = Join-Path $tx $source.Name
+        Copy-Item -LiteralPath $source.FullName -Destination $staged -ErrorAction Stop
+        if ((Get-OwnerArchiveSha256 -Path $staged) -ine $PackageSha256) {
+            throw 'Portable DEV archive changed during staging'
+        }
+        $applyScript = Join-Path $tx 'apply.ps1'
+        Copy-Item -LiteralPath $lifecycle -Destination $applyScript -ErrorAction Stop
+        $journal = [pscustomobject]@{
+            schema = 'ordax.mcp-dev-upgrade/2'; transactionId = $id; phase = 'staged'
+            packageName = $source.Name; sha256 = $PackageSha256.ToUpperInvariant()
+            targetCommit = $ExpectedCommit; updatedAt = ''
+        }
+        Save-Journal (Join-Path $tx 'journal.json') $journal
+        Register-CanonicalTask -Name $upgradeTaskName -Script $applyScript -Operation ApplyUpgrade -WorkingDirectory $tx -TransactionId $id
+        Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run
+        Write-Output ("ORDAX_MCP_DEV_UPGRADE_QUEUED transaction={0} journal={1}" -f $id, (Join-Path $tx 'journal.json'))
+    }
+    'ApplyUpgrade' {
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid upgrade transaction ID' }
+        $tx = Join-Path $updatesRoot $TransactionId
+        if ([IO.Path]::GetFullPath($PSCommandPath) -ine (Join-Path $tx 'apply.ps1')) {
+            throw 'DEV upgrade executor did not originate from staged transaction'
+        }
+        $journalPath = Join-Path $tx 'journal.json'
+        $journal = Read-OwnerJsonDocument -Path $journalPath
+        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/2' -or
+            $journal.transactionId -cne $TransactionId -or
+            $journal.phase -cne 'staged' -or
+            $journal.sha256 -cnotmatch '^[0-9A-F]{64}$' -or
+            $journal.targetCommit -cnotmatch '^[0-9a-f]{40}$' -or
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+ -or
+            $journal.targetCommit -cnotmatch '^[0-9a-f]{40}
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+) {
+            throw 'Prepared DEV tree integrity verification failed'
+        }
+        return $digest
+    } finally { $child.Dispose() }
+}
+
+function Invoke-QuiesceRoot {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
+    if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
+        throw 'Installed Runtime quiesce controller missing'
+    }
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -InstallRoot $Root -TimeoutSeconds 25
+    if ($LASTEXITCODE -ne 0) { throw "Runtime quiesce failed for owner root: $Root" }
+}
+
+function Invoke-RegisterAndLaunch {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-mcp-lifecycle.ps1'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Operation Install
+    if ($LASTEXITCODE -ne 0) { throw 'Canonical MCP scheduled recovery installation failed' }
+    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+}
+
+switch ($Operation) {
+    'Install' {
+        Assert-InstalledSource
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        Register-CanonicalTask -Name $taskName -Script $lifecycle -Operation Launch -WorkingDirectory $updatesRoot
+        $registered = Get-CanonicalScheduledTask -Name $taskName
+        if ($null -eq $registered) { throw 'Canonical owner task not registered' }
+        Assert-OurTask $registered $lifecycle 'Launch'
+        # The scheduled task is now the only autostart owner. Remove old logon-only fallback.
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_REGISTERED'
+    }
+    'Launch' {
+        Assert-InstalledSource
+        # Never execute files while the trusted Inno installer is replacing them.
+        if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+            Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+            return
+        }
+        # During an upgrade, the installer may have started this launcher
+        # before the scheduled task. Adopt its process as the single owner:
+        # do not repeatedly spawn duplicate launcher attempts each minute.
+        $existingLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+            try { [IO.Path]::GetFullPath($_.Path) -ieq $launcher } catch { $false }
+        })
+        if ($existingLaunchers.Count -gt 0) {
+            $existingLaunchers[0].WaitForExit()
+            # Quiesce intentionally stopped it. Do not race the file replacement.
+            if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+                Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+                return
+            }
+        }
+        # The launcher owns the singleton mutex and Python restart loop.
+        # Waiting on its exact PID keeps the Task Scheduler action alive.
+        $runtime = Start-Process -FilePath $launcher -WorkingDirectory $installRoot -PassThru -ErrorAction Stop
+        $runtime.WaitForExit()
+        if ($runtime.ExitCode -ne 0) {
+            throw "OrdaX MCP supervisor ended with exit code $($runtime.ExitCode)"
+        }
+    }
+    'Uninstall' {
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        if ($null -ne $existing) {
+            Invoke-CanonicalTaskAction -Name $taskName -Action Delete
+        }
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_UNREGISTERED'
+    }
+    'Upgrade' {
+        Assert-InstalledSource
+        if ($PackageSha256 -cnotmatch '^[0-9a-fA-F]{64}$' -or
+            $ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Exact portable DEV package SHA-256 and Runtime commit are mandatory'
+        }
+        if (![IO.Path]::IsPathRooted($PackagePath) -or
+            !(Test-Path -LiteralPath $PackagePath -PathType Leaf) -or
+            (Split-Path $PackagePath -Leaf) -cne ("OrdaX-MCP-Dev-{0}.zip" -f $ExpectedCommit)) {
+            throw 'Portable DEV candidate filename/source is not canonical'
+        }
+        $source = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
+        if (($source.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $source.Length -lt 1000000 -or $source.Length -gt 300000000) {
+            throw 'Portable DEV archive path or size invalid'
+        }
+        if ((Get-OwnerArchiveSha256 -Path $source.FullName) -ine $PackageSha256) {
+            throw 'Portable DEV archive differs from verified CI candidate'
+        }
+        Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit
+        # The previous Inno DEV attempts remain historical receipts only.
+        # A live journal in either schema still forbids overlapping upgrades.
+        if (Test-Path -LiteralPath $updatesRoot -PathType Container) {
+            foreach ($previous in @(Get-ChildItem -LiteralPath $updatesRoot -Directory -ErrorAction Stop)) {
+                $previousJournal = Join-Path $previous.FullName 'journal.json'
+                if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
+                $prior = Read-OwnerJsonDocument -Path $previousJournal
+                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3')) {
+                    throw "Unknown MCP update journal schema: $($previous.Name)"
+                }
+                if ($prior.phase -in @('staged','applying')) {
+                    throw "Unresolved MCP update must be reconciled: $($previous.Name)"
+                }
+            }
+        }
+        $existing = Get-CanonicalScheduledTask -Name $upgradeTaskName
+        if ($existing -and $existing.State -eq 'Running') {
+            throw 'Canonical MCP upgrade already running'
+        }
+        if ($existing) {
+            $actions = @($existing.Actions)
+            if ($actions.Count -ne 1 -or [string]$actions[0].Arguments -notmatch ' -Operation ApplyUpgrade ') {
+                throw 'Upgrade task name belongs to another program'
+            }
+        }
+        New-Item -Path $updatesRoot -ItemType Directory -Force | Out-Null
+        $id = [guid]::NewGuid().ToString('N')
+        $tx = Join-Path $updatesRoot $id
+        New-Item -Path $tx -ItemType Directory -ErrorAction Stop | Out-Null
+        $staged = Join-Path $tx $source.Name
+        Copy-Item -LiteralPath $source.FullName -Destination $staged -ErrorAction Stop
+        if ((Get-OwnerArchiveSha256 -Path $staged) -ine $PackageSha256) {
+            throw 'Portable DEV archive changed during staging'
+        }
+        $applyScript = Join-Path $tx 'apply.ps1'
+        Copy-Item -LiteralPath $lifecycle -Destination $applyScript -ErrorAction Stop
+        $journal = [pscustomobject]@{
+            schema = 'ordax.mcp-dev-upgrade/2'; transactionId = $id; phase = 'staged'
+            packageName = $source.Name; sha256 = $PackageSha256.ToUpperInvariant()
+            targetCommit = $ExpectedCommit; updatedAt = ''
+        }
+        Save-Journal (Join-Path $tx 'journal.json') $journal
+        Register-CanonicalTask -Name $upgradeTaskName -Script $applyScript -Operation ApplyUpgrade -WorkingDirectory $tx -TransactionId $id
+        Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run
+        Write-Output ("ORDAX_MCP_DEV_UPGRADE_QUEUED transaction={0} journal={1}" -f $id, (Join-Path $tx 'journal.json'))
+    }
+    'ApplyUpgrade' {
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid upgrade transaction ID' }
+        $tx = Join-Path $updatesRoot $TransactionId
+        if ([IO.Path]::GetFullPath($PSCommandPath) -ine (Join-Path $tx 'apply.ps1')) {
+            throw 'DEV upgrade executor did not originate from staged transaction'
+        }
+        $journalPath = Join-Path $tx 'journal.json'
+        $journal = Read-OwnerJsonDocument -Path $journalPath
+        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/2' -or
+            $journal.transactionId -cne $TransactionId -or
+            $journal.phase -cne 'staged' -or
+            $journal.sha256 -cnotmatch '^[0-9A-F]{64}$' -or
+            $journal.targetCommit -cnotmatch '^[0-9a-f]{40}$' -or
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+ -or
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+) {
+            throw 'Prepared DEV tree integrity verification failed'
+        }
+        return $digest
+    } finally { $child.Dispose() }
+}
+
+function Invoke-QuiesceRoot {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
+    if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
+        throw 'Installed Runtime quiesce controller missing'
+    }
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -InstallRoot $Root -TimeoutSeconds 25
+    if ($LASTEXITCODE -ne 0) { throw "Runtime quiesce failed for owner root: $Root" }
+}
+
+function Invoke-RegisterAndLaunch {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-mcp-lifecycle.ps1'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Operation Install
+    if ($LASTEXITCODE -ne 0) { throw 'Canonical MCP scheduled recovery installation failed' }
+    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+}
+
+switch ($Operation) {
+    'Install' {
+        Assert-InstalledSource
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        Register-CanonicalTask -Name $taskName -Script $lifecycle -Operation Launch -WorkingDirectory $updatesRoot
+        $registered = Get-CanonicalScheduledTask -Name $taskName
+        if ($null -eq $registered) { throw 'Canonical owner task not registered' }
+        Assert-OurTask $registered $lifecycle 'Launch'
+        # The scheduled task is now the only autostart owner. Remove old logon-only fallback.
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_REGISTERED'
+    }
+    'Launch' {
+        Assert-InstalledSource
+        # Never execute files while the trusted Inno installer is replacing them.
+        if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+            Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+            return
+        }
+        # During an upgrade, the installer may have started this launcher
+        # before the scheduled task. Adopt its process as the single owner:
+        # do not repeatedly spawn duplicate launcher attempts each minute.
+        $existingLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+            try { [IO.Path]::GetFullPath($_.Path) -ieq $launcher } catch { $false }
+        })
+        if ($existingLaunchers.Count -gt 0) {
+            $existingLaunchers[0].WaitForExit()
+            # Quiesce intentionally stopped it. Do not race the file replacement.
+            if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+                Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+                return
+            }
+        }
+        # The launcher owns the singleton mutex and Python restart loop.
+        # Waiting on its exact PID keeps the Task Scheduler action alive.
+        $runtime = Start-Process -FilePath $launcher -WorkingDirectory $installRoot -PassThru -ErrorAction Stop
+        $runtime.WaitForExit()
+        if ($runtime.ExitCode -ne 0) {
+            throw "OrdaX MCP supervisor ended with exit code $($runtime.ExitCode)"
+        }
+    }
+    'Uninstall' {
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        if ($null -ne $existing) {
+            Invoke-CanonicalTaskAction -Name $taskName -Action Delete
+        }
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_UNREGISTERED'
+    }
+    'Upgrade' {
+        Assert-InstalledSource
+        if ($PackageSha256 -cnotmatch '^[0-9a-fA-F]{64}$' -or
+            $ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Exact portable DEV package SHA-256 and Runtime commit are mandatory'
+        }
+        if (![IO.Path]::IsPathRooted($PackagePath) -or
+            !(Test-Path -LiteralPath $PackagePath -PathType Leaf) -or
+            (Split-Path $PackagePath -Leaf) -cne ("OrdaX-MCP-Dev-{0}.zip" -f $ExpectedCommit)) {
+            throw 'Portable DEV candidate filename/source is not canonical'
+        }
+        $source = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
+        if (($source.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $source.Length -lt 1000000 -or $source.Length -gt 300000000) {
+            throw 'Portable DEV archive path or size invalid'
+        }
+        if ((Get-OwnerArchiveSha256 -Path $source.FullName) -ine $PackageSha256) {
+            throw 'Portable DEV archive differs from verified CI candidate'
+        }
+        Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit
+        # The previous Inno DEV attempts remain historical receipts only.
+        # A live journal in either schema still forbids overlapping upgrades.
+        if (Test-Path -LiteralPath $updatesRoot -PathType Container) {
+            foreach ($previous in @(Get-ChildItem -LiteralPath $updatesRoot -Directory -ErrorAction Stop)) {
+                $previousJournal = Join-Path $previous.FullName 'journal.json'
+                if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
+                $prior = Read-OwnerJsonDocument -Path $previousJournal
+                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3')) {
+                    throw "Unknown MCP update journal schema: $($previous.Name)"
+                }
+                if ($prior.phase -in @('staged','applying')) {
+                    throw "Unresolved MCP update must be reconciled: $($previous.Name)"
+                }
+            }
+        }
+        $existing = Get-CanonicalScheduledTask -Name $upgradeTaskName
+        if ($existing -and $existing.State -eq 'Running') {
+            throw 'Canonical MCP upgrade already running'
+        }
+        if ($existing) {
+            $actions = @($existing.Actions)
+            if ($actions.Count -ne 1 -or [string]$actions[0].Arguments -notmatch ' -Operation ApplyUpgrade ') {
+                throw 'Upgrade task name belongs to another program'
+            }
+        }
+        New-Item -Path $updatesRoot -ItemType Directory -Force | Out-Null
+        $id = [guid]::NewGuid().ToString('N')
+        $tx = Join-Path $updatesRoot $id
+        New-Item -Path $tx -ItemType Directory -ErrorAction Stop | Out-Null
+        $staged = Join-Path $tx $source.Name
+        Copy-Item -LiteralPath $source.FullName -Destination $staged -ErrorAction Stop
+        if ((Get-OwnerArchiveSha256 -Path $staged) -ine $PackageSha256) {
+            throw 'Portable DEV archive changed during staging'
+        }
+        $applyScript = Join-Path $tx 'apply.ps1'
+        Copy-Item -LiteralPath $lifecycle -Destination $applyScript -ErrorAction Stop
+        $journal = [pscustomobject]@{
+            schema = 'ordax.mcp-dev-upgrade/2'; transactionId = $id; phase = 'staged'
+            packageName = $source.Name; sha256 = $PackageSha256.ToUpperInvariant()
+            targetCommit = $ExpectedCommit; updatedAt = ''
+        }
+        Save-Journal (Join-Path $tx 'journal.json') $journal
+        Register-CanonicalTask -Name $upgradeTaskName -Script $applyScript -Operation ApplyUpgrade -WorkingDirectory $tx -TransactionId $id
+        Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run
+        Write-Output ("ORDAX_MCP_DEV_UPGRADE_QUEUED transaction={0} journal={1}" -f $id, (Join-Path $tx 'journal.json'))
+    }
+    'ApplyUpgrade' {
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid upgrade transaction ID' }
+        $tx = Join-Path $updatesRoot $TransactionId
+        if ([IO.Path]::GetFullPath($PSCommandPath) -ine (Join-Path $tx 'apply.ps1')) {
+            throw 'DEV upgrade executor did not originate from staged transaction'
+        }
+        $journalPath = Join-Path $tx 'journal.json'
+        $journal = Read-OwnerJsonDocument -Path $journalPath
+        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/2' -or
+            $journal.transactionId -cne $TransactionId -or
+            $journal.phase -cne 'staged' -or
+            $journal.sha256 -cnotmatch '^[0-9A-F]{64}$' -or
+            $journal.targetCommit -cnotmatch '^[0-9a-f]{40}$' -or
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+) {
+            throw 'Invalid interrupted transaction ID'
+        }
+        $tx = Join-Path $updatesRoot $TransactionId
+        $journalPath = Join-Path $tx 'journal.json'
+        $journal = Read-OwnerJsonDocument -Path $journalPath
+        if ($journal.schema -notin @('ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3') -or
+            $journal.transactionId -cne $TransactionId -or
+            $journal.phase -cne 'applying') {
+            throw 'Reconciliation requires exact interrupted DEV transaction'
+        }
+        $task = Get-CanonicalScheduledTask -Name $upgradeTaskName
+        if ($task -and $task.State -in @('Running','Queued')) {
+            throw 'Cannot reconcile while canonical upgrade task is active'
+        }
+        if ((Test-Path -LiteralPath ($installRoot + '.previous-dev')) -or
+            (Test-Path -LiteralPath (Join-Path $tx 'failed-candidate'))) {
+            throw 'Recovery of moved installation requires separate inspection'
+        }
+        $installed = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+        if ($installed.runtime_source_commit -ceq $journal.targetCommit) {
+            throw 'Installed candidate must not be mislabeled as rolled back'
+        }
+        $journal.phase = 'recovery-required'
+        $journal | Add-Member -NotePropertyName error -NotePropertyValue 'Interrupted before atomic activation; original Runtime intact' -Force
+        Save-Journal $journalPath $journal
+        Write-Output ("ORDAX_MCP_DEV_RECOVERY_RECORDED transaction={0}" -f $TransactionId)
+    }
+    'ApplyUpgrade' {
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid upgrade transaction ID' }
+        $tx = Join-Path $updatesRoot $TransactionId
+        if ([IO.Path]::GetFullPath($PSCommandPath) -ine (Join-Path $tx 'apply.ps1')) {
+            throw 'DEV upgrade executor did not originate from staged transaction'
+        }
+        $journalPath = Join-Path $tx 'journal.json'
+        $journal = Read-OwnerJsonDocument -Path $journalPath
+        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/3' -or
+            $journal.transactionId -cne $TransactionId -or
+            $journal.phase -cne 'staged' -or
+            $journal.sha256 -cnotmatch '^[0-9A-F]{64}
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        # Full archive identity and prepared file bytes are checked before
+        # changing any running Runtime, scheduled task or install directory.
+        Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit
+        $expanded = Join-Path $tx 'expanded-runtime'
+        if ((Get-PreparedTreeDigest -Root $expanded) -cne $journal.preparedTreeSha256) {
+            throw 'Prepared DEV tree changed after validated staging'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            # Staging already prepared and content-verified before this task.
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+) {
+            throw 'Prepared DEV tree integrity verification failed'
+        }
+        return $digest
+    } finally { $child.Dispose() }
+}
+
+function Invoke-QuiesceRoot {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
+    if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
+        throw 'Installed Runtime quiesce controller missing'
+    }
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -InstallRoot $Root -TimeoutSeconds 25
+    if ($LASTEXITCODE -ne 0) { throw "Runtime quiesce failed for owner root: $Root" }
+}
+
+function Invoke-RegisterAndLaunch {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-mcp-lifecycle.ps1'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Operation Install
+    if ($LASTEXITCODE -ne 0) { throw 'Canonical MCP scheduled recovery installation failed' }
+    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+}
+
+switch ($Operation) {
+    'Install' {
+        Assert-InstalledSource
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        Register-CanonicalTask -Name $taskName -Script $lifecycle -Operation Launch -WorkingDirectory $updatesRoot
+        $registered = Get-CanonicalScheduledTask -Name $taskName
+        if ($null -eq $registered) { throw 'Canonical owner task not registered' }
+        Assert-OurTask $registered $lifecycle 'Launch'
+        # The scheduled task is now the only autostart owner. Remove old logon-only fallback.
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_REGISTERED'
+    }
+    'Launch' {
+        Assert-InstalledSource
+        # Never execute files while the trusted Inno installer is replacing them.
+        if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+            Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+            return
+        }
+        # During an upgrade, the installer may have started this launcher
+        # before the scheduled task. Adopt its process as the single owner:
+        # do not repeatedly spawn duplicate launcher attempts each minute.
+        $existingLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+            try { [IO.Path]::GetFullPath($_.Path) -ieq $launcher } catch { $false }
+        })
+        if ($existingLaunchers.Count -gt 0) {
+            $existingLaunchers[0].WaitForExit()
+            # Quiesce intentionally stopped it. Do not race the file replacement.
+            if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+                Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+                return
+            }
+        }
+        # The launcher owns the singleton mutex and Python restart loop.
+        # Waiting on its exact PID keeps the Task Scheduler action alive.
+        $runtime = Start-Process -FilePath $launcher -WorkingDirectory $installRoot -PassThru -ErrorAction Stop
+        $runtime.WaitForExit()
+        if ($runtime.ExitCode -ne 0) {
+            throw "OrdaX MCP supervisor ended with exit code $($runtime.ExitCode)"
+        }
+    }
+    'Uninstall' {
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        if ($null -ne $existing) {
+            Invoke-CanonicalTaskAction -Name $taskName -Action Delete
+        }
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_UNREGISTERED'
+    }
+    'Upgrade' {
+        Assert-InstalledSource
+        if ($PackageSha256 -cnotmatch '^[0-9a-fA-F]{64}$' -or
+            $ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Exact portable DEV package SHA-256 and Runtime commit are mandatory'
+        }
+        if (![IO.Path]::IsPathRooted($PackagePath) -or
+            !(Test-Path -LiteralPath $PackagePath -PathType Leaf) -or
+            (Split-Path $PackagePath -Leaf) -cne ("OrdaX-MCP-Dev-{0}.zip" -f $ExpectedCommit)) {
+            throw 'Portable DEV candidate filename/source is not canonical'
+        }
+        $source = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
+        if (($source.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $source.Length -lt 1000000 -or $source.Length -gt 300000000) {
+            throw 'Portable DEV archive path or size invalid'
+        }
+        if ((Get-OwnerArchiveSha256 -Path $source.FullName) -ine $PackageSha256) {
+            throw 'Portable DEV archive differs from verified CI candidate'
+        }
+        Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit
+        # The previous Inno DEV attempts remain historical receipts only.
+        # A live journal in either schema still forbids overlapping upgrades.
+        if (Test-Path -LiteralPath $updatesRoot -PathType Container) {
+            foreach ($previous in @(Get-ChildItem -LiteralPath $updatesRoot -Directory -ErrorAction Stop)) {
+                $previousJournal = Join-Path $previous.FullName 'journal.json'
+                if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
+                $prior = Read-OwnerJsonDocument -Path $previousJournal
+                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3')) {
+                    throw "Unknown MCP update journal schema: $($previous.Name)"
+                }
+                if ($prior.phase -in @('staged','applying')) {
+                    throw "Unresolved MCP update must be reconciled: $($previous.Name)"
+                }
+            }
+        }
+        $existing = Get-CanonicalScheduledTask -Name $upgradeTaskName
+        if ($existing -and $existing.State -eq 'Running') {
+            throw 'Canonical MCP upgrade already running'
+        }
+        if ($existing) {
+            $actions = @($existing.Actions)
+            if ($actions.Count -ne 1 -or [string]$actions[0].Arguments -notmatch ' -Operation ApplyUpgrade ') {
+                throw 'Upgrade task name belongs to another program'
+            }
+        }
+        New-Item -Path $updatesRoot -ItemType Directory -Force | Out-Null
+        $id = [guid]::NewGuid().ToString('N')
+        $tx = Join-Path $updatesRoot $id
+        New-Item -Path $tx -ItemType Directory -ErrorAction Stop | Out-Null
+        $staged = Join-Path $tx $source.Name
+        Copy-Item -LiteralPath $source.FullName -Destination $staged -ErrorAction Stop
+        if ((Get-OwnerArchiveSha256 -Path $staged) -ine $PackageSha256) {
+            throw 'Portable DEV archive changed during staging'
+        }
+        $applyScript = Join-Path $tx 'apply.ps1'
+        Copy-Item -LiteralPath $lifecycle -Destination $applyScript -ErrorAction Stop
+        $journal = [pscustomobject]@{
+            schema = 'ordax.mcp-dev-upgrade/2'; transactionId = $id; phase = 'staged'
+            packageName = $source.Name; sha256 = $PackageSha256.ToUpperInvariant()
+            targetCommit = $ExpectedCommit; updatedAt = ''
+        }
+        Save-Journal (Join-Path $tx 'journal.json') $journal
+        Register-CanonicalTask -Name $upgradeTaskName -Script $applyScript -Operation ApplyUpgrade -WorkingDirectory $tx -TransactionId $id
+        Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run
+        Write-Output ("ORDAX_MCP_DEV_UPGRADE_QUEUED transaction={0} journal={1}" -f $id, (Join-Path $tx 'journal.json'))
+    }
+    'ApplyUpgrade' {
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid upgrade transaction ID' }
+        $tx = Join-Path $updatesRoot $TransactionId
+        if ([IO.Path]::GetFullPath($PSCommandPath) -ine (Join-Path $tx 'apply.ps1')) {
+            throw 'DEV upgrade executor did not originate from staged transaction'
+        }
+        $journalPath = Join-Path $tx 'journal.json'
+        $journal = Read-OwnerJsonDocument -Path $journalPath
+        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/2' -or
+            $journal.transactionId -cne $TransactionId -or
+            $journal.phase -cne 'staged' -or
+            $journal.sha256 -cnotmatch '^[0-9A-F]{64}$' -or
+            $journal.targetCommit -cnotmatch '^[0-9a-f]{40}$' -or
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+ -or
+            $journal.preparedTreeSha256 -cnotmatch '^[0-9A-F]{64}
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+) {
+            throw 'Prepared DEV tree integrity verification failed'
+        }
+        return $digest
+    } finally { $child.Dispose() }
+}
+
+function Invoke-QuiesceRoot {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
+    if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
+        throw 'Installed Runtime quiesce controller missing'
+    }
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -InstallRoot $Root -TimeoutSeconds 25
+    if ($LASTEXITCODE -ne 0) { throw "Runtime quiesce failed for owner root: $Root" }
+}
+
+function Invoke-RegisterAndLaunch {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-mcp-lifecycle.ps1'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Operation Install
+    if ($LASTEXITCODE -ne 0) { throw 'Canonical MCP scheduled recovery installation failed' }
+    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+}
+
+switch ($Operation) {
+    'Install' {
+        Assert-InstalledSource
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        Register-CanonicalTask -Name $taskName -Script $lifecycle -Operation Launch -WorkingDirectory $updatesRoot
+        $registered = Get-CanonicalScheduledTask -Name $taskName
+        if ($null -eq $registered) { throw 'Canonical owner task not registered' }
+        Assert-OurTask $registered $lifecycle 'Launch'
+        # The scheduled task is now the only autostart owner. Remove old logon-only fallback.
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_REGISTERED'
+    }
+    'Launch' {
+        Assert-InstalledSource
+        # Never execute files while the trusted Inno installer is replacing them.
+        if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+            Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+            return
+        }
+        # During an upgrade, the installer may have started this launcher
+        # before the scheduled task. Adopt its process as the single owner:
+        # do not repeatedly spawn duplicate launcher attempts each minute.
+        $existingLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+            try { [IO.Path]::GetFullPath($_.Path) -ieq $launcher } catch { $false }
+        })
+        if ($existingLaunchers.Count -gt 0) {
+            $existingLaunchers[0].WaitForExit()
+            # Quiesce intentionally stopped it. Do not race the file replacement.
+            if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+                Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+                return
+            }
+        }
+        # The launcher owns the singleton mutex and Python restart loop.
+        # Waiting on its exact PID keeps the Task Scheduler action alive.
+        $runtime = Start-Process -FilePath $launcher -WorkingDirectory $installRoot -PassThru -ErrorAction Stop
+        $runtime.WaitForExit()
+        if ($runtime.ExitCode -ne 0) {
+            throw "OrdaX MCP supervisor ended with exit code $($runtime.ExitCode)"
+        }
+    }
+    'Uninstall' {
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        if ($null -ne $existing) {
+            Invoke-CanonicalTaskAction -Name $taskName -Action Delete
+        }
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_UNREGISTERED'
+    }
+    'Upgrade' {
+        Assert-InstalledSource
+        if ($PackageSha256 -cnotmatch '^[0-9a-fA-F]{64}$' -or
+            $ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Exact portable DEV package SHA-256 and Runtime commit are mandatory'
+        }
+        if (![IO.Path]::IsPathRooted($PackagePath) -or
+            !(Test-Path -LiteralPath $PackagePath -PathType Leaf) -or
+            (Split-Path $PackagePath -Leaf) -cne ("OrdaX-MCP-Dev-{0}.zip" -f $ExpectedCommit)) {
+            throw 'Portable DEV candidate filename/source is not canonical'
+        }
+        $source = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
+        if (($source.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $source.Length -lt 1000000 -or $source.Length -gt 300000000) {
+            throw 'Portable DEV archive path or size invalid'
+        }
+        if ((Get-OwnerArchiveSha256 -Path $source.FullName) -ine $PackageSha256) {
+            throw 'Portable DEV archive differs from verified CI candidate'
+        }
+        Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit
+        # The previous Inno DEV attempts remain historical receipts only.
+        # A live journal in either schema still forbids overlapping upgrades.
+        if (Test-Path -LiteralPath $updatesRoot -PathType Container) {
+            foreach ($previous in @(Get-ChildItem -LiteralPath $updatesRoot -Directory -ErrorAction Stop)) {
+                $previousJournal = Join-Path $previous.FullName 'journal.json'
+                if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
+                $prior = Read-OwnerJsonDocument -Path $previousJournal
+                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3')) {
+                    throw "Unknown MCP update journal schema: $($previous.Name)"
+                }
+                if ($prior.phase -in @('staged','applying')) {
+                    throw "Unresolved MCP update must be reconciled: $($previous.Name)"
+                }
+            }
+        }
+        $existing = Get-CanonicalScheduledTask -Name $upgradeTaskName
+        if ($existing -and $existing.State -eq 'Running') {
+            throw 'Canonical MCP upgrade already running'
+        }
+        if ($existing) {
+            $actions = @($existing.Actions)
+            if ($actions.Count -ne 1 -or [string]$actions[0].Arguments -notmatch ' -Operation ApplyUpgrade ') {
+                throw 'Upgrade task name belongs to another program'
+            }
+        }
+        New-Item -Path $updatesRoot -ItemType Directory -Force | Out-Null
+        $id = [guid]::NewGuid().ToString('N')
+        $tx = Join-Path $updatesRoot $id
+        New-Item -Path $tx -ItemType Directory -ErrorAction Stop | Out-Null
+        $staged = Join-Path $tx $source.Name
+        Copy-Item -LiteralPath $source.FullName -Destination $staged -ErrorAction Stop
+        if ((Get-OwnerArchiveSha256 -Path $staged) -ine $PackageSha256) {
+            throw 'Portable DEV archive changed during staging'
+        }
+        $applyScript = Join-Path $tx 'apply.ps1'
+        Copy-Item -LiteralPath $lifecycle -Destination $applyScript -ErrorAction Stop
+        $journal = [pscustomobject]@{
+            schema = 'ordax.mcp-dev-upgrade/2'; transactionId = $id; phase = 'staged'
+            packageName = $source.Name; sha256 = $PackageSha256.ToUpperInvariant()
+            targetCommit = $ExpectedCommit; updatedAt = ''
+        }
+        Save-Journal (Join-Path $tx 'journal.json') $journal
+        Register-CanonicalTask -Name $upgradeTaskName -Script $applyScript -Operation ApplyUpgrade -WorkingDirectory $tx -TransactionId $id
+        Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run
+        Write-Output ("ORDAX_MCP_DEV_UPGRADE_QUEUED transaction={0} journal={1}" -f $id, (Join-Path $tx 'journal.json'))
+    }
+    'ApplyUpgrade' {
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid upgrade transaction ID' }
+        $tx = Join-Path $updatesRoot $TransactionId
+        if ([IO.Path]::GetFullPath($PSCommandPath) -ine (Join-Path $tx 'apply.ps1')) {
+            throw 'DEV upgrade executor did not originate from staged transaction'
+        }
+        $journalPath = Join-Path $tx 'journal.json'
+        $journal = Read-OwnerJsonDocument -Path $journalPath
+        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/2' -or
+            $journal.transactionId -cne $TransactionId -or
+            $journal.phase -cne 'staged' -or
+            $journal.sha256 -cnotmatch '^[0-9A-F]{64}$' -or
+            $journal.targetCommit -cnotmatch '^[0-9a-f]{40}$' -or
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+ -or
+            $journal.targetCommit -cnotmatch '^[0-9a-f]{40}
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+) {
+            throw 'Prepared DEV tree integrity verification failed'
+        }
+        return $digest
+    } finally { $child.Dispose() }
+}
+
+function Invoke-QuiesceRoot {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
+    if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
+        throw 'Installed Runtime quiesce controller missing'
+    }
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -InstallRoot $Root -TimeoutSeconds 25
+    if ($LASTEXITCODE -ne 0) { throw "Runtime quiesce failed for owner root: $Root" }
+}
+
+function Invoke-RegisterAndLaunch {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-mcp-lifecycle.ps1'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Operation Install
+    if ($LASTEXITCODE -ne 0) { throw 'Canonical MCP scheduled recovery installation failed' }
+    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+}
+
+switch ($Operation) {
+    'Install' {
+        Assert-InstalledSource
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        Register-CanonicalTask -Name $taskName -Script $lifecycle -Operation Launch -WorkingDirectory $updatesRoot
+        $registered = Get-CanonicalScheduledTask -Name $taskName
+        if ($null -eq $registered) { throw 'Canonical owner task not registered' }
+        Assert-OurTask $registered $lifecycle 'Launch'
+        # The scheduled task is now the only autostart owner. Remove old logon-only fallback.
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_REGISTERED'
+    }
+    'Launch' {
+        Assert-InstalledSource
+        # Never execute files while the trusted Inno installer is replacing them.
+        if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+            Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+            return
+        }
+        # During an upgrade, the installer may have started this launcher
+        # before the scheduled task. Adopt its process as the single owner:
+        # do not repeatedly spawn duplicate launcher attempts each minute.
+        $existingLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+            try { [IO.Path]::GetFullPath($_.Path) -ieq $launcher } catch { $false }
+        })
+        if ($existingLaunchers.Count -gt 0) {
+            $existingLaunchers[0].WaitForExit()
+            # Quiesce intentionally stopped it. Do not race the file replacement.
+            if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+                Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+                return
+            }
+        }
+        # The launcher owns the singleton mutex and Python restart loop.
+        # Waiting on its exact PID keeps the Task Scheduler action alive.
+        $runtime = Start-Process -FilePath $launcher -WorkingDirectory $installRoot -PassThru -ErrorAction Stop
+        $runtime.WaitForExit()
+        if ($runtime.ExitCode -ne 0) {
+            throw "OrdaX MCP supervisor ended with exit code $($runtime.ExitCode)"
+        }
+    }
+    'Uninstall' {
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        if ($null -ne $existing) {
+            Invoke-CanonicalTaskAction -Name $taskName -Action Delete
+        }
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_UNREGISTERED'
+    }
+    'Upgrade' {
+        Assert-InstalledSource
+        if ($PackageSha256 -cnotmatch '^[0-9a-fA-F]{64}$' -or
+            $ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Exact portable DEV package SHA-256 and Runtime commit are mandatory'
+        }
+        if (![IO.Path]::IsPathRooted($PackagePath) -or
+            !(Test-Path -LiteralPath $PackagePath -PathType Leaf) -or
+            (Split-Path $PackagePath -Leaf) -cne ("OrdaX-MCP-Dev-{0}.zip" -f $ExpectedCommit)) {
+            throw 'Portable DEV candidate filename/source is not canonical'
+        }
+        $source = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
+        if (($source.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $source.Length -lt 1000000 -or $source.Length -gt 300000000) {
+            throw 'Portable DEV archive path or size invalid'
+        }
+        if ((Get-OwnerArchiveSha256 -Path $source.FullName) -ine $PackageSha256) {
+            throw 'Portable DEV archive differs from verified CI candidate'
+        }
+        Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit
+        # The previous Inno DEV attempts remain historical receipts only.
+        # A live journal in either schema still forbids overlapping upgrades.
+        if (Test-Path -LiteralPath $updatesRoot -PathType Container) {
+            foreach ($previous in @(Get-ChildItem -LiteralPath $updatesRoot -Directory -ErrorAction Stop)) {
+                $previousJournal = Join-Path $previous.FullName 'journal.json'
+                if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
+                $prior = Read-OwnerJsonDocument -Path $previousJournal
+                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3')) {
+                    throw "Unknown MCP update journal schema: $($previous.Name)"
+                }
+                if ($prior.phase -in @('staged','applying')) {
+                    throw "Unresolved MCP update must be reconciled: $($previous.Name)"
+                }
+            }
+        }
+        $existing = Get-CanonicalScheduledTask -Name $upgradeTaskName
+        if ($existing -and $existing.State -eq 'Running') {
+            throw 'Canonical MCP upgrade already running'
+        }
+        if ($existing) {
+            $actions = @($existing.Actions)
+            if ($actions.Count -ne 1 -or [string]$actions[0].Arguments -notmatch ' -Operation ApplyUpgrade ') {
+                throw 'Upgrade task name belongs to another program'
+            }
+        }
+        New-Item -Path $updatesRoot -ItemType Directory -Force | Out-Null
+        $id = [guid]::NewGuid().ToString('N')
+        $tx = Join-Path $updatesRoot $id
+        New-Item -Path $tx -ItemType Directory -ErrorAction Stop | Out-Null
+        $staged = Join-Path $tx $source.Name
+        Copy-Item -LiteralPath $source.FullName -Destination $staged -ErrorAction Stop
+        if ((Get-OwnerArchiveSha256 -Path $staged) -ine $PackageSha256) {
+            throw 'Portable DEV archive changed during staging'
+        }
+        $applyScript = Join-Path $tx 'apply.ps1'
+        Copy-Item -LiteralPath $lifecycle -Destination $applyScript -ErrorAction Stop
+        $journal = [pscustomobject]@{
+            schema = 'ordax.mcp-dev-upgrade/2'; transactionId = $id; phase = 'staged'
+            packageName = $source.Name; sha256 = $PackageSha256.ToUpperInvariant()
+            targetCommit = $ExpectedCommit; updatedAt = ''
+        }
+        Save-Journal (Join-Path $tx 'journal.json') $journal
+        Register-CanonicalTask -Name $upgradeTaskName -Script $applyScript -Operation ApplyUpgrade -WorkingDirectory $tx -TransactionId $id
+        Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run
+        Write-Output ("ORDAX_MCP_DEV_UPGRADE_QUEUED transaction={0} journal={1}" -f $id, (Join-Path $tx 'journal.json'))
+    }
+    'ApplyUpgrade' {
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid upgrade transaction ID' }
+        $tx = Join-Path $updatesRoot $TransactionId
+        if ([IO.Path]::GetFullPath($PSCommandPath) -ine (Join-Path $tx 'apply.ps1')) {
+            throw 'DEV upgrade executor did not originate from staged transaction'
+        }
+        $journalPath = Join-Path $tx 'journal.json'
+        $journal = Read-OwnerJsonDocument -Path $journalPath
+        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/2' -or
+            $journal.transactionId -cne $TransactionId -or
+            $journal.phase -cne 'staged' -or
+            $journal.sha256 -cnotmatch '^[0-9A-F]{64}$' -or
+            $journal.targetCommit -cnotmatch '^[0-9a-f]{40}$' -or
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+ -or
+            $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
+            throw 'DEV upgrade journal identity, phase or package name invalid'
+        }
+        $package = Join-Path $tx $journal.packageName
+        if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
+            throw 'Portable DEV staged package integrity mismatch'
+        }
+        $journal.phase = 'applying'
+        Save-Journal $journalPath $journal
+        $expanded = Join-Path $tx 'expanded-runtime'
+        $previous = $installRoot + '.previous-dev'
+        $failed = Join-Path $tx 'failed-candidate'
+        $ownerDisabled = $false
+        $oldMoved = $false
+        $newMoved = $false
+        try {
+            # No installed files or tasks are touched until the entire ZIP
+            # and its exact source commit have passed preflight.
+            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            if (Test-Path -LiteralPath $previous) {
+                throw 'Unresolved previous DEV Runtime directory blocks activation'
+            }
+            if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
+                throw 'DEV Runtime atomic activation requires same volume'
+            }
+            $existing = Get-CanonicalScheduledTask -Name $taskName
+            Assert-OurTask $existing $lifecycle 'Launch'
+            if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
+                Invoke-CanonicalTaskAction -Name $taskName -Action Disable
+                $ownerDisabled = $true
+            }
+            Invoke-QuiesceRoot -Root $installRoot
+            [IO.Directory]::Move($installRoot,$previous)
+            $oldMoved = $true
+            [IO.Directory]::Move($expanded,$installRoot)
+            $newMoved = $true
+            Invoke-RegisterAndLaunch -Root $installRoot
+            $healthy = $false
+            $launchedAt = [DateTime]::UtcNow
+            # Native bootstrap may require up to 10 minutes on a degraded
+            # Windows host. Retain another two minutes for Product transport,
+            # without accepting local-only readiness as upgrade success.
+            $activationClock = [Diagnostics.Stopwatch]::StartNew()
+            while ($activationClock.Elapsed.TotalMinutes -lt 12) {
+                try {
+                    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/readiness' -TimeoutSec 2
+                    $manifest = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+                    $ownedLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+                        try { [IO.Path]::GetFullPath([string]$_.Path) -ieq $launcher -and
+                              $_.StartTime.ToUniversalTime() -ge $launchedAt.AddSeconds(-5) }
+                        catch { $false }
+                    })
+                    if ($manifest.runtime_source_commit -ceq $journal.targetCommit -and
+                        $ownedLaunchers.Count -eq 1 -and
+                        $status.local_dispatch_ready -eq $true -and
+                        $status.runtime.state -in @('ready','busy') -and
+                        $status.runtime.transport_state -eq 'connected' -and
+                        $status.runtime.product_dispatch_ready -eq $true) {
+                        $healthy = $true
+                        break
+                    }
+                } catch {}
+                Start-Sleep -Seconds 2
+            }
+            if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            $journal.phase = 'committed'
+            Save-Journal $journalPath $journal
+            # DEV contains no user data under the package root; the identity
+            # and grants remain in the existing persistent Owner state.
+            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
+        } catch {
+            $failure = $_.Exception.Message
+            if ($oldMoved) {
+                try {
+                    if ($newMoved) {
+                        $running = Get-CanonicalScheduledTask -Name $taskName
+                        if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
+                        Invoke-QuiesceRoot -Root $installRoot
+                        if (Test-Path -LiteralPath $failed) {
+                            throw 'Previously failed DEV candidate directory exists'
+                        }
+                        [IO.Directory]::Move($installRoot,$failed)
+                    }
+                    if (!(Test-Path -LiteralPath $previous -PathType Container)) {
+                        throw 'Verified previous DEV Runtime root unavailable for rollback'
+                    }
+                    [IO.Directory]::Move($previous,$installRoot)
+                    Invoke-RegisterAndLaunch -Root $installRoot
+                } catch {
+                    $failure += "; DEV rollback failed: $($_.Exception.Message)"
+                }
+            } elseif ($ownerDisabled) {
+                try {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Enable
+                    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+                } catch { $failure += "; DEV owner resume failed: $($_.Exception.Message)" }
+            }
+            $journal.phase = 'recovery-required'
+            $journal | Add-Member -NotePropertyName error -NotePropertyValue $failure -Force
+            Save-Journal $journalPath $journal
+            throw $failure
+        }
+    }
+}
+) {
+            throw 'Prepared DEV tree integrity verification failed'
+        }
+        return $digest
+    } finally { $child.Dispose() }
+}
+
+function Invoke-QuiesceRoot {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
+    if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
+        throw 'Installed Runtime quiesce controller missing'
+    }
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -InstallRoot $Root -TimeoutSeconds 25
+    if ($LASTEXITCODE -ne 0) { throw "Runtime quiesce failed for owner root: $Root" }
+}
+
+function Invoke-RegisterAndLaunch {
+    param([string]$Root)
+    $script = Join-Path $Root 'ordax-mcp-lifecycle.ps1'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Operation Install
+    if ($LASTEXITCODE -ne 0) { throw 'Canonical MCP scheduled recovery installation failed' }
+    Invoke-CanonicalTaskAction -Name $taskName -Action Run
+}
+
+switch ($Operation) {
+    'Install' {
+        Assert-InstalledSource
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        Register-CanonicalTask -Name $taskName -Script $lifecycle -Operation Launch -WorkingDirectory $updatesRoot
+        $registered = Get-CanonicalScheduledTask -Name $taskName
+        if ($null -eq $registered) { throw 'Canonical owner task not registered' }
+        Assert-OurTask $registered $lifecycle 'Launch'
+        # The scheduled task is now the only autostart owner. Remove old logon-only fallback.
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_REGISTERED'
+    }
+    'Launch' {
+        Assert-InstalledSource
+        # Never execute files while the trusted Inno installer is replacing them.
+        if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+            Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+            return
+        }
+        # During an upgrade, the installer may have started this launcher
+        # before the scheduled task. Adopt its process as the single owner:
+        # do not repeatedly spawn duplicate launcher attempts each minute.
+        $existingLaunchers = @(Get-Process -Name 'ORDAX Runtime' -ErrorAction SilentlyContinue | Where-Object {
+            try { [IO.Path]::GetFullPath($_.Path) -ieq $launcher } catch { $false }
+        })
+        if ($existingLaunchers.Count -gt 0) {
+            $existingLaunchers[0].WaitForExit()
+            # Quiesce intentionally stopped it. Do not race the file replacement.
+            if (@(Get-Process -Name 'OrdaX-MCP-Setup-*' -ErrorAction SilentlyContinue).Count -gt 0) {
+                Write-Output 'ORDAX_MCP_UPGRADE_IN_PROGRESS'
+                return
+            }
+        }
+        # The launcher owns the singleton mutex and Python restart loop.
+        # Waiting on its exact PID keeps the Task Scheduler action alive.
+        $runtime = Start-Process -FilePath $launcher -WorkingDirectory $installRoot -PassThru -ErrorAction Stop
+        $runtime.WaitForExit()
+        if ($runtime.ExitCode -ne 0) {
+            throw "OrdaX MCP supervisor ended with exit code $($runtime.ExitCode)"
+        }
+    }
+    'Uninstall' {
+        $existing = Get-CanonicalScheduledTask -Name $taskName
+        Assert-OurTask $existing $lifecycle 'Launch'
+        if ($null -ne $existing) {
+            Invoke-CanonicalTaskAction -Name $taskName -Action Delete
+        }
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OrdaX MCP' -ErrorAction SilentlyContinue
+        Write-Output 'ORDAX_MCP_LIFECYCLE_UNREGISTERED'
+    }
+    'Upgrade' {
+        Assert-InstalledSource
+        if ($PackageSha256 -cnotmatch '^[0-9a-fA-F]{64}$' -or
+            $ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Exact portable DEV package SHA-256 and Runtime commit are mandatory'
+        }
+        if (![IO.Path]::IsPathRooted($PackagePath) -or
+            !(Test-Path -LiteralPath $PackagePath -PathType Leaf) -or
+            (Split-Path $PackagePath -Leaf) -cne ("OrdaX-MCP-Dev-{0}.zip" -f $ExpectedCommit)) {
+            throw 'Portable DEV candidate filename/source is not canonical'
+        }
+        $source = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
+        if (($source.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $source.Length -lt 1000000 -or $source.Length -gt 300000000) {
+            throw 'Portable DEV archive path or size invalid'
+        }
+        if ((Get-OwnerArchiveSha256 -Path $source.FullName) -ine $PackageSha256) {
+            throw 'Portable DEV archive differs from verified CI candidate'
+        }
+        Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit
+        # The previous Inno DEV attempts remain historical receipts only.
+        # A live journal in either schema still forbids overlapping upgrades.
+        if (Test-Path -LiteralPath $updatesRoot -PathType Container) {
+            foreach ($previous in @(Get-ChildItem -LiteralPath $updatesRoot -Directory -ErrorAction Stop)) {
+                $previousJournal = Join-Path $previous.FullName 'journal.json'
+                if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
+                $prior = Read-OwnerJsonDocument -Path $previousJournal
+                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3')) {
                     throw "Unknown MCP update journal schema: $($previous.Name)"
                 }
                 if ($prior.phase -in @('staged','applying')) {
