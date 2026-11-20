@@ -107,15 +107,31 @@ Evidência GUI real (não apenas CI/headless):
    O .blend tem 98.258 bytes e SHA-256
    ff0b98ea45cec5ca741b53898437218ce12f57a4e1c0784567004f1fe72309dd.
 
-Novo comportamento canônico: somente **quando o processo Blender recém-aberto
-mostra a janela oficial de GPU incompatível**, o LiveBridge pode tentar
-**uma vez** um ICD Mesa3D local previamente provisionado em
-AgentConfig.state_dir/blender-gpu/software-vulkan/ com os arquivos
-lvp_icd.x86_64.json e vulkan_lvp.dll. O Runtime verifica o manifesto
-e SHA-256 da DLL antes do fallback. O segundo processo recebe
---gpu-backend vulkan, VK_DRIVER_FILES e VK_ICD_FILENAMES apenas nele próprio.
-Não instala drivers, não modifica PATH/registro Windows, não expõe scripts ou
-dispositivos remotos adicionais e não cria outro MCP.
+Aprimoramento após prova física no Runtime 5cf78ad0 em 20/11/2026:
+
+- O LiveBridge.start iniciou o Blender com a GPU nativa; a janela de erro
+  OpenGL não apareceu nesse contexto e o companion nunca publicou presença.
+  Após 74,12 segundos, retornou falha, sem declarar uma sessão pronta.
+- Com o mesmo Runtime e o mesmo binário Blender 5.3.0, definir o ICD Lavapipe
+  verificado diretamente no processo fez o companion publicar presença fresca
+  em 30,81 segundos, protocolo 9. Pelo inbox do BlenderLiveBridge, as ações
+  create_primitive e rig_create foram aprovadas, duplicata rejeitada e save
+  aprovado com recibo durável. O arquivo .blend de 98.268 bytes foi reaberto
+  por outro processo Blender em 3,7 segundos, com SHA-256 idêntico:
+  1082bad624fe1177a44ef3259bc647b1e2e2da4a03001a4d4b5e909b0ba288e1.
+- Correção: a presença dos dois arquivos **verificados** no estado do
+  Runtime (AgentConfig.state_dir/blender-gpu/software-vulkan) é a seleção
+  explícita do operador pelo driver de software. O LiveBridge usa
+  --gpu-backend vulkan, VK_DRIVER_FILES e VK_ICD_FILENAMES **desde a primeira
+  inicialização**, exclusivamente no processo Blender. Não depende mais da
+  existência de uma janela de erro da GPU para escolher o driver já presente.
+- Na ausência de driver verificado, o caminho nativo permanece inalterado.
+  O fallback único baseado no aviso oficial ainda funciona se o driver
+  passou a existir após a primeira inicialização. Nenhum driver é instalado,
+  nenhum registro/PATH global é modificado e nenhum MCP ou supervisor é criado.
+  Os testes exercitam seleção imediata e fallback único.
+
+A correção não altera permissões de Project nem emite grants remotos.
 
 **Limite da prova:** estas operações usaram o transporte local legítimo,
 mas **não** demonstram ChatGPT → Product MCP → Platform grant → Device Agent.
