@@ -331,7 +331,9 @@ class BrowserSessionActions:
             f"--user-data-dir={profile}",
             f"--remote-debugging-port={port}",
             "--remote-debugging-address=127.0.0.1",
-            url,
+            # Always establish an owned CDP target before navigating.
+            # Chromium may otherwise leave the only page at about:blank.
+            "about:blank",
         ]
         if bool(payload.get("headless", False)):
             command.insert(1, "--headless=new")
@@ -386,7 +388,7 @@ class BrowserSessionActions:
                     target = self._browser_target(
                         state,
                         timeout_seconds=min(2.0, max(0.2, deadline - time.monotonic())),
-                        create_url=url,
+                        create_url="about:blank",
                     )
                     break
                 except BrowserCaptureError as error:
@@ -431,11 +433,14 @@ class BrowserSessionActions:
         else:
             def initialize_page(ws, _state, _target):
                 _cdp_call(ws, 1, "Page.enable")
+                navigation = _cdp_call(ws, 2, "Page.navigate", {"url": url})
+                if navigation.get("errorText"):
+                    raise BrowserCaptureError("Chromium rejected initial navigation")
                 deadline = time.monotonic() + max(
                     5.0,
                     min(float(payload.get("wait_seconds", 8)), 30.0),
                 )
-                request_id = 2
+                request_id = 3
                 current_url = ""
                 title = ""
                 while time.monotonic() < deadline:
@@ -445,7 +450,8 @@ class BrowserSessionActions:
                     request_id += 1
                     title = str(self._eval(ws, request_id, "document.title") or "")
                     request_id += 1
-                    if ready_state in {"interactive", "complete"} and current_url == url:
+                    if (ready_state in {"interactive", "complete"}
+                            and (current_url == url or _same_origin(current_url, url))):
                         return {"url": current_url, "title": title}
                     time.sleep(0.1)
                 raise BrowserCaptureError(
@@ -457,7 +463,7 @@ class BrowserSessionActions:
                     project,
                     session_id,
                     initialize_page,
-                    preferred_url=url,
+                    preferred_url="about:blank",
                 )
             except (ValueError, BrowserCaptureError) as error:
                 cleanup = None
@@ -543,20 +549,29 @@ class BrowserSessionActions:
 
         def run(ws, state, _target):
             _cdp_call(ws, 1, "Page.enable")
-            _cdp_call(ws, 2, "Page.navigate", {"url": url})
+            navigation = _cdp_call(ws, 2, "Page.navigate", {"url": url})
+            if navigation.get("errorText"):
+                raise BrowserCaptureError("Chromium rejected navigation")
             deadline = time.monotonic() + max(2.0, min(float(payload.get("wait_seconds", 15)), 30.0))
             request_id = 3
+            current_url = ""
             while time.monotonic() < deadline:
                 ready = self._eval(ws, request_id, "document.readyState")
                 request_id += 1
-                if ready in {"interactive", "complete"}:
-                    break
+                current_url = str(self._eval(ws, request_id, "location.href") or "")
+                request_id += 1
+                if (ready in {"interactive", "complete"}
+                        and (current_url == url or _same_origin(current_url, url))):
+                    return {
+                        "session_id": session_id,
+                        "requested_url": url,
+                        "url": current_url,
+                        "title": self._eval(ws, request_id, "document.title"),
+                    }
                 time.sleep(0.1)
-            return {
-                "session_id": session_id,
-                "url": self._eval(ws, request_id, "location.href"),
-                "title": self._eval(ws, request_id + 1, "document.title"),
-            }
+            raise BrowserCaptureError(
+                f"Chromium navigation did not reach requested origin: {current_url or 'unknown URL'}"
+            )
 
         try:
             data = self._with_page(project, session_id, run)

@@ -24,6 +24,11 @@ _HTML = b"""<!doctype html>
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("location", "/")
+            self.end_headers()
+            return
         self.send_response(200)
         self.send_header("content-type", "text/html; charset=utf-8")
         self.send_header("content-length", str(len(_HTML)))
@@ -109,6 +114,41 @@ class BrowserSessionActionsTests(unittest.TestCase):
     @property
     def url(self):
         return f"http://127.0.0.1:{self.server.server_address[1]}/"
+
+    def test_initial_navigation_accepts_same_origin_redirect(self):
+        started = self.registry.execute(
+            "browser.start",
+            {
+                "project": "demo",
+                "url": self.url + "redirect",
+                "headless": True,
+                "wait_seconds": 15,
+            },
+        )
+        self.assertTrue(started.ok, started.summary)
+        self.session_id = started.data["session_id"]
+        self.assertEqual(started.data["url"], self.url)
+        self.assertTrue(started.data["ownership_valid"])
+
+        blank = self.registry.execute(
+            "browser.navigate",
+            {"project": "demo", "session_id": self.session_id, "url": "about:blank"},
+        )
+        self.assertFalse(blank.ok)
+
+    def test_blank_session_can_navigate_to_real_page(self):
+        started = self.registry.execute(
+            "browser.start", {"project": "demo", "url": "about:blank", "headless": True},
+        )
+        self.assertTrue(started.ok, started.summary)
+        self.session_id = started.data["session_id"]
+        navigated = self.registry.execute(
+            "browser.navigate",
+            {"project": "demo", "session_id": self.session_id, "url": self.url + "redirect"},
+        )
+        self.assertTrue(navigated.ok, navigated.summary)
+        self.assertEqual(navigated.data["url"], self.url)
+        self.assertEqual(navigated.data["requested_url"], self.url + "redirect")
 
     def test_headless_browser_snapshot_type_click_screenshot_and_stop(self):
         started = self.registry.execute(
