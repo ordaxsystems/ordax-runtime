@@ -148,7 +148,7 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
                 patch("ordax_dev_agent.blender_live_bridge.subprocess.Popen",
                       side_effect=[first, fallback]) as spawn,
                 patch("ordax_dev_agent.blender_live_bridge._verified_software_vulkan_icd",
-                      return_value=cpu_icd) as driver,
+                      side_effect=[None, cpu_icd]) as driver,
                 patch("ordax_dev_agent.blender_live_bridge._windows_blender_graphics_error_for_pid",
                       return_value=graphics_modal) as graphics_probe,
             ):
@@ -160,7 +160,9 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
             first.terminate.assert_called_once()
             first.wait.assert_called_once_with(timeout=2.0)
             fallback.terminate.assert_not_called()
-            driver.assert_called_once_with(base / "state")
+            self.assertEqual(driver.call_count, 2)
+            self.assertEqual(driver.call_args_list[0].args, (base / "state",))
+            self.assertEqual(driver.call_args_list[1].args, (base / "state",))
             graphics_probe.assert_called_once_with(1048)
             self.assertEqual(spawn.call_count, 2)
             native_args, native_kwargs = spawn.call_args_list[0]
@@ -171,6 +173,47 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
             self.assertIn("vulkan", cpu_args[0])
             self.assertEqual(cpu_kwargs["env"]["VK_DRIVER_FILES"], str(cpu_icd))
             self.assertEqual(cpu_kwargs["env"]["VK_ICD_FILENAMES"], str(cpu_icd))
+
+
+
+    def test_explicitly_provisioned_verified_driver_is_selected_on_first_launch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            project = Project(slug="gpu_smoke", root=base, apps=("blender",))
+            bridge = BlenderLiveBridge(
+                SimpleNamespace(state_dir=base / "state"), project,
+            )
+            icd = base / "state" / "blender-gpu" / "software-vulkan" / "lvp_icd.x86_64.json"
+            process = Mock()
+            process.pid = 3056
+            process.poll.return_value = None
+            with (
+                patch("ordax_dev_agent.blender_live_bridge.find_blender", return_value=base / "blender.exe"),
+                patch.object(bridge, "_companion_fingerprint", return_value="valid"),
+                patch.object(bridge, "presence_is_fresh", side_effect=[False, True]),
+                patch.object(bridge, "status", return_value={
+                    "identity_matches": True,
+                    "protocol_compatible": True,
+                    "companion_current": True,
+                }),
+                patch("ordax_dev_agent.blender_live_bridge._verified_software_vulkan_icd",
+                      return_value=icd) as driver,
+                patch("ordax_dev_agent.blender_live_bridge.subprocess.Popen",
+                      return_value=process) as spawn,
+                patch("ordax_dev_agent.blender_live_bridge._windows_blender_graphics_error_for_pid") as gpu_probe,
+            ):
+                result = bridge.start(wait_seconds=45)
+            self.assertTrue(result.ok, result.summary)
+            self.assertEqual(result.data["pid"], 3056)
+            self.assertEqual(result.data["graphics_backend"], "vulkan-software")
+            driver.assert_called_once_with(base / "state")
+            spawn.assert_called_once()
+            argv, kwargs = spawn.call_args
+            self.assertEqual(argv[0][3:5], ["--gpu-backend", "vulkan"])
+            self.assertEqual(kwargs["env"]["VK_DRIVER_FILES"], str(icd))
+            self.assertEqual(kwargs["env"]["VK_ICD_FILENAMES"], str(icd))
+            gpu_probe.assert_not_called()
+            process.terminate.assert_not_called()
 
 
 

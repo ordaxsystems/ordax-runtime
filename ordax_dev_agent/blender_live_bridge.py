@@ -466,8 +466,14 @@ class BlenderLiveBridge:
                     **parameters,
                 )
 
-        process = launch(None)
-        software_vulkan_attempted = False
+        # Provisioning the pinned, verified local driver is an explicit
+        # selection of software Vulkan for this Blender subprocess. Prefer it
+        # immediately: unsupported GPUs do not always create the modal
+        # window used by the native-start fallback (physical Windows E2E).
+        # With no verified driver, retain the unchanged native GPU path.
+        configured_software_icd = _verified_software_vulkan_icd(self.config.state_dir)
+        process = launch(configured_software_icd)
+        software_vulkan_attempted = configured_software_icd is not None
         deadline = time.monotonic() + max(3.0, wait_seconds)
         next_graphics_probe = 0.0
         while time.monotonic() < deadline:
