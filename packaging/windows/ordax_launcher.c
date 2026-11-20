@@ -312,7 +312,7 @@ static DWORD run_python_child(
     ZeroMemory(&process, sizeof(process));
     startup.cb = sizeof(startup);
 
-    DWORD flags = CREATE_UNICODE_ENVIRONMENT;
+    DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED;
     if (hidden) flags |= CREATE_NO_WINDOW;
 
     // This parent is single-threaded. Only the exact child inherits this
@@ -332,7 +332,9 @@ static DWORD run_python_child(
         return create_error;
     }
 
-    if (job != NULL && !AssignProcessToJobObject(job, process.hProcess)) {
+    // The child must enter the recovery job before executing any Python.
+    if ((job != NULL && !AssignProcessToJobObject(job, process.hProcess))
+            || ResumeThread(process.hThread) == (DWORD)-1) {
         DWORD error = GetLastError();
         TerminateProcess(process.hProcess, error);
         WaitForSingleObject(process.hProcess, 5000);

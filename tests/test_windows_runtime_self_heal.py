@@ -32,6 +32,9 @@ class WindowsRuntimeSelfHealContractTests(unittest.TestCase):
         self.assertIn("SetEnvironmentVariableW(ORDAX_BOOTSTRAP_EVENT_ENV, bootstrap_name)", launcher)
         self.assertIn("SetEnvironmentVariableW(ORDAX_BOOTSTRAP_EVENT_ENV, NULL)", launcher)
         self.assertIn("3, bootstrap_wait, FALSE, ORDAX_BOOTSTRAP_TIMEOUT_MS", launcher)
+        child = launcher.split("static DWORD run_python_child(", 1)[1].split("int APIENTRY", 1)[0]
+        self.assertIn("CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED", child)
+        self.assertLess(child.index("AssignProcessToJobObject"), child.index("ResumeThread"))
         self.assertIn("job = create_kill_job()", launcher)
         self.assertIn("if (result == ERROR_TIMEOUT)", launcher)
         self.assertIn("TerminateJobObject(job, ERROR_TIMEOUT)", launcher)
@@ -40,8 +43,9 @@ class WindowsRuntimeSelfHealContractTests(unittest.TestCase):
         self.assertIn('os.environ.pop("ORDAX_RUNTIME_BOOTSTRAP_EVENT", "")', agent)
         self.assertIn("kernel.SetEvent(handle)", agent)
         self.assertIn('    _startup_log(config, "CONTROL_PLANE_READY")' + chr(10) + '    _signal_native_launcher_bootstrap_ready()', agent)
-        self.assertLess(agent.index('    _startup_log(config, "CONTROL_PLANE_READY")'),
-                        agent.index('    _signal_native_launcher_bootstrap_ready()'))
+        local_startup = agent.split('    if not remote_control_configured:\n', 2)[-1]
+        self.assertLess(local_startup.index('_signal_native_launcher_bootstrap_ready()'),
+                        local_startup.index('while not stop:'))
         self.assertNotIn("ORDAX_RUNTIME_BOOTSTRAP_EVENT", (ROOT / "scripts/windows/ordax-agent-watchdog.ps1").read_text(encoding="utf-8"))
 
     def test_runtime_start_failure_is_not_silent(self) -> None:

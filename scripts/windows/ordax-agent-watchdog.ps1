@@ -8,6 +8,7 @@ param(
     [string]$RestartTaskName = "OrdaX Dev Agent",
     [int]$RestartDelaySeconds = 5,
     [switch]$RequireProductDispatchReadiness,
+    [switch]$NativeLauncherOwnsRestart,
     [ValidateRange(1, 65535)]
     [int]$HealthPort = 8765
 )
@@ -124,6 +125,12 @@ function Test-CanonicalUpgradeActive {
 }
 
 function Request-AgentRestartIfNeeded {
+    if ($NativeLauncherOwnsRestart) {
+        # The launcher waits on this exact Python child and owns its successor.
+        # A task stop here would terminate that launcher during recovery.
+        Write-WatchdogLog "RESTART_DELEGATED native launcher owns successor pid=$AgentPid"
+        return
+    }
     Start-Sleep -Seconds $RestartDelaySeconds
     if (Test-CanonicalUpgradeActive) {
         Write-WatchdogLog "RESTART_SKIP canonical MCP upgrade active"
@@ -246,7 +253,7 @@ while ($true) {
                 exit 22
             }
         } else {
-            # Pairing, deliberate local disablement and a control-plane outage
+            # Initial heartbeat, deliberate local disablement and a control-plane outage
             # are not evidence that the local Runtime process is hung.
             if ($consecutiveFailures -gt 0) {
                 Write-WatchdogLog "PRODUCT_STALE_RESET transport=$transportState code=$readinessCode"

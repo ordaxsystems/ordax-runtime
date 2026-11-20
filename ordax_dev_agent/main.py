@@ -279,6 +279,8 @@ def _product_heartbeat_tick(
             "code": type(error).__name__,
             "at": time.time(),
         }
+        if runtime.get("state") == "awaiting-heartbeat":
+            runtime["transport_state"] = "reconnecting"
         return False
 
     _record_product_heartbeat(runtime)
@@ -335,8 +337,8 @@ def _schedule_terminal_report_recovery(
 ) -> tuple[Future[bool] | None, float]:
     """Reconcile durable terminal receipts without blocking new MCP claims.
 
-    A single in-flight recovery owns the same canonical outbox and report RPC
-    that startup uses. No second recovery starts until the first has completed.
+    The same single-flight recovery runs from the first Product loop tick.
+    No second recovery starts until the first has completed.
     Device credential revocation is propagated on the claim thread when its
     completed future is inspected, preserving the existing fail-closed exit.
     """
@@ -358,7 +360,7 @@ def _schedule_terminal_report_recovery(
 def _mark_identity_loaded(runtime: dict) -> None:
     """An enrolled token is not a remote heartbeat receipt."""
     runtime["paired"] = False
-    runtime["state"] = "pairing"
+    runtime["state"] = "awaiting-heartbeat"
     runtime["transport_state"] = "connecting"
     runtime["last_result"] = {"ok": False, "summary": "awaiting Product heartbeat"}
 
@@ -367,7 +369,7 @@ def _record_product_heartbeat(runtime: dict) -> None:
     """Only a successful transport heartbeat establishes remote pairing."""
     runtime["last_heartbeat_at"] = time.time()
     runtime["paired"] = True
-    if runtime.get("state") in {"pairing", "control-plane-error"}:
+    if runtime.get("state") in {"awaiting-heartbeat", "control-plane-error"}:
         runtime["state"] = "ready"
         runtime["last_result"] = {"ok": True, "summary": "Product heartbeat confirmed"}
     _mark_transport_healthy(runtime)
@@ -408,16 +410,19 @@ def product_dispatch_readiness(
         return unavailable("local_access_disabled")
     if not remote_control_configured:
         return unavailable("remote_control_not_configured")
+    transport_state = runtime.get("transport_state")
+    if transport_state == "reconnecting":
+        return unavailable("transport_reconnecting")
+    if state == "awaiting-heartbeat":
+        return unavailable("heartbeat_not_observed")
+    if state == "initializing":
+        return unavailable("runtime_not_ready")
     if not runtime.get("paired"):
         return unavailable("pairing_required")
     if state not in {"ready", "busy"}:
         return unavailable("runtime_not_ready")
-    transport_state = str(runtime.get("transport_state") or "unknown")
     if transport_state != "connected":
-        return unavailable(
-            "transport_reconnecting" if transport_state == "reconnecting"
-            else "transport_not_connected"
-        )
+        return unavailable("transport_not_connected")
     try:
         heartbeat_at = float(runtime.get("last_heartbeat_at"))
         current_time = time.time() if now is None else float(now)
@@ -427,6 +432,13 @@ def product_dispatch_readiness(
         return unavailable("heartbeat_not_observed")
     heartbeat_age = current_time - heartbeat_at
     if heartbeat_age < -5.0 or heartbeat_age > 60.0:
+        last_error = runtime.get("last_heartbeat_error") or {}
+        failed_at = last_error.get("at")
+        if (
+            isinstance(failed_at, (int, float))
+            and 0 <= current_time - failed_at <= _PRODUCT_HEARTBEAT_SECONDS
+        ):
+            return unavailable("transport_reconnecting")
         return unavailable("heartbeat_stale")
     return {"product_dispatch_ready": True, "product_readiness_code": "ready"}
 
@@ -805,17 +817,6 @@ def _execute_claimed_job(
         job_changed.set()
 
 
-def _agent_metadata(config: AgentConfig) -> dict:
-    from .projects import load_projects
-
-    return {
-        "hordax_path": str(config.hordax_path),
-        "bridge_path": str(config.bridge_path),
-        "platform": sys.platform,
-        "projects": [project.public() for project in load_projects(config).values()],
-    }
-
-
 def _start_local_watchdog(
     config: AgentConfig,
     *,
@@ -852,6 +853,8 @@ def _start_local_watchdog(
     ]
     if packaged_root:
         command.extend(['-RestartTaskName', 'OrdaX MCP', '-RequireProductDispatchReadiness'])
+        if os.environ.get('ORDAX_RUNTIME_SUPERVISED') == '1':
+            command.append('-NativeLauncherOwnsRestart')
     try:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         process = subprocess.Popen(
@@ -1213,9 +1216,8 @@ def run(
         and config.product_mcp_url
         and config.device_id
     )
-    runtime["state"] = "pairing" if remote_control_configured else "local-ready"
+    runtime["state"] = "initializing" if remote_control_configured else "local-ready"
     runtime["transport_state"] = "connecting" if remote_control_configured else "not-configured"
-    print(json.dumps(status_payload(), indent=2))
 
     stop = False
     stop_requested = threading.Event()
@@ -1230,6 +1232,8 @@ def run(
         signal.signal(signal.SIGTERM, _stop)
 
     if not remote_control_configured:
+        # The local dispatcher is bootstrapped and can wait for Owner enrollment.
+        _signal_native_launcher_bootstrap_ready()
         print(
             "Remote control plane is not configured yet. Local action registry is ready; "
             "configure agent-settings.json/environment to enable the selected transport."
@@ -1278,64 +1282,17 @@ def run(
             close_status_server()
 
 
-    recover_pending_reports = getattr(control, "recover_pending_reports", None)
-    if callable(recover_pending_reports):
-        from .remote_protocol import DeviceAuthorizationError
-
-        while not stop:
-            if not _native_local_access_granted(native_access_enabled):
-                runtime["state"] = "local-disabled"
-                close_remote_control()
-                return 0
-            try:
-                runtime["state"] = "recovering-terminal-reports"
-                recovered = int(recover_pending_reports())
-                runtime["terminal_reports_recovered"] = recovered
-                if recovered:
-                    _startup_log(
-                        config,
-                        f"TERMINAL_REPORTS_RECOVERED count={recovered}",
-                    )
-                break
-            except DeviceAuthorizationError:
-                runtime["state"] = "credential-recovery-required"
-                close_remote_control()
-                return 43
-            except Exception as error:
-                runtime["state"] = "terminal-recovery-error"
-                runtime["last_result"] = {"ok": False, "summary": str(error)}
-                print(f"terminal report recovery error: {error}", file=sys.stderr)
-                if not _wait_for_native_access(
-                    max(5.0, config.poll_seconds), stop_requested, native_access_enabled,
-                ):
-                    continue
-
-    while not stop:
-        if not _native_local_access_granted(native_access_enabled):
+    if stop or not _native_local_access_granted(native_access_enabled):
+        if not stop:
             runtime["state"] = "local-disabled"
-            close_remote_control()
-            return 0
-        try:
-            control.pair_if_needed(
-                host_actions,
-                agent_version=__version__,
-                metadata=_agent_metadata(config),
-            )
-            _mark_identity_loaded(runtime)
-            break
-        except Exception as error:
-            runtime["state"] = "pairing-error"
-            runtime["last_result"] = {"ok": False, "summary": str(error)}
-            print(f"pairing error: {error}", file=sys.stderr)
-            if not _wait_for_native_access(
-                max(5.0, config.poll_seconds), stop_requested, native_access_enabled,
-            ):
-                continue
-
-    if stop:
         close_remote_control()
         return 0
 
+    # Construction already loaded the enrolled credential. The authenticated
+    # heartbeat confirms presence while the existing maintenance lane reconciles
+    # durable receipts independently from the first Product loop tick.
+    _mark_identity_loaded(runtime)
+    recover_pending_reports = getattr(control, "recover_pending_reports", None)
     next_heartbeat = 0.0
     idle_claim_misses = 0
     transport_failures = 0
@@ -1440,10 +1397,7 @@ def run(
                         host_actions,
                         runtime,
                         agent_version=__version__,
-                        metadata={
-                            **_agent_metadata(config),
-                            "max_concurrent_jobs": _MAX_CONCURRENT_PRODUCT_JOBS,
-                        },
+                        metadata={"max_concurrent_jobs": _MAX_CONCURRENT_PRODUCT_JOBS},
                         status="busy" if has_active_jobs else "online",
                     )
                     # A slow Project Catalog lookup used to block the ONLY
@@ -1578,11 +1532,18 @@ def run(
                 transport_failures += 1
                 retry_delay = _transport_retry_delay(transport_failures)
                 runtime["transport_retry_seconds"] = retry_delay
+                next_claim_due = max(next_claim_due, time.monotonic() + retry_delay)
                 # Report the first failures and powers of two, not every
                 # identical error through a prolonged backend outage.
                 if transport_failures <= 2 or (transport_failures & (transport_failures - 1)) == 0:
                     print(f"control-plane error (retry in {retry_delay:.0f}s): {error}", file=sys.stderr)
-                _wait_for_native_access(retry_delay, stop_requested, native_access_enabled)
+                _wait_for_native_access(
+                    product_idle_wait_seconds(
+                        now=time.monotonic(), next_claim_due=next_claim_due,
+                        next_heartbeat=next_heartbeat,
+                    ),
+                    stop_requested, native_access_enabled,
+                )
                 # A retry delay cannot prove transport recovery; remain in
                 # control-plane-error until a subsequent heartbeat is accepted.
                 if stop:
@@ -1598,7 +1559,6 @@ def run(
             control.heartbeat(
                 host_actions,
                 agent_version=__version__,
-                metadata=_agent_metadata(config),
                 status="offline",
             )
         except Exception:

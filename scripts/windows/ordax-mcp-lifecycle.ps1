@@ -204,11 +204,15 @@ function Register-CanonicalTask {
         $limit = 'PT40M'
         $restart = ''
         $description = ''
+        $priority = ''
     } else {
         $trigger = "<LogonTrigger><UserId>$safeUser</UserId></LogonTrigger><TimeTrigger><StartBoundary>$startBoundary</StartBoundary><Repetition><Interval>PT1M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>true</StopAtDurationEnd></Repetition></TimeTrigger>"
         $limit = 'PT0S'
         $restart = '<RestartOnFailure><Count>999</Count><Interval>PT1M</Interval></RestartOnFailure>'
         $description = '<Description>Single OrdaX MCP Runtime: automatic launcher recovery without a second agent</Description>'
+        # MCP serves interactive requests. The scheduler default (7) starts
+        # its launcher and Python below normal, delaying bootstrap under I/O load.
+        $priority = '<Priority>4</Priority>'
     }
     $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
@@ -223,6 +227,7 @@ function Register-CanonicalTask {
     $restart
     <StartWhenAvailable>true</StartWhenAvailable>
     <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
+    $priority
   </Settings>
   <Triggers>$trigger</Triggers>
   <Actions Context="Author"><Exec><Command>$safeCommand</Command><Arguments>$safeArgs</Arguments><WorkingDirectory>$safeDirectory</WorkingDirectory></Exec></Actions>

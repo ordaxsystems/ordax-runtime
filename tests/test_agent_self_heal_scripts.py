@@ -121,6 +121,14 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("function Request-AgentRestartIfNeeded", watchdog)
+        request_restart = watchdog.split("function Request-AgentRestartIfNeeded {", 1)[1]
+        delegated = request_restart.split("Start-Sleep -Seconds $RestartDelaySeconds", 1)[0]
+        self.assertIn("if ($NativeLauncherOwnsRestart)", delegated)
+        self.assertIn("return", delegated)
+        self.assertNotIn("Invoke-BoundedScheduledTask", delegated)
+        agent = (root / "ordax_dev_agent/main.py").read_text(encoding="utf-8")
+        self.assertIn("if os.environ.get('ORDAX_RUNTIME_SUPERVISED') == '1':\n"
+                      "            command.append('-NativeLauncherOwnsRestart')", agent)
         self.assertIn("function Stop-AgentForRecovery", watchdog)
         self.assertIn("function Recover-Agent", watchdog)
         self.assertIn("Stop-Process -InputObject $current -Force", watchdog)
@@ -229,6 +237,8 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertIn("Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run", lifecycle)
         self.assertIn("<LogonTrigger>", lifecycle)
         self.assertIn("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>", lifecycle)
+        self.assertIn("$priority = '<Priority>4</Priority>'", lifecycle)
+        self.assertIn("    $priority\n  </Settings>", lifecycle)
         self.assertNotIn("New-ScheduledTaskAction", lifecycle)
         self.assertNotIn("Register-ScheduledTask", lifecycle)
         self.assertIn("Assert-OurTask $existing $lifecycle 'Launch'", lifecycle)
