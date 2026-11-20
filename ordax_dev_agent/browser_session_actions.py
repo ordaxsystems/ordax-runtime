@@ -891,17 +891,39 @@ class BrowserSessionActions:
                 return ActionResult(False, "refusing to stop a browser process not owned by ORDAX", state)
 
             requested_graceful = self._request_browser_shutdown(state)
+            graceful_stopped = False
             if requested_graceful:
-                # Windows Chrome can take longer than eight seconds to flush its
-                # project-owned profile after a successful Browser.close.
-                # Still fail closed to the existing bounded ownership-checked
-                # fallback if the process remains alive after this deadline.
-                graceful_deadline = time.monotonic() + 25.0
-                while time.monotonic() < graceful_deadline:
-                    if not self._pid_running(pid) and self._discover_browser_pid(project, state) is None:
-                        break
-                    time.sleep(0.1)
-            graceful_stopped = not self._pid_running(pid) and self._discover_browser_pid(project, state) is None
+                # Wait on the exact owned Chrome process, not on repeated WMI
+                # enumeration while its profile is still being flushed.
+                # Process ownership was verified above, before Browser.close.
+                deadline = time.monotonic() + 25.0
+                handle = getattr(self, "_browser_process_handles", {}).get(session_id)
+                if handle is not None and handle.pid == pid:
+                    try:
+                        handle.wait(timeout=max(0.0, deadline - time.monotonic()))
+                    except subprocess.TimeoutExpired:
+                        pass
+                else:
+                    # A recovered Runtime may not retain the Python Popen handle.
+                    while self._pid_running(pid) and time.monotonic() < deadline:
+                        time.sleep(0.2)
+                if not self._pid_running(pid):
+                    # A Chromium child can outlive its launcher briefly. Check
+                    # the same authorized profile/port while allowing those
+                    # remaining processes to close normally, with a deadline.
+                    children_deadline = time.monotonic() + 12.0
+                    while time.monotonic() < children_deadline:
+                        if self._discover_browser_pid(project, state) is None:
+                            graceful_stopped = True
+                            break
+                        time.sleep(0.4)
+            else:
+                # A failed CDP request never authorizes arbitrary process
+                # termination; the fallback below still checks ownership.
+                graceful_stopped = (
+                    not self._pid_running(pid) and
+                    self._discover_browser_pid(project, state) is None
+                )
             try:
                 if not graceful_stopped and os.name == "nt":
                     deadline = time.monotonic() + 12.0
