@@ -206,8 +206,10 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         # in one bounded child. No second background updater or unbounded
         # Task Scheduler .NET ZipFile extraction is permitted.
         self.assertIn("Join-Path $installRoot 'runtime\\python.exe'", lifecycle)
-        self.assertIn("zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])", lifecycle)
-        self.assertIn("$child.WaitForExit(180000)", lifecycle)
+        self.assertIn("with zipfile.ZipFile(sys.argv[1]) as archive:", lifecycle)
+        self.assertIn("ThreadPoolExecutor(max_workers=4)", lifecycle)
+        self.assertIn("archive.extract(member, destination)", lifecycle)
+        self.assertIn("$child.WaitForExit(480000)", lifecycle)
         self.assertIn("$child.Kill()", lifecycle)
         self.assertNotIn(
             "[IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath,$Destination)",
