@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -235,6 +236,7 @@ class BrowserSessionActions:
         *,
         timeout_seconds: float = 5.0,
         create_url: str | None = None,
+        tab_id: str | None = None,
     ) -> dict[str, Any]:
         port = int(state.get("debug_port") or 0)
         deadline = time.monotonic() + timeout_seconds
@@ -256,7 +258,11 @@ class BrowserSessionActions:
                         and item.get("webSocketDebuggerUrl")
                     ] if isinstance(items, list) else []
                     if pages:
-                        if create_url:
+                        if tab_id:
+                            owned = next((p for p in pages if p.get('id') == tab_id), None)
+                            if owned is not None:
+                                return owned
+                        elif create_url:
                             exact = next(
                                 (item for item in pages if str(item.get("url") or "") == create_url),
                                 None,
@@ -277,20 +283,28 @@ class BrowserSessionActions:
                 except Exception:
                     pass
 
-                if create_url and not target_create_attempted:
+                if create_url and not tab_id and not target_create_attempted:
                     target_create_attempted = True
                     created = self._create_browser_target(state, create_url)
                     if created is not None:
                         return created
             time.sleep(0.1)
-        detail = "CDP ready but no page target" if cdp_ready else "CDP endpoint unavailable"
+        detail = ("requested browser tab unavailable" if tab_id else
+                  "CDP ready but no page target" if cdp_ready else "CDP endpoint unavailable")
         raise BrowserCaptureError(f"Chromium CDP page target is unavailable ({detail})")
 
-    def _with_page(self, project, session_id: str, fn, *, preferred_url: str | None = None):
+    @staticmethod
+    def _validated_tab_id(raw: Any) -> str:
+        if not isinstance(raw, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,128}', raw):
+            raise ValueError('invalid ORDAX browser tab_id')
+        return raw
+
+    def _with_page(self, project, session_id: str, fn, *, preferred_url: str | None = None, tab_id: str | None = None):
         state = self._refresh_browser_pid(project, self._load_browser_state(project, session_id))
         if not self._browser_owned(project, state):
             raise ValueError("browser session is not running or is not owned by ORDAX")
-        target = self._browser_target(state, create_url=preferred_url)
+        selected = self._validated_tab_id(tab_id) if tab_id is not None else (str(state.get('primary_tab_id') or '') or None)
+        target = self._browser_target(state, create_url=preferred_url, tab_id=selected)
         # Loading the registry must not require the optional CDP WebSocket
         # dependency; only an actual browser page operation needs it.
         from websockets.sync.client import connect
@@ -424,6 +438,8 @@ class BrowserSessionActions:
             self._write_browser_state(project, state)
             return ActionResult(False, str(error), {**state, "running": False, "ownership_valid": False})
         state = self._refresh_browser_pid(project, state)
+        state["primary_tab_id"] = self._validated_tab_id(target.get("id"))
+        self._write_browser_state(project, state)
 
         if url == "about:blank":
             ready = {
@@ -512,6 +528,7 @@ class BrowserSessionActions:
             "ownership_valid": self._browser_owned(project, state),
             "url": ready["url"],
             "title": ready["title"],
+            "tab_id": state["primary_tab_id"],
         })
 
     def browser_status(self, payload: dict[str, Any]) -> ActionResult:
@@ -522,8 +539,8 @@ class BrowserSessionActions:
         data = {**state, "running": running, "ownership_valid": running}
         if running:
             try:
-                target = self._browser_target(state)
-                data.update({"url": target.get("url"), "title": target.get("title")})
+                target = self._browser_target(state, tab_id=state.get("primary_tab_id"))
+                data.update({"url": target.get("url"), "title": target.get("title"), "tab_id": target.get("id")})
             except BrowserCaptureError:
                 pass
         return ActionResult(True, "browser session status ready", data)
