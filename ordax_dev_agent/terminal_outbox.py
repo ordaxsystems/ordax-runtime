@@ -5,10 +5,17 @@ import os
 import stat
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 _MAX_OUTBOX_BYTES = 1024 * 1024
+
+
+class TerminalReportRecoveryError(RuntimeError):
+    def __init__(self, recovered: int, failed: int):
+        super().__init__("one or more terminal reports remain unconfirmed")
+        self.recovered = recovered
+        self.failed = failed
 
 
 class TerminalOutbox:
@@ -163,7 +170,9 @@ class TerminalOutbox:
             raise RuntimeError(f"terminal outbox filename does not match job id: {path}")
         return report
 
-    def pending(self) -> list[tuple[Path, dict[str, Any]]]:
+    def pending(
+        self, *, on_invalid_entry: Callable[[], None] | None = None,
+    ) -> list[tuple[Path, dict[str, Any]]]:
         if not self.root.exists():
             return []
         if not self.root.is_dir():
@@ -172,19 +181,23 @@ class TerminalOutbox:
         for path in sorted(self.root.iterdir()):
             if path.name.startswith(".") and path.name.endswith(".next"):
                 continue
-            if path.is_symlink():
-                raise RuntimeError(f"terminal outbox entry is a symlink: {path}")
-            if path.suffix != ".json":
-                raise RuntimeError(f"unexpected file in terminal outbox: {path}")
-            if not path.is_file():
-                # Another delivery may have acknowledged an entry between the
-                # directory snapshot and this check.
-                if not path.exists():
-                    continue
-                raise RuntimeError(f"unexpected file in terminal outbox: {path}")
             try:
+                if path.is_symlink():
+                    raise RuntimeError(f"terminal outbox entry is a symlink: {path}")
+                if path.suffix != ".json":
+                    raise RuntimeError(f"unexpected file in terminal outbox: {path}")
+                if not path.is_file():
+                    # Another delivery may already have acknowledged this entry.
+                    if not path.exists():
+                        continue
+                    raise RuntimeError(f"unexpected file in terminal outbox: {path}")
                 report = self._read_path(path)
             except FileNotFoundError:
+                continue
+            except (OSError, RuntimeError):
+                if on_invalid_entry is None:
+                    raise
+                on_invalid_entry()
                 continue
             entries.append((path, report))
         return entries

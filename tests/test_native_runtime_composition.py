@@ -364,8 +364,13 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         plane = Mock()
         plane.recover_pending_reports.return_value = 0
         plane.pair_if_needed.return_value = False
-        jobs = [job]
-        plane.claim_next_job.side_effect = lambda: jobs.pop(0) if jobs else None
+        revoked = threading.Event()
+
+        def claim_then_revoke():
+            revoked.set()
+            return job
+
+        plane.claim_next_job.side_effect = claim_then_revoke
         handlers = {}
         results = []
 
@@ -375,8 +380,9 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
             handlers[signal.SIGTERM]()
 
         plane.complete.side_effect = complete
-        # Startup, pairing and claim succeed; local setting changes before dispatch.
-        switch = Mock(side_effect=[True, True, True, True, False])
+        # Model a real policy transition, independent of how many threads
+        # check the policy before the registry dispatch.
+        switch = lambda: not revoked.is_set()
         with (
             patch("ordax_dev_agent.control_plane.build_control_plane", return_value=plane),
             patch("ordax_dev_agent.main.start_status_server") as server,

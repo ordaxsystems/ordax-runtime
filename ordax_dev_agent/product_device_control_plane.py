@@ -29,7 +29,7 @@ from .remote_protocol import (
     dispatch_job,
     read_secret,
 )
-from .terminal_outbox import TerminalOutbox
+from .terminal_outbox import TerminalOutbox, TerminalReportRecoveryError
 from .product_ingress import TrustedProductIngress
 from .product_http_response import (
     MAX_PRODUCT_HTTP_RESPONSE_BYTES, canonical_product_error_code,
@@ -791,11 +791,25 @@ class ProductDeviceControlPlane:
 
     def recover_pending_reports(self) -> int:
         recovered = 0
-        for path, report in self._terminal_outbox.pending():
-            self._recover_terminal_report(report)
-            self._terminal_outbox.acknowledge(path)
+        failed = 0
+
+        def record_invalid_entry() -> None:
+            nonlocal failed
+            failed += 1
+
+        for path, report in self._terminal_outbox.pending(on_invalid_entry=record_invalid_entry):
+            try:
+                self._recover_terminal_report(report)
+                self._terminal_outbox.acknowledge(path)
+            except DeviceAuthorizationError:
+                raise
+            except (KeyError, ValueError, OSError, RuntimeError):
+                failed += 1
+                continue
             self._jobs.pop(str(report.get("job_id") or ""), None)
             recovered += 1
+        if failed:
+            raise TerminalReportRecoveryError(recovered, failed)
         return recovered
 
     def complete(self, job: AgentJob, result: ActionResult) -> None:
