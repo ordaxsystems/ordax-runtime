@@ -1,4 +1,5 @@
 """Windows Blender startup must fail fast on the exact owned GPU dialog."""
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -139,7 +140,7 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
             with (
                 patch("ordax_dev_agent.blender_live_bridge.find_blender", return_value=base / "blender.exe"),
                 patch.object(bridge, "_companion_fingerprint", return_value="valid"),
-                patch.object(bridge, "presence_is_fresh", side_effect=[False, False, True]),
+                patch.object(bridge, "presence_is_fresh", side_effect=[False, False, False, True]),
                 patch.object(bridge, "status", return_value={
                     "identity_matches": True,
                     "protocol_compatible": True,
@@ -168,13 +169,85 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
             native_args, native_kwargs = spawn.call_args_list[0]
             cpu_args, cpu_kwargs = spawn.call_args_list[1]
             self.assertNotIn("--gpu-backend", native_args[0])
-            self.assertNotIn("env", native_kwargs)
+            self.assertEqual(native_kwargs["env"]["BLENDER_USER_CONFIG"], str(bridge.user_config_root))
+            self.assertEqual(native_kwargs["env"]["BLENDER_USER_SCRIPTS"], str(bridge.user_scripts_root))
             self.assertIn("--gpu-backend", cpu_args[0])
             self.assertIn("vulkan", cpu_args[0])
             self.assertEqual(cpu_kwargs["env"]["VK_DRIVER_FILES"], str(cpu_icd))
             self.assertEqual(cpu_kwargs["env"]["VK_ICD_FILENAMES"], str(cpu_icd))
+            self.assertEqual(cpu_kwargs["env"]["BLENDER_USER_CONFIG"], str(bridge.user_config_root))
+            self.assertEqual(cpu_kwargs["env"]["BLENDER_USER_SCRIPTS"], str(bridge.user_scripts_root))
 
 
+
+    def test_project_scoped_blender_user_environment_does_not_mutate_global_settings(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            project = Project(slug="gpu_smoke", root=base, apps=("blender",))
+            bridge = BlenderLiveBridge(SimpleNamespace(state_dir=base / "state"), project)
+            process = Mock()
+            process.pid = 1357
+            process.poll.return_value = None
+            with (
+                patch.dict(os.environ, {
+                    "BLENDER_USER_CONFIG": "user-global-preferences",
+                    "BLENDER_USER_SCRIPTS": "user-global-scripts",
+                }),
+                patch("ordax_dev_agent.blender_live_bridge.find_blender", return_value=base / "blender.exe"),
+                patch.object(bridge, "_companion_fingerprint", return_value="valid"),
+                patch.object(bridge, "presence_is_fresh", side_effect=[False, True]),
+                patch.object(bridge, "status", return_value={
+                    "identity_matches": True,
+                    "protocol_compatible": True,
+                    "companion_current": True,
+                }),
+                patch("ordax_dev_agent.blender_live_bridge._verified_software_vulkan_icd", return_value=None),
+                patch("ordax_dev_agent.blender_live_bridge.subprocess.Popen", return_value=process) as spawn,
+            ):
+                result = bridge.start(wait_seconds=20)
+                self.assertTrue(result.ok, result.summary)
+                env = spawn.call_args.kwargs["env"]
+                self.assertEqual(env["BLENDER_USER_CONFIG"], str(bridge.user_config_root))
+                self.assertEqual(env["BLENDER_USER_SCRIPTS"], str(bridge.user_scripts_root))
+                self.assertTrue(bridge.user_config_root.is_dir())
+                self.assertTrue(bridge.user_scripts_root.is_dir())
+                self.assertNotIn("VK_DRIVER_FILES", {
+                    k:v for k,v in env.items() if k not in os.environ
+                })
+                self.assertEqual(os.environ["BLENDER_USER_CONFIG"], "user-global-preferences")
+                self.assertEqual(os.environ["BLENDER_USER_SCRIPTS"], "user-global-scripts")
+            sibling = BlenderLiveBridge(
+                SimpleNamespace(state_dir=base / "state"),
+                Project(slug="other_registered_project", root=base, apps=("blender",)),
+            )
+            self.assertNotEqual(bridge.user_config_root, sibling.user_config_root)
+            self.assertNotEqual(bridge.user_scripts_root, sibling.user_scripts_root)
+
+    def test_expired_unresponsive_companion_stops_only_owned_startup_pid(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            bridge = BlenderLiveBridge(
+                SimpleNamespace(state_dir=base / "state"),
+                Project(slug="gpu_smoke", root=base, apps=("blender",)),
+            )
+            process = Mock()
+            process.pid = 2468
+            process.poll.side_effect = [None, 0]
+            process.wait.return_value = 0
+            with (
+                patch("ordax_dev_agent.blender_live_bridge.find_blender", return_value=base / "blender.exe"),
+                patch.object(bridge, "_companion_fingerprint", return_value="valid"),
+                patch("ordax_dev_agent.blender_live_bridge.subprocess.Popen", return_value=process),
+                patch("ordax_dev_agent.blender_live_bridge.time.monotonic", side_effect=[1.0, 10.0]),
+            ):
+                result = bridge.start(wait_seconds=3)
+            self.assertFalse(result.ok)
+            self.assertEqual(result.data["error_code"], "blender_companion_startup_timeout")
+            self.assertTrue(result.data["terminated_owned_startup"])
+            self.assertEqual(result.data["pid"], 2468)
+            process.terminate.assert_called_once_with()
+            process.wait.assert_called_once_with(timeout=2.0)
+            process.kill.assert_not_called()
 
     def test_explicitly_provisioned_verified_driver_is_selected_on_first_launch(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -212,6 +285,8 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
             self.assertEqual(argv[0][3:5], ["--gpu-backend", "vulkan"])
             self.assertEqual(kwargs["env"]["VK_DRIVER_FILES"], str(icd))
             self.assertEqual(kwargs["env"]["VK_ICD_FILENAMES"], str(icd))
+            self.assertEqual(kwargs["env"]["BLENDER_USER_CONFIG"], str(bridge.user_config_root))
+            self.assertEqual(kwargs["env"]["BLENDER_USER_SCRIPTS"], str(bridge.user_scripts_root))
             gpu_probe.assert_not_called()
             process.terminate.assert_not_called()
 

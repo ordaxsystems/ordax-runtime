@@ -140,3 +140,26 @@ Project Catalog. O Runtime não deve inventar identidade project-N,
 repositório verificado ou grants para simular esses gates. O servidor anuncia
 dez ferramentas Blender, mas a conexão ChatGPT desta sessão não carregou
 as dez definições de chamada.
+
+## Isolamento do perfil Blender em Windows — 20/11/2026
+
+Após instalação física de a2b2a3bc (transação committed), o mesmo
+BlenderLiveBridge.start selecionou Vulkan por software, mas a GUI não
+publicou companion em 90 s. O problema ocorreu tanto ao reabrir um .blend
+quanto em cena padrão, produzindo processos sem heartbeat.
+
+No controle físico, o MESMO executável Blender 5.3, Lavapipe validado,
+companion e projeto iniciaram em 9,16 s ao receber somente no processo
+BLENDER_USER_CONFIG e BLENDER_USER_SCRIPTS apontando a pastas isoladas.
+Assim, a diferença verificada é o ambiente de usuário da inicialização,
+não uma falta de suporte do driver nem um segundo transportador MCP.
+
+O LiveBridge existente passa agora essas duas variáveis ao subprocesso
+para uma única raiz de configuração privada por projeto, dentro do
+state_dir canônico. O launcher não modifica preferências globais, GPU
+do Windows, Runtime, grants ou identidade. Em timeout sem presença
+atestada, encerra somente o PID que o start criou para evitar órfãos.
+
+Este controle direto e os testes de regressão não substituem prova física
+do novo código instalado. O gate público Product MCP/Platform/Project Catalog
+segue separado, sem fabricar cadastro de projeto ou autorização.
