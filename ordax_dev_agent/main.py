@@ -302,11 +302,21 @@ def _recover_terminal_reports_tick(
     if not callable(recover_pending_reports):
         return True
     from .remote_protocol import DeviceAuthorizationError
+    from .terminal_outbox import TerminalReportRecoveryError
 
     try:
         recovered = int(recover_pending_reports())
     except DeviceAuthorizationError:
         raise
+    except TerminalReportRecoveryError as error:
+        runtime["last_terminal_recovery_error"] = {
+            "code": type(error).__name__, "at": time.time(), "failed_count": error.failed,
+        }
+        if error.recovered:
+            runtime["terminal_reports_recovered"] = (
+                int(runtime.get("terminal_reports_recovered", 0)) + error.recovered
+            )
+        return False
     except Exception as error:
         runtime["last_terminal_recovery_error"] = {
             "code": type(error).__name__,
