@@ -337,12 +337,15 @@ class BrowserSessionActions:
 
             url = self._valid_url(str(payload.get("url") or "about:blank"), allow_blank=True)
             resume_id = payload.get("resume_session_id")
-            if resume_id is not None and (
-                not isinstance(resume_id, str) or
-                not resume_id or
-                resume_id != str(uuid.UUID(resume_id)) if isinstance(resume_id, str) and resume_id else True
-            ):
-                return ActionResult(False, "resume_session_id must be a canonical UUID")
+            if resume_id is not None:
+                if not isinstance(resume_id, str):
+                    return ActionResult(False, "resume_session_id must be a canonical UUID")
+                try:
+                    canonical_id = str(uuid.UUID(resume_id))
+                except ValueError:
+                    return ActionResult(False, "resume_session_id must be a canonical UUID")
+                if canonical_id != resume_id:
+                    return ActionResult(False, "resume_session_id must be a canonical UUID")
             resumed = resume_id is not None
             previous = None
             if resumed:
