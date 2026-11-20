@@ -892,7 +892,11 @@ class BrowserSessionActions:
 
             requested_graceful = self._request_browser_shutdown(state)
             if requested_graceful:
-                graceful_deadline = time.monotonic() + 8.0
+                # Windows Chrome can take longer than eight seconds to flush its
+                # project-owned profile after a successful Browser.close.
+                # Still fail closed to the existing bounded ownership-checked
+                # fallback if the process remains alive after this deadline.
+                graceful_deadline = time.monotonic() + 25.0
                 while time.monotonic() < graceful_deadline:
                     if not self._pid_running(pid) and self._discover_browser_pid(project, state) is None:
                         break
