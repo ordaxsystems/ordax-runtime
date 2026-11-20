@@ -416,31 +416,50 @@ function Get-PreparedTreeDigest {
         throw 'Private Runtime Python unavailable for staging integrity'
     }
     $digestCode = @'
-import hashlib, os, sys
+import hashlib, os, sys, time
+from concurrent.futures import ThreadPoolExecutor
 root = os.path.abspath(sys.argv[1])
 entries = []
-for base, dirs, files in os.walk(root):
-    for name in dirs + files:
-        if os.path.islink(os.path.join(base, name)):
-            raise ValueError('Prepared DEV tree contains symlink')
-    for name in files:
-        path = os.path.join(base, name)
-        entries.append((os.path.relpath(path, root).replace(os.sep, '/'), path))
-if not 10 <= len(entries) <= 30000:
-    raise ValueError('Prepared DEV tree count invalid')
-digest = hashlib.sha256()
-for name, path in sorted(entries):
-    name_bytes = name.encode('utf-8')
-    size = os.path.getsize(path)
-    if len(name_bytes) > 4096 or size < 0 or size > 200 * 1024 * 1024:
-        raise ValueError('Prepared DEV file invalid')
-    digest.update(len(name_bytes).to_bytes(4, 'big'))
-    digest.update(name_bytes)
-    digest.update(size.to_bytes(8, 'big'))
-    with open(path, 'rb') as handle:
-        for chunk in iter(lambda: handle.read(1048576), b''):
-            digest.update(chunk)
-print(digest.hexdigest().upper())
+try:
+    for base, dirs, files in os.walk(root):
+        for name in dirs + files:
+            if os.path.islink(os.path.join(base, name)):
+                raise ValueError('Prepared DEV tree contains symlink')
+        for name in files:
+            path = os.path.join(base, name)
+            entries.append((os.path.relpath(path, root).replace(os.sep, '/'), path))
+    if not 10 <= len(entries) <= 30000:
+        raise ValueError('Prepared DEV tree count invalid')
+    def file_hash(entry):
+        name, path = entry
+        encoded = name.encode('utf-8')
+        if len(encoded) > 4096:
+            raise ValueError('Prepared DEV filename invalid')
+        for attempt in range(4):
+            try:
+                with open(path, 'rb') as handle:
+                    size = os.fstat(handle.fileno()).st_size
+                    if size < 0 or size > 200 * 1024 * 1024:
+                        raise ValueError('Prepared DEV file size invalid')
+                    leaf = hashlib.sha256()
+                    for chunk in iter(lambda: handle.read(1048576), b''):
+                        leaf.update(chunk)
+                    return encoded, size, leaf.digest()
+            except OSError:
+                if attempt == 3:
+                    raise
+                time.sleep(0.2 * (attempt + 1))
+    digest = hashlib.sha256()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for encoded, size, leaf in pool.map(file_hash, sorted(entries)):
+            digest.update(len(encoded).to_bytes(4, 'big'))
+            digest.update(encoded)
+            digest.update(size.to_bytes(8, 'big'))
+            digest.update(leaf)
+    print(digest.hexdigest().upper())
+except (OSError, ValueError) as error:
+    print('ORDAX_STAGE_IO_ERROR=' + type(error).__name__, file=sys.stderr)
+    sys.exit(2)
 '@
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $privatePython
@@ -459,8 +478,10 @@ print(digest.hexdigest().upper())
             throw 'Prepared DEV digest exceeded bounded deadline'
         }
         $digest = $child.StandardOutput.ReadToEnd().Trim()
+        $stderr = $child.StandardError.ReadToEnd().Trim()
         if ($child.ExitCode -ne 0 -or $digest -cnotmatch '^[0-9A-F]{64}$') {
-            throw 'Prepared DEV tree integrity mismatch'
+            $category = if ($stderr -match 'ORDAX_STAGE_IO_ERROR=([A-Za-z]+)') { $Matches[1] } else { 'unknown' }
+            throw ("Prepared DEV tree integrity mismatch: {0}" -f $category)
         }
         return $digest
     } finally { $child.Dispose() }
@@ -562,7 +583,7 @@ switch ($Operation) {
                 $previousJournal = Join-Path $previous.FullName 'journal.json'
                 if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
                 $prior = Read-OwnerJsonDocument -Path $previousJournal
-                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3')) {
+                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3','ordax.mcp-dev-upgrade/4')) {
                     throw "Unknown MCP update journal schema: $($previous.Name)"
                 }
                 if ($prior.phase -in @('staged','applying')) {
@@ -603,7 +624,7 @@ switch ($Operation) {
         $applyScript = Join-Path $tx 'apply.ps1'
         Copy-Item -LiteralPath $lifecycle -Destination $applyScript -ErrorAction Stop
         $journal = [pscustomobject]@{
-            schema = 'ordax.mcp-dev-upgrade/3'; transactionId = $id; phase = 'staged'
+            schema = 'ordax.mcp-dev-upgrade/4'; transactionId = $id; phase = 'staged'
             packageName = $source.Name; sha256 = $PackageSha256.ToUpperInvariant()
             targetCommit = $ExpectedCommit; preparedTreeSha256 = $preparedDigest
             updatedAt = ''
@@ -623,7 +644,7 @@ switch ($Operation) {
         $tx = Join-Path $updatesRoot $TransactionId
         $journalPath = Join-Path $tx 'journal.json'
         $journal = Read-OwnerJsonDocument -Path $journalPath
-        if ($journal.schema -notin @('ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3') -or
+        if ($journal.schema -notin @('ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3','ordax.mcp-dev-upgrade/4') -or
             $journal.transactionId -cne $TransactionId -or
             $journal.phase -cne 'applying') {
             throw 'Reconcile requires an exact interrupted DEV transaction'
@@ -653,7 +674,7 @@ switch ($Operation) {
         }
         $journalPath = Join-Path $tx 'journal.json'
         $journal = Read-OwnerJsonDocument -Path $journalPath
-        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/3' -or
+        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/4' -or
             $journal.transactionId -cne $TransactionId -or
             $journal.phase -cne 'staged' -or
             $journal.sha256 -cnotmatch '^[0-9A-F]{64}$' -or
