@@ -559,6 +559,58 @@ class BrowserSessionActions:
                     continue
         return ActionResult(True, "browser sessions ready", {"project": project.slug, "sessions": sessions})
 
+    def browser_tabs(self, payload: dict[str, Any]) -> ActionResult:
+        project = self._project(payload)
+        session_id = str(payload.get("session_id") or "")
+        state = self._refresh_browser_pid(project, self._load_browser_state(project, session_id))
+        if not self._browser_owned(project, state):
+            return ActionResult(False, "browser session is not running or is not owned by ORDAX")
+        try:
+            port = int(state.get("debug_port") or 0)
+            raw = _http_json(f"http://127.0.0.1:{port}/json/list")
+            if not isinstance(raw, list):
+                raise BrowserCaptureError("Chromium tab list is malformed")
+            tabs = [
+                {
+                    "tab_id": item["id"], "url": str(item.get("url") or ""),
+                    "title": str(item.get("title") or "")[:250],
+                    "primary": item["id"] == state.get("primary_tab_id"),
+                }
+                for item in raw
+                if isinstance(item, dict) and item.get("type") == "page"
+                and isinstance(item.get("id"), str) and item.get("webSocketDebuggerUrl")
+            ]
+        except (OSError, ValueError, BrowserCaptureError) as error:
+            return ActionResult(False, f"browser tabs unavailable: {error}")
+        return ActionResult(True, "browser tabs ready", {
+            "session_id": session_id, "tabs": tabs[:32], "truncated": len(tabs) > 32,
+        })
+
+    def browser_tab_open(self, payload: dict[str, Any]) -> ActionResult:
+        project = self._project(payload)
+        session_id = str(payload.get("session_id") or "")
+        url = self._valid_url(str(payload.get("url") or "about:blank"), allow_blank=True)
+        state = self._refresh_browser_pid(project, self._load_browser_state(project, session_id))
+        if not self._browser_owned(project, state):
+            return ActionResult(False, "browser session is not running or is not owned by ORDAX")
+        target = self._create_browser_target(state, "about:blank")
+        if target is None:
+            return ActionResult(False, "failed to create Chromium tab")
+        tab_id = self._validated_tab_id(target.get("id"))
+        if url == "about:blank":
+            return ActionResult(True, "browser tab opened", {
+                "session_id": session_id, "tab_id": tab_id, "url": url, "title": "",
+            })
+        navigation = self.browser_navigate({
+            "project": project.slug, "session_id": session_id, "tab_id": tab_id,
+            "url": url, "wait_seconds": payload.get("wait_seconds", 15),
+        })
+        if not navigation.ok:
+            return ActionResult(False, navigation.summary, {"session_id": session_id, "tab_id": tab_id})
+        return ActionResult(True, "browser tab opened", {
+            **navigation.data, "session_id": session_id, "tab_id": tab_id,
+        })
+
     def browser_navigate(self, payload: dict[str, Any]) -> ActionResult:
         project = self._project(payload)
         session_id = str(payload.get("session_id") or "")
@@ -591,7 +643,7 @@ class BrowserSessionActions:
             )
 
         try:
-            data = self._with_page(project, session_id, run)
+            data = self._with_page(project, session_id, run, tab_id=payload.get('tab_id'))
         except (ValueError, BrowserCaptureError) as error:
             return ActionResult(False, f"browser navigation failed: {error}")
         return ActionResult(True, "browser navigation complete", data)
@@ -650,6 +702,7 @@ class BrowserSessionActions:
                 project,
                 session_id,
                 lambda ws, _state, _target: self._eval(ws, 1, script),
+                tab_id=payload.get("tab_id"),
             )
         except (ValueError, BrowserCaptureError) as error:
             return ActionResult(False, f"browser snapshot failed: {error}")
@@ -678,7 +731,10 @@ class BrowserSessionActions:
 }})()
 """
         try:
-            data = self._with_page(project, session_id, lambda ws, _state, _target: self._eval(ws, 1, script))
+            data = self._with_page(
+                project, session_id, lambda ws, _state, _target: self._eval(ws, 1, script),
+                tab_id=payload.get("tab_id"),
+            )
         except (ValueError, BrowserCaptureError) as error:
             return ActionResult(False, f"browser click failed: {error}")
         if not isinstance(data, dict) or not data.get("ok"):
@@ -718,7 +774,10 @@ class BrowserSessionActions:
 }})()
 """
         try:
-            data = self._with_page(project, session_id, lambda ws, _state, _target: self._eval(ws, 1, script))
+            data = self._with_page(
+                project, session_id, lambda ws, _state, _target: self._eval(ws, 1, script),
+                tab_id=payload.get("tab_id"),
+            )
         except (ValueError, BrowserCaptureError) as error:
             return ActionResult(False, f"browser type failed: {error}")
         if not isinstance(data, dict) or not data.get("ok"):
@@ -730,7 +789,8 @@ class BrowserSessionActions:
         session_id = str(payload.get("session_id") or "")
         width = max(320, min(int(payload.get("width", 1440)), 2560))
         height = max(240, min(int(payload.get("height", 900)), 1600))
-        output = (self.config.state_dir / "artifacts" / project.slug / f"browser-{session_id}.png").resolve()
+        selected = self._validated_tab_id(payload["tab_id"]) if "tab_id" in payload else "primary"
+        output = (self.config.state_dir / "artifacts" / project.slug / f"browser-{session_id}-{selected}.png").resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
 
         def run(ws, _state, _target):
@@ -754,7 +814,7 @@ class BrowserSessionActions:
             }
 
         try:
-            data = self._with_page(project, session_id, run)
+            data = self._with_page(project, session_id, run, tab_id=payload.get("tab_id"))
         except (ValueError, BrowserCaptureError) as error:
             return ActionResult(False, f"browser screenshot failed: {error}")
         return ActionResult(True, "browser screenshot captured", data)
