@@ -200,6 +200,92 @@ class BlenderLiveResultTests(unittest.TestCase):
             self.assertEqual("done", result.summary)
             self.assertGreaterEqual(calls["count"], 3)
 
+    def test_stale_heartbeat_does_not_fail_a_live_blender_command(self) -> None:
+        # Physical Windows regression: software-Vulkan Blender kept its PID
+        # alive and eventually committed a successful transform, but a stale
+        # 12-second presence file caused the host to report a false failure.
+        with tempfile.TemporaryDirectory() as raw:
+            bridge = self.make_bridge(Path(raw))
+            bridge._ensure_dirs()
+            command_id = "c" * 32
+            bridge.presence.write_text(
+                json.dumps({"pid": 4321}), encoding="utf-8"
+            )
+            response_path = bridge.responses / f"{command_id}.json"
+            current = {
+                "protocol_compatible": True,
+                "companion_current": True,
+                "capabilities": ["object_transform"],
+            }
+            observed = {"stale_checks": 0}
+
+            def presence_check(*, max_age_seconds=5.0):
+                if max_age_seconds == 12.0:
+                    observed["stale_checks"] += 1
+                    return False
+                return True
+
+            def complete_after_stale(_duration):
+                response_path.write_text(
+                    json.dumps(
+                        {"id": command_id, "ok": True,
+                         "summary": "Blender object transform updated"}
+                    ),
+                    encoding="utf-8",
+                )
+
+            with (
+                patch.object(bridge, "presence_is_fresh", side_effect=presence_check),
+                patch.object(bridge, "status", return_value=current),
+                patch("ordax_dev_agent.blender_live_bridge._process_is_running", return_value=True),
+                patch("ordax_dev_agent.blender_live_bridge.uuid.uuid4",
+                      return_value=SimpleNamespace(hex=command_id)),
+                patch("ordax_dev_agent.blender_live_bridge.time.sleep",
+                      side_effect=complete_after_stale),
+            ):
+                result = bridge.request(
+                    "object_transform", {"object_name": "Cube", "location": [1, 0, 0]},
+                    timeout_seconds=2,
+                )
+
+            self.assertTrue(result.ok, result.summary)
+            self.assertEqual("Blender object transform updated", result.summary)
+            self.assertGreaterEqual(observed["stale_checks"], 1)
+
+    def test_dead_blender_pid_returns_correlated_uncertain_result(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            bridge = self.make_bridge(Path(raw))
+            bridge._ensure_dirs()
+            command_id = "d" * 32
+            bridge.presence.write_text(
+                json.dumps({"pid": 4321}), encoding="utf-8"
+            )
+            current = {
+                "protocol_compatible": True,
+                "companion_current": True,
+                "capabilities": ["object_transform"],
+            }
+
+            def presence_check(*, max_age_seconds=5.0):
+                return max_age_seconds != 12.0
+
+            with (
+                patch.object(bridge, "presence_is_fresh", side_effect=presence_check),
+                patch.object(bridge, "status", return_value=current),
+                patch("ordax_dev_agent.blender_live_bridge._process_is_running", return_value=False),
+                patch("ordax_dev_agent.blender_live_bridge.uuid.uuid4",
+                      return_value=SimpleNamespace(hex=command_id)),
+            ):
+                result = bridge.request(
+                    "object_transform", {"object_name": "Cube", "location": [1, 0, 0]},
+                    timeout_seconds=2,
+                )
+
+            self.assertFalse(result.ok)
+            self.assertEqual(command_id, result.data["command_id"])
+            self.assertEqual("blender.live_result", result.data["result_query"])
+            self.assertFalse(result.data["retry_without_querying_result"])
+
     def test_result_retries_transient_permission_error(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             bridge = self.make_bridge(Path(raw))

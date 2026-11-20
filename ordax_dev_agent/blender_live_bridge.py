@@ -659,18 +659,42 @@ class BlenderLiveBridge:
                 )
 
             if not inflight_path.is_file() and not self.presence_is_fresh(max_age_seconds=12.0):
-                return ActionResult(
-                    False,
-                    "Blender live session stopped responding",
-                    {
-                        "command_id": command_id,
-                        "result_query": "blender.live_result",
-                        "inflight": False,
-                        **self.status(),
-                    },
-                )
+                # On software-rendered desktops the Blender GUI can stop
+                # publishing presence while it is still processing a command.
+                # A stale heartbeat is not proof that the command failed:
+                # the companion may write a durable success receipt later.
+                # Only a confirmed dead owner PID permits early termination.
+                try:
+                    presence = self._read_presence()
+                    owner_pid = int(presence["pid"])
+                except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    owner_pid = None
+                if owner_pid is not None and owner_pid > 0 and not _process_is_running(owner_pid):
+                    # Check the receipt once more before concluding a dead
+                    # process did not answer; never dispatch the command twice.
+                    durable = self.results / f"{command_id}.json"
+                    if durable.is_file():
+                        return self.result(command_id)
+                    if response_path.is_file():
+                        continue
+                    return ActionResult(
+                        False,
+                        "Blender live process exited before returning a response",
+                        {
+                            "command_id": command_id,
+                            "result_query": "blender.live_result",
+                            "retry_without_querying_result": False,
+                            "inflight": False,
+                            **self.status(),
+                        },
+                    )
             time.sleep(0.05)
 
+        # A response can become durable immediately after the last loop
+        # iteration. Prefer its existing receipt to an uncertain timeout.
+        durable = self.results / f"{command_id}.json"
+        if durable.is_file():
+            return self.result(command_id)
         inflight = inflight_path.is_file()
         if not inflight:
             try:
