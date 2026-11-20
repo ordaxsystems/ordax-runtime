@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .execution_lock import ExecutionLock
+from .config import product_execution_capacity
 
 
-_MAX_EXECUTION_SLOTS = 8
 
 _GLOBAL_EXCLUSIVE_ACTIONS = frozenset({
     "agent.update",
@@ -122,9 +122,11 @@ class ActionConcurrencyCoordinator:
     lanes, preserving exclusive replacement without a global FIFO queue.
     """
 
-    def __init__(self, state_dir: Path, *, max_slots: int = _MAX_EXECUTION_SLOTS):
-        if type(max_slots) is not int or not 2 <= max_slots <= 32:
-            raise ValueError("max_slots must be between 2 and 32")
+    def __init__(self, state_dir: Path, *, max_slots: int | None = None):
+        if max_slots is None:
+            max_slots = product_execution_capacity()
+        if type(max_slots) is not int or not 1 <= max_slots <= 32:
+            raise ValueError("max_slots must be between 1 and 32")
         self.state_dir = state_dir
         self.max_slots = max_slots
         self._lock_guard = threading.Lock()

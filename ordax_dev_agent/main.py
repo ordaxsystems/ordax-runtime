@@ -16,7 +16,7 @@ from typing import Any, Callable
 from collections.abc import Mapping
 
 from . import __version__
-from .config import AgentConfig
+from .config import AgentConfig, product_execution_capacity
 from .product_central_session import ProductCentralSessionStatus
 from .status_server import start_status_server
 from ordax_connector.capabilities import capability_digest
@@ -37,19 +37,8 @@ _VERBOSE_JOB_LIFECYCLE_EVENTS = frozenset(
     }
 )
 
-def _product_execution_capacity() -> int:
-    """Local worker capacity; bounded by resources rather than a global FIFO.
-
-    Old installed runtimes still report their actual capacity (four). This
-    value is published by the authenticated device heartbeat and controls
-    both the local executor and remote SQL claim/admission independently.
-    """
-    raw = os.environ.get("ORDAX_PRODUCT_CONCURRENT_JOBS")
-    if raw is not None:
-        if not raw.isascii() or not raw.isdecimal() or not 1 <= int(raw) <= 32:
-            raise ValueError("ORDAX_PRODUCT_CONCURRENT_JOBS must be an integer from 1 to 32")
-        return int(raw)
-    return min(16, max(4, os.cpu_count() or 4))
+# Backwards-compatible internal symbol; the policy itself lives in config.py.
+_product_execution_capacity = product_execution_capacity
 
 
 _MAX_CONCURRENT_PRODUCT_JOBS = _product_execution_capacity()
