@@ -382,6 +382,9 @@ class BrowserSessionActions:
             ]
             if headless:
                 command.insert(1, "--headless=new")
+                # Use the same headless GPU policy as the canonical CDP capture
+                # path. Windows virtualized/cold GPUs can stall CDP startup.
+                command.insert(2, "--disable-gpu")
 
             creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
             start_new_session = os.name != "nt"
@@ -418,9 +421,13 @@ class BrowserSessionActions:
             handles[session_id] = process
 
             try:
+                # A cold first headless Chromium process on Windows can take
+                # longer to publish CDP than warm subsequent launches. Wait
+                # for its real CDP endpoint, not merely a living process.
+                startup_floor = 75.0 if headless and os.name == "nt" else 30.0
                 deadline = time.monotonic() + max(
-                    30.0,
-                    min(float(payload.get("wait_seconds", 8)), 60.0),
+                    startup_floor,
+                    min(float(payload.get("wait_seconds", 8)), 90.0),
                 )
                 target = None
                 last_error = None
@@ -871,8 +878,17 @@ class BrowserSessionActions:
                 return False
             from websockets.sync.client import connect
 
-            with connect(target, open_timeout=3, close_timeout=1) as ws:
+            ws = connect(target, open_timeout=3, close_timeout=1)
+            try:
                 ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+            finally:
+                # Chromium can tear down CDP immediately after Browser.close.
+                # A failed WebSocket closing handshake does not undo a sent
+                # shutdown command; the caller still verifies PID exit.
+                try:
+                    ws.close()
+                except Exception:
+                    pass
             return True
         except Exception:
             # Chrome is allowed to close the socket while processing Browser.close.
@@ -970,6 +986,7 @@ class BrowserSessionActions:
             state.update({
                 "stopped_at_unix": time.time(),
                 "shutdown_method": "cdp" if graceful_stopped else "fallback",
+                "shutdown_request_sent": requested_graceful,
                 "running": not stopped,
                 "ownership_valid": False if stopped else self._browser_owned(project, state),
             })

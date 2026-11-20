@@ -70,6 +70,56 @@ class BrowserUrlValidationTests(unittest.TestCase):
             BrowserSessionActions._valid_url("about:blank", allow_blank=True), "about:blank"
         )
 
+    def test_cdp_browser_close_ignores_abrupt_websocket_teardown_after_send(self):
+        class BrowserCloseSocket:
+            sent = None
+
+            def send(self, payload):
+                self.sent = payload
+
+            def close(self):
+                raise ConnectionError("Chrome closed CDP while shutting down")
+
+        socket = BrowserCloseSocket()
+        with (
+            patch(
+                "ordax_dev_agent.browser_session_actions._http_json",
+                return_value={
+                    "webSocketDebuggerUrl":
+                        "ws://127.0.0.1:9223/devtools/browser/test-owned-process"
+                },
+            ),
+            patch("websockets.sync.client.connect", return_value=socket),
+        ):
+            accepted = BrowserSessionActions._request_browser_shutdown({"debug_port": 9223})
+        self.assertTrue(accepted, "Chrome may close CDP after accepting Browser.close")
+        self.assertIn('"method": "Browser.close"', socket.sent)
+
+    def test_cdp_browser_close_rejects_send_failure(self):
+        class FailingSocket:
+            closed = False
+
+            def send(self, _payload):
+                raise ConnectionError("Browser.close was not sent")
+
+            def close(self):
+                self.closed = True
+
+        socket = FailingSocket()
+        with (
+            patch(
+                "ordax_dev_agent.browser_session_actions._http_json",
+                return_value={
+                    "webSocketDebuggerUrl":
+                        "ws://127.0.0.1:9223/devtools/browser/test-owned-process"
+                },
+            ),
+            patch("websockets.sync.client.connect", return_value=socket),
+        ):
+            accepted = BrowserSessionActions._request_browser_shutdown({"debug_port": 9223})
+        self.assertFalse(accepted)
+        self.assertTrue(socket.closed)
+
 
 @unittest.skipIf(find_chromium() is None, "Chrome/Edge not available on CI runner")
 class BrowserSessionActionsTests(unittest.TestCase):
