@@ -69,10 +69,10 @@ class ProjectBindingNonBlockingTests(unittest.TestCase):
     def test_main_loop_single_flight_without_new_queue(self):
         source = (Path(__file__).resolve().parents[1] / "ordax_dev_agent" / "main.py"
                   ).read_text(encoding="utf-8")
-        self.assertIn("max_workers=1, thread_name_prefix=\"ordax-project-binding\"", source)
+        self.assertIn("max_workers=2, thread_name_prefix=\"ordax-control-maintenance\"", source)
         self.assertIn("if heartbeat_healthy and project_binding_future is None:", source)
-        self.assertIn("project_binding_executor.submit(", source)
-        self.assertIn("project_binding_executor.shutdown(wait=True, cancel_futures=False)", source)
+        self.assertIn("control_maintenance_executor.submit(", source)
+        self.assertIn("control_maintenance_executor.shutdown(wait=True, cancel_futures=False)", source)
         self.assertIn("job_executor = ThreadPoolExecutor(", source)
         self.assertNotIn("confirmed = int(reconcile_project_bindings())", source)
         self.assertNotIn("queue.Queue(", source)
