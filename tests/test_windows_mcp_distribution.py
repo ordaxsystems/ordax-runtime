@@ -265,6 +265,57 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             )
             self.assertEqual(len(list(destination.rglob("*.txt"))), 40)
 
+    def test_dev_upgrade_prepares_and_seals_files_before_scheduled_activation(self):
+        lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(
+            encoding="utf-8"
+        )
+        staging = lifecycle.split("    'Upgrade' {", 1)[1].split(
+            "    'ReconcileUpgrade' {", 1
+        )[0]
+        activation = lifecycle.split("    'ApplyUpgrade' {", 1)[1]
+        self.assertLess(
+            staging.index("Assert-DevArchive -ArchivePath $staged -Commit $ExpectedCommit -Destination $expanded"),
+            staging.index("Register-CanonicalTask -Name $upgradeTaskName"),
+        )
+        self.assertIn("schema = 'ordax.mcp-dev-upgrade/3'", staging)
+        self.assertIn("preparedTreeSha256 = $preparedDigest", staging)
+        self.assertIn("Get-PreparedTreeDigest -Root $expanded", activation)
+        self.assertIn("Prepared DEV stage changed before activation", activation)
+        self.assertNotIn(
+            "Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded",
+            activation,
+        )
+        self.assertIn("Cannot reconcile an active canonical upgrade", lifecycle)
+        self.assertIn("Interrupted upgrade has moved Runtime directories", lifecycle)
+
+        marker = "$digestCode = @'"
+        self.assertIn(marker, lifecycle)
+        code = lifecycle.split(marker, 1)[1].split("'@", 1)[0].strip()
+        compile(code, "<ordax-prepared-dev-tree-digest>", "exec")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage = root / "prepared"
+            (stage / "nested").mkdir(parents=True)
+            for number in range(12):
+                (stage / "nested" / f"file-{number}.txt").write_text(
+                    f"payload-{number}", encoding="utf-8"
+                )
+            def fingerprint() -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [sys.executable, "-I", "-c", code, str(stage)],
+                    capture_output=True, text=True, timeout=30, check=False,
+                )
+            first = fingerprint()
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertRegex(first.stdout.strip(), r"^[A-F0-9]{64}$")
+            self.assertEqual(fingerprint().stdout, first.stdout)
+            (stage / "nested" / "file-0.txt").write_text(
+                "changed-content", encoding="utf-8"
+            )
+            changed = fingerprint()
+            self.assertEqual(changed.returncode, 0, changed.stderr)
+            self.assertNotEqual(changed.stdout, first.stdout)
+
     def test_dev_upgrade_releases_only_the_owned_scheduled_task_directory_lock(self):
         lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(
             encoding="utf-8"

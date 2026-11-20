@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('Install', 'Launch', 'Uninstall', 'Upgrade', 'ApplyUpgrade')]
+    [ValidateSet('Install', 'Launch', 'Uninstall', 'Upgrade', 'ApplyUpgrade', 'ReconcileUpgrade')]
     [string]$Operation,
     [string]$PackagePath = '',
     [string]$PackageSha256 = '',
@@ -400,6 +400,67 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     }
 }
 
+
+# Stage integrity is a digest of paths, sizes and bytes, verified again before
+# any owner-task or installation mutation by the scheduled executor.
+function Get-PreparedTreeDigest {
+    param([string]$Root)
+    if (!(Test-Path -LiteralPath $Root -PathType Container)) { throw 'Prepared DEV tree missing' }
+    $privatePython = Join-Path $installRoot 'runtime\python.exe'
+    if (!(Test-Path -LiteralPath $privatePython -PathType Leaf)) {
+        throw 'Private Runtime Python unavailable for staging integrity'
+    }
+    $digestCode = @'
+import hashlib, os, sys
+root = os.path.abspath(sys.argv[1])
+entries = []
+for base, dirs, files in os.walk(root):
+    for name in dirs + files:
+        if os.path.islink(os.path.join(base, name)):
+            raise ValueError('Prepared DEV tree contains symlink')
+    for name in files:
+        path = os.path.join(base, name)
+        entries.append((os.path.relpath(path, root).replace(os.sep, '/'), path))
+if not 10 <= len(entries) <= 30000:
+    raise ValueError('Prepared DEV tree count invalid')
+digest = hashlib.sha256()
+for name, path in sorted(entries):
+    name_bytes = name.encode('utf-8')
+    size = os.path.getsize(path)
+    if len(name_bytes) > 4096 or size < 0 or size > 200 * 1024 * 1024:
+        raise ValueError('Prepared DEV file invalid')
+    digest.update(len(name_bytes).to_bytes(4, 'big'))
+    digest.update(name_bytes)
+    digest.update(size.to_bytes(8, 'big'))
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1048576), b''):
+            digest.update(chunk)
+print(digest.hexdigest().upper())
+'@
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $privatePython
+    $start.Arguments = '-I -c "' + $digestCode + '" "' + $Root + '"'
+    $start.WorkingDirectory = $installRoot
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $child = [Diagnostics.Process]::Start($start)
+    if ($null -eq $child) { throw 'Prepared DEV digest process unavailable' }
+    try {
+        if (!$child.WaitForExit(480000)) {
+            $child.Kill()
+            [void]$child.WaitForExit(5000)
+            throw 'Prepared DEV digest exceeded bounded deadline'
+        }
+        $digest = $child.StandardOutput.ReadToEnd().Trim()
+        if ($child.ExitCode -ne 0 -or $digest -cnotmatch '^[0-9A-F]{64}$') {
+            throw 'Prepared DEV tree integrity mismatch'
+        }
+        return $digest
+    } finally { $child.Dispose() }
+}
+
 function Invoke-QuiesceRoot {
     param([string]$Root)
     $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
@@ -496,7 +557,7 @@ switch ($Operation) {
                 $previousJournal = Join-Path $previous.FullName 'journal.json'
                 if (!(Test-Path -LiteralPath $previousJournal -PathType Leaf)) { continue }
                 $prior = Read-OwnerJsonDocument -Path $previousJournal
-                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2')) {
+                if ($prior.schema -notin @('ordax.mcp-upgrade/1','ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3')) {
                     throw "Unknown MCP update journal schema: $($previous.Name)"
                 }
                 if ($prior.phase -in @('staged','applying')) {
@@ -523,17 +584,61 @@ switch ($Operation) {
         if ((Get-OwnerArchiveSha256 -Path $staged) -ine $PackageSha256) {
             throw 'Portable DEV archive changed during staging'
         }
+        # User-initiated Upgrade prepares all files before the slower scheduled
+        # task. The task must only verify their content and activate atomically.
+        $expanded = Join-Path $tx 'expanded-runtime'
+        try {
+            Assert-DevArchive -ArchivePath $staged -Commit $ExpectedCommit -Destination $expanded
+            $preparedDigest = Get-PreparedTreeDigest -Root $expanded
+        } catch {
+            # No published journal or task exists yet for this failed stage.
+            Remove-Item -LiteralPath $tx -Recurse -Force -ErrorAction SilentlyContinue
+            throw
+        }
         $applyScript = Join-Path $tx 'apply.ps1'
         Copy-Item -LiteralPath $lifecycle -Destination $applyScript -ErrorAction Stop
         $journal = [pscustomobject]@{
-            schema = 'ordax.mcp-dev-upgrade/2'; transactionId = $id; phase = 'staged'
+            schema = 'ordax.mcp-dev-upgrade/3'; transactionId = $id; phase = 'staged'
             packageName = $source.Name; sha256 = $PackageSha256.ToUpperInvariant()
-            targetCommit = $ExpectedCommit; updatedAt = ''
+            targetCommit = $ExpectedCommit; preparedTreeSha256 = $preparedDigest
+            updatedAt = ''
         }
         Save-Journal (Join-Path $tx 'journal.json') $journal
         Register-CanonicalTask -Name $upgradeTaskName -Script $applyScript -Operation ApplyUpgrade -WorkingDirectory $tx -TransactionId $id
         Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run
         Write-Output ("ORDAX_MCP_DEV_UPGRADE_QUEUED transaction={0} journal={1}" -f $id, (Join-Path $tx 'journal.json'))
+    }
+    'ReconcileUpgrade' {
+        # Only reconcile a stopped pre-activation transaction with the
+        # original owner installation still intact; never forge a success.
+        Assert-InstalledSource
+        if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') {
+            throw 'Invalid interrupted upgrade transaction ID'
+        }
+        $tx = Join-Path $updatesRoot $TransactionId
+        $journalPath = Join-Path $tx 'journal.json'
+        $journal = Read-OwnerJsonDocument -Path $journalPath
+        if ($journal.schema -notin @('ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3') -or
+            $journal.transactionId -cne $TransactionId -or
+            $journal.phase -cne 'applying') {
+            throw 'Reconcile requires an exact interrupted DEV transaction'
+        }
+        $upgrade = Get-CanonicalScheduledTask -Name $upgradeTaskName
+        if ($upgrade -and $upgrade.State -in @('Running','Queued')) {
+            throw 'Cannot reconcile an active canonical upgrade'
+        }
+        if ((Test-Path -LiteralPath ($installRoot + '.previous-dev')) -or
+            (Test-Path -LiteralPath (Join-Path $tx 'failed-candidate'))) {
+            throw 'Interrupted upgrade has moved Runtime directories; inspect first'
+        }
+        $installed = Read-OwnerJsonDocument -Path (Join-Path $installRoot 'product-manifest.json')
+        if ($installed.runtime_source_commit -ceq $journal.targetCommit) {
+            throw 'Installed candidate cannot be marked rolled back'
+        }
+        $journal.phase = 'recovery-required'
+        $journal | Add-Member -NotePropertyName error -NotePropertyValue 'Interrupted before atomic activation; original Runtime intact' -Force
+        Save-Journal $journalPath $journal
+        Write-Output ("ORDAX_MCP_DEV_RECOVERY_RECORDED transaction={0}" -f $TransactionId)
     }
     'ApplyUpgrade' {
         if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') { throw 'Invalid upgrade transaction ID' }
@@ -543,10 +648,11 @@ switch ($Operation) {
         }
         $journalPath = Join-Path $tx 'journal.json'
         $journal = Read-OwnerJsonDocument -Path $journalPath
-        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/2' -or
+        if ($journal.schema -cne 'ordax.mcp-dev-upgrade/3' -or
             $journal.transactionId -cne $TransactionId -or
             $journal.phase -cne 'staged' -or
             $journal.sha256 -cnotmatch '^[0-9A-F]{64}$' -or
+            $journal.preparedTreeSha256 -cnotmatch '^[0-9A-F]{64}$' -or
             $journal.targetCommit -cnotmatch '^[0-9a-f]{40}$' -or
             $journal.packageName -cne ("OrdaX-MCP-Dev-{0}.zip" -f $journal.targetCommit)) {
             throw 'DEV upgrade journal identity, phase or package name invalid'
@@ -555,9 +661,15 @@ switch ($Operation) {
         if ((Get-OwnerArchiveSha256 -Path $package) -cne $journal.sha256) {
             throw 'Portable DEV staged package integrity mismatch'
         }
+        # Revalidate archive and every prepared file before changing the
+        # installed Runtime or its singleton scheduled owner.
+        Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit
+        $expanded = Join-Path $tx 'expanded-runtime'
+        if ((Get-PreparedTreeDigest -Root $expanded) -cne $journal.preparedTreeSha256) {
+            throw 'Prepared DEV stage changed before activation'
+        }
         $journal.phase = 'applying'
         Save-Journal $journalPath $journal
-        $expanded = Join-Path $tx 'expanded-runtime'
         $previous = $installRoot + '.previous-dev'
         $failed = Join-Path $tx 'failed-candidate'
         $ownerDisabled = $false
@@ -566,7 +678,7 @@ switch ($Operation) {
         try {
             # No installed files or tasks are touched until the entire ZIP
             # and its exact source commit have passed preflight.
-            Assert-DevArchive -ArchivePath $package -Commit $journal.targetCommit -Destination $expanded
+            # Verified prepared tree replaces scheduled-task archive extraction.
             if (Test-Path -LiteralPath $previous) {
                 throw 'Unresolved previous DEV Runtime directory blocks activation'
             }
