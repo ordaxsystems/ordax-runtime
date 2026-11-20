@@ -161,6 +161,53 @@ def _windows_blender_graphics_error_for_pid(pid: int) -> dict[str, str] | None:
         return None
 
 
+# Independently verified from the published Mesa3D 26.3.0 Windows MSVC
+# archive (release SHA-256 c505fcc77e8f63a09d7ddac086591d2f542c0698d37fc9e3094685a34d0d9991).
+# The Runtime does not download or install display drivers. An operator can
+# provision these two files into the existing Native agent state directory.
+_SOFTWARE_VULKAN_LVP_SHA256 = (
+    "1c178d0e2a5fe0a3e7b9b85c49e78c0a8facdd0625903dfcda3d483b629f3b21"
+)
+
+
+def _verified_software_vulkan_icd(state_dir: Path) -> Path | None:
+    """Optional pinned, local-only Mesa Lavapipe device for old Windows GPUs.
+
+    This is a process-scoped Blender fallback, not a system driver change,
+    Product capability, OS project, alternative MCP service or grant.
+    """
+    folder = Path(state_dir).resolve() / "blender-gpu" / "software-vulkan"
+    manifest = folder / "lvp_icd.x86_64.json"
+    driver = folder / "vulkan_lvp.dll"
+    if not manifest.is_file() or not driver.is_file():
+        return None
+    try:
+        if any(
+            entry.is_symlink()
+            or getattr(entry.lstat(), "st_file_attributes", 0) & 0x400
+            for entry in (folder, manifest, driver)
+        ):
+            return None
+        data = json.loads(manifest.read_text(encoding="utf-8-sig"))
+        if not isinstance(data, dict) or data.get("file_format_version") != "1.0.1":
+            return None
+        icd = data.get("ICD")
+        if (
+            not isinstance(icd, dict)
+            or icd.get("library_arch") != "64"
+            or icd.get("library_path", "").replace("\\", "/") != "./vulkan_lvp.dll"
+            or not isinstance(icd.get("api_version"), str)
+            or not icd["api_version"].startswith("1.")
+        ):
+            return None
+        with driver.open("rb") as handle:
+            if hashlib.file_digest(handle, "sha256").hexdigest() != _SOFTWARE_VULKAN_LVP_SHA256:
+                return None
+        return manifest
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, AttributeError):
+        return None
+
+
 class BlenderLiveBridge:
     """File-protocol bridge to one visible Blender session per registered project."""
 
@@ -391,19 +438,36 @@ class BlenderLiveBridge:
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         startup_log = self.root / "blender-startup.log"
         startup_log.parent.mkdir(parents=True, exist_ok=True)
-        with startup_log.open("a", encoding="utf-8", errors="replace") as log_handle:
-            log_handle.write(f"\n--- OrdaX Blender start {time.time():.3f} ---\n")
-            log_handle.flush()
-            process = subprocess.Popen(
-                command,
-                cwd=str(self.project.root),
-                stdin=subprocess.DEVNULL,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                shell=False,
-                creationflags=creationflags,
-            )
 
+        def launch(software_icd: Path | None):
+            launch_command = list(command)
+            parameters: dict[str, Any] = {}
+            if software_icd is not None:
+                # Only the Blender subprocess sees the software driver. Do
+                # not mutate the global Windows Vulkan ICD registration or
+                # the developer's desktop environment.
+                launch_command[3:3] = ["--gpu-backend", "vulkan"]
+                env = os.environ.copy()
+                env["VK_DRIVER_FILES"] = str(software_icd)
+                env["VK_ICD_FILENAMES"] = str(software_icd)
+                parameters["env"] = env
+            with startup_log.open("a", encoding="utf-8", errors="replace") as log_handle:
+                mode = "vulkan-software" if software_icd is not None else "native-default"
+                log_handle.write(f"\n--- OrdaX Blender start {time.time():.3f} ({mode}) ---\n")
+                log_handle.flush()
+                return subprocess.Popen(
+                    launch_command,
+                    cwd=str(self.project.root),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    shell=False,
+                    creationflags=creationflags,
+                    **parameters,
+                )
+
+        process = launch(None)
+        software_vulkan_attempted = False
         deadline = time.monotonic() + max(3.0, wait_seconds)
         next_graphics_probe = 0.0
         while time.monotonic() < deadline:
@@ -417,6 +481,7 @@ class BlenderLiveBridge:
                     data["pid"] = process.pid
                     data["log_file"] = str(startup_log)
                     data["transport"] = "blender-visible-companion"
+                    data["graphics_backend"] = ("vulkan-software" if software_vulkan_attempted else "native-default")
                     return ActionResult(True, "Visible Blender live session started", data)
                 if data.get("identity_matches") is False:
                     return ActionResult(
@@ -450,14 +515,36 @@ class BlenderLiveBridge:
                             process.wait(timeout=2.0)
                     except (OSError, ValueError, subprocess.TimeoutExpired):
                         pass
+                    if not software_vulkan_attempted:
+                        software_icd = _verified_software_vulkan_icd(self.config.state_dir)
+                        if software_icd is not None:
+                            software_vulkan_attempted = True
+                            try:
+                                process = launch(software_icd)
+                            except OSError as error:
+                                return ActionResult(
+                                    False, f"Blender software Vulkan fallback did not launch: {error}",
+                                    {
+                                        "error_code": "blender_software_vulkan_launch_failed",
+                                        "log_file": str(startup_log),
+                                        "graphics_dialog": graphics_error,
+                                    },
+                                )
+                            # One extra, bounded attempt after stopping only
+                            # the Blender PID this bridge launched. Other apps
+                            # and any other Blender sessions are untouched.
+                            deadline = time.monotonic() + max(20.0, wait_seconds)
+                            next_graphics_probe = 0.0
+                            continue
                     return ActionResult(
                         False,
-                        "Blender requires a graphics driver with OpenGL 4.3 or higher; the visible companion did not start",
+                        "Blender requires OpenGL 4.3 or a compatible local software Vulkan driver; the visible companion did not start",
                         {
                             "error_code": "blender_graphics_unsupported",
                             "pid": process.pid,
                             "log_file": str(startup_log),
                             "graphics_dialog": graphics_error,
+                            "software_vulkan_attempted": software_vulkan_attempted,
                             "retryable_on_this_gpu": False,
                         },
                     )
