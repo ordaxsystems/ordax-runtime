@@ -231,6 +231,52 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertNotIn("Register-ScheduledTask", installer)
         self.assertNotIn("DeleteFile", installer)
 
+    def test_dev_upgrade_releases_only_the_owned_scheduled_task_directory_lock(self):
+        lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(
+            encoding="utf-8"
+        )
+        # The long-lived Scheduled Task PowerShell process must never inherit
+        # its current directory from the package root that must be renamed.
+        self.assertIn(
+            "Register-CanonicalTask -Name $taskName -Script $lifecycle "
+            "-Operation Launch -WorkingDirectory $updatesRoot",
+            lifecycle,
+        )
+        self.assertNotIn(
+            "Register-CanonicalTask -Name $taskName -Script $lifecycle "
+            "-Operation Launch -WorkingDirectory $installRoot",
+            lifecycle,
+        )
+
+        # Recovery from an older installed task has to END that running
+        # canonical task before its old working-directory handle can block
+        # the atomic installRoot -> previous-dev move.
+        self.assertIn(
+            "if ($Action -eq 'End' -and $Name -cne $taskName)",
+            lifecycle,
+        )
+        self.assertIn("'End' { @('/End','/TN',$Name) }", lifecycle)
+        upgrade = lifecycle.split("    'ApplyUpgrade' {", 1)[1]
+        owned_task_end = upgrade.index(
+            "Invoke-CanonicalTaskAction -Name $taskName -Action End"
+        )
+        check_release = upgrade.index(
+            "if (!$released)"
+        )
+        disable = upgrade.index(
+            "Invoke-CanonicalTaskAction -Name $taskName -Action Disable"
+        )
+        quiesce = upgrade.index("Invoke-QuiesceRoot -Root $installRoot")
+        rename = upgrade.index("[IO.Directory]::Move($installRoot,$previous)")
+        self.assertLess(owned_task_end, check_release)
+        self.assertLess(check_release, disable)
+        self.assertLess(disable, quiesce)
+        self.assertLess(quiesce, rename)
+        self.assertIn(
+            "Canonical MCP owner task did not release its running process",
+            lifecycle,
+        )
+
     def test_runtime_quiesce_only_tolerates_confirmed_exited_process_races(self):
         script = (
             ROOT / "scripts" / "windows" / "ordax-upgrade-quiesce.ps1"
