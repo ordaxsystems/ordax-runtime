@@ -163,3 +163,39 @@ atestada, encerra somente o PID que o start criou para evitar órfãos.
 Este controle direto e os testes de regressão não substituem prova física
 do novo código instalado. O gate público Product MCP/Platform/Project Catalog
 segue separado, sem fabricar cadastro de projeto ou autorização.
+
+## Windows Blender cold-start: OIDN SYCL enumeration — 20/11/2026
+
+Prova física no DESKTOP-4UFL03B, com Runtime instalado pela cadeia canônica:
+
+- Blender 5.3.0 sem personalização demorou ~49 segundos para concluir
+  `blender.exe --version`, com somente 0,25 segundo de CPU e carregamento
+  lento de DLLs incluindo OpenImageDenoise, python313 e ur_loader.
+- A opção documentada pelo projeto Open Image Denoise `OIDN_DEVICE_SYCL=0`,
+  aplicada **somente ao subprocesso Blender**, reduziu `--version` a
+  0,3 segundo com código de saída 0. Referência:
+  https://github.com/RenderKit/oidn/blob/master/README.md#environment-variables
+- O arquivo original ordax-pr404-physical.blend foi reaberto no Blender
+  5.3.0 headless, com cubo e armature Root → Spine → Head confirmados pela
+  API real do Blender (código 0); essa execução ainda sem a opção levou 114,2 s.
+- Com a opção temporária, o BlenderLiveBridge abriu a cena gráfica com o
+  ICD Vulkan por software já verificado e publicou presença legítima em 42,19 s;
+  o companion v9 confirmou identidade e fingerprint. Quando o heartbeat
+  voltou a ficar fresco após uma pausa do viewport, `ping` e `inspect`
+  retornaram recibos de sucesso em 0,36 s e 0,53 s. Nenhuma edição adicional.
+
+**Correção canônica:** no `launch()` existente de `BlenderLiveBridge.start`,
+quando um ICD Lavapipe previamente verificado é selecionado, passar
+`OIDN_DEVICE_SYCL=0` exclusivamente no ambiente de `subprocess.Popen`.
+Lavapipe é renderização CPU, portanto não expõe um GPU SYCL correspondente
+para denoise acelerado. Sem ICD validado, o caminho nativo mantém toda a
+seleção SYCL normal do usuário. Não mudar o PATH, registro, drivers,
+preferências do Blender, serviço MCP ou ambiente global. O teste de
+regressão cobre seleção inicial, fallback e preservação de ambiente nativo.
+
+**Limite da prova:** o heartbeat pode ficar temporariamente desatualizado
+em viewport por software, apesar do PID permanecer vivo. O bridge bloqueou
+corretamente uma tentativa de ping sem presença fresca, sem enfileirar
+comando. Quando a presença voltou, ambos os comandos de leitura passaram.
+Esse perfil não constitui, por si só, a homologação do caminho público
+ChatGPT → Platform grants → Device Agent → Blender sem Project registrado.
