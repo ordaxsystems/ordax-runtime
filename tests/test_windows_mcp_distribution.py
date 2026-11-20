@@ -239,10 +239,10 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(
             encoding="utf-8"
         )
-        code = re.search(r"\\$extractCode = @'\\n([\\s\\S]*?)\\n'@", lifecycle)
-        self.assertIsNotNone(code, "embedded Python extractor missing")
-        compiled = compile(code.group(1), "<ordax-dev-extractor>", "exec")
-        self.assertIsNotNone(compiled)
+        marker = "$extractCode = @'"
+        self.assertIn(marker, lifecycle, "embedded Python extractor missing")
+        code = lifecycle.split(marker, 1)[1].split("'@", 1)[0].strip()
+        compiled = compile(code, "<ordax-dev-extractor>", "exec")
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             archive = root / "source.zip"
@@ -255,7 +255,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
                             f"content-{folder}-{file_number}",
                         )
             finished = subprocess.run(
-                [sys.executable, "-I", "-c", code.group(1), str(archive), str(destination)],
+                [sys.executable, "-I", "-c", code, str(archive), str(destination)],
                 capture_output=True, text=True, timeout=40, check=False,
             )
             self.assertEqual(finished.returncode, 0, finished.stderr)
