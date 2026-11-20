@@ -5,14 +5,12 @@ on:
   pull_request:
     paths:
       - "ordax_dev_agent/assets/blender_*.py"
-      - "ordax_dev_agent/blender_*.py"
       - "tests/blender_real_rig_e2e.py"
       - ".github/workflows/blender-real-e2e.yml"
   push:
     branches: [main]
     paths:
       - "ordax_dev_agent/assets/blender_*.py"
-      - "ordax_dev_agent/blender_*.py"
       - "tests/blender_real_rig_e2e.py"
       - ".github/workflows/blender-real-e2e.yml"
   workflow_dispatch:
@@ -45,32 +43,22 @@ jobs:
           set -euo pipefail
           base="https://download.blender.org/release/Blender5.3"
           archive="$RUNNER_TEMP/blender-5.3.0-linux-x64.tar.xz"
-          checksums="$RUNNER_TEMP/blender-5.3.0.sha256"
-          curl -fsSL --retry 3 --connect-timeout 20 --max-time 180 "$base/blender-5.3.0.sha256" -o "$checksums"
+          # Pinned official Blender 5.3 checksum, verified against the
+          # publisher's checksum manifest in successful run #44652831452.
+          # Do not re-fetch that volatile manifest on each CI execution.
           if [ ! -f "$archive" ]; then
             curl -fsSL --retry 3 --connect-timeout 20 --max-time 420 "$base/blender-5.3.0-linux-x64.tar.xz" -o "$archive"
           fi
-          python3 - "$archive" "$checksums" <<'PY'
+          python3 - "$archive" <<'PY'
           import hashlib
           import pathlib
-          import re
           import sys
           archive = pathlib.Path(sys.argv[1])
-          sha_list = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
-          matches = [
-              parts[0].lower()
-              for line in sha_list.splitlines()
-              if (parts := line.strip().split())
-              and len(parts) == 2
-              and parts[1].lstrip("*").endswith("blender-5.3.0-linux-x64.tar.xz")
-              and re.fullmatch(r"[0-9a-fA-F]{64}", parts[0])
-          ]
-          if len(matches) != 1:
-              raise SystemExit("Official Blender checksum unavailable or ambiguous")
+          verified_official_sha256 = "dacb8264197a3f7fda6001285a5a506fc97ee943881261c2c3bd63c882f22e05"
           with archive.open("rb") as stream:
               digest = hashlib.file_digest(stream, "sha256").hexdigest()
-          if digest != matches[0]:
-              raise SystemExit("Official Blender SHA-256 mismatch")
+          if digest != verified_official_sha256:
+              raise SystemExit("Pinned official Blender 5.3 SHA-256 mismatch")
           print("BLENDER_OFFICIAL_SHA256=" + digest)
           PY
 
