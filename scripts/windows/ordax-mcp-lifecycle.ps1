@@ -348,7 +348,26 @@ function Assert-DevArchive {
         if (!(Test-Path -LiteralPath $privatePython -PathType Leaf)) {
             throw 'Installed private Runtime Python unavailable for archive extraction'
         }
-        $extractCode = 'import sys,zipfile;zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])'
+        # A scheduled background task receives slower per-file I/O than an
+        # interactive extraction on the DEV host. Populate directories once
+        # and extract independent, prevalidated ZIP members concurrently.
+        # This remains one bounded, child-owned extraction in the same updater.
+        $extractCode = @'
+import os
+import sys
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    members = archive.infolist()
+    destination = sys.argv[2]
+    for member in members:
+        parent = os.path.dirname(os.path.join(destination, member.filename))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for _ in pool.map(lambda member: archive.extract(member, destination), members):
+            pass
+'@
         $start = [Diagnostics.ProcessStartInfo]::new()
         $start.FileName = $privatePython
         $start.Arguments = '-I -c "' + $extractCode + '" "' + $ArchivePath + '" "' + $Destination + '"'
@@ -358,10 +377,12 @@ function Assert-DevArchive {
         $child = [Diagnostics.Process]::Start($start)
         if ($null -eq $child) { throw 'Portable DEV archive extractor did not start' }
         try {
-            if (!$child.WaitForExit(180000)) {
+            # Time-bound even when Windows throttles the scheduler's I/O;
+            # the ordinary path is accelerated by bounded file concurrency.
+            if (!$child.WaitForExit(480000)) {
                 $child.Kill()
                 [void]$child.WaitForExit(5000)
-                throw 'Portable DEV archive extraction exceeded its 180-second deadline'
+                throw 'Portable DEV archive extraction exceeded its 480-second deadline'
             }
             if ($child.ExitCode -ne 0) {
                 throw "Portable DEV archive extraction failed with exit code $($child.ExitCode)"

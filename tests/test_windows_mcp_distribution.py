@@ -2,6 +2,8 @@
 import json
 import re
 import subprocess
+import sys
+import zipfile
 import tempfile
 import tomllib
 import unittest
@@ -206,8 +208,10 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         # in one bounded child. No second background updater or unbounded
         # Task Scheduler .NET ZipFile extraction is permitted.
         self.assertIn("Join-Path $installRoot 'runtime\\python.exe'", lifecycle)
-        self.assertIn("zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])", lifecycle)
-        self.assertIn("$child.WaitForExit(180000)", lifecycle)
+        self.assertIn("with zipfile.ZipFile(sys.argv[1]) as archive:", lifecycle)
+        self.assertIn("ThreadPoolExecutor(max_workers=4)", lifecycle)
+        self.assertIn("archive.extract(member, destination)", lifecycle)
+        self.assertIn("$child.WaitForExit(480000)", lifecycle)
         self.assertIn("$child.Kill()", lifecycle)
         self.assertNotIn(
             "[IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath,$Destination)",
@@ -230,6 +234,36 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertNotIn("OrdaX Dev Agent.lnk", installer)
         self.assertNotIn("Register-ScheduledTask", installer)
         self.assertNotIn("DeleteFile", installer)
+
+    def test_portable_dev_extractor_reuses_private_python_with_bounded_parallel_files(self):
+        lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(
+            encoding="utf-8"
+        )
+        marker = "$extractCode = @'"
+        self.assertIn(marker, lifecycle, "embedded Python extractor missing")
+        code = lifecycle.split(marker, 1)[1].split("'@", 1)[0].strip()
+        compiled = compile(code, "<ordax-dev-extractor>", "exec")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "source.zip"
+            destination = root / "extracted"
+            with zipfile.ZipFile(archive, "w") as compressed:
+                for folder in range(5):
+                    for file_number in range(8):
+                        compressed.writestr(
+                            f"folder-{folder}/nested/file-{file_number}.txt",
+                            f"content-{folder}-{file_number}",
+                        )
+            finished = subprocess.run(
+                [sys.executable, "-I", "-c", code, str(archive), str(destination)],
+                capture_output=True, text=True, timeout=40, check=False,
+            )
+            self.assertEqual(finished.returncode, 0, finished.stderr)
+            self.assertEqual(
+                (destination / "folder-4/nested/file-7.txt").read_text(encoding="utf-8"),
+                "content-4-7",
+            )
+            self.assertEqual(len(list(destination.rglob("*.txt"))), 40)
 
     def test_dev_upgrade_releases_only_the_owned_scheduled_task_directory_lock(self):
         lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(
