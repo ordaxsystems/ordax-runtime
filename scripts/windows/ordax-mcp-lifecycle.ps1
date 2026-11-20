@@ -493,8 +493,44 @@ function Invoke-QuiesceRoot {
     if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
         throw 'Installed Runtime quiesce controller missing'
     }
-    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -InstallRoot $Root -TimeoutSeconds 25
-    if ($LASTEXITCODE -ne 0) { throw "Runtime quiesce failed for owner root: $Root" }
+    if ($Root.Contains('"') -or $script.Contains('"')) {
+        throw 'Invalid canonical Runtime root for quiesce'
+    }
+    # The script checks a 25s deadline between calls, but Windows kernel
+    # process enumeration/termination can block a single call indefinitely.
+    # Supervise the ONE existing quiesce script from outside its process.
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $powershell
+    $start.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+        $script + '" -InstallRoot "' + $Root + '" -TimeoutSeconds 25'
+    $start.WorkingDirectory = $updatesRoot
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $child = [Diagnostics.Process]::Start($start)
+    if ($null -eq $child) { throw 'Canonical Runtime quiesce process did not start' }
+    try {
+        # Drain both output pipes while the child runs; never deadlock on logs.
+        $stdoutTask = $child.StandardOutput.ReadToEndAsync()
+        $stderrTask = $child.StandardError.ReadToEndAsync()
+        if (!$child.WaitForExit(45000)) {
+            try {
+                $child.Kill()
+                [void]$child.WaitForExit(5000)
+            } catch {}
+            throw 'ORDAX_MCP_QUIESCE_HARD_DEADLINE: owned process control exceeded 45 seconds'
+        }
+        if (!$stdoutTask.Wait(3000) -or !$stderrTask.Wait(3000)) {
+            throw 'ORDAX_MCP_QUIESCE_OUTPUT_TIMEOUT'
+        }
+        $receipt = $stdoutTask.Result
+        if ($child.ExitCode -ne 0 -or
+            $receipt -notmatch '(?m)^ORDAX_UPGRADE_QUIESCED\s*$') {
+            throw ("ORDAX_MCP_QUIESCE_FAILED: exit={0}" -f $child.ExitCode)
+        }
+        Write-Output 'ORDAX_MCP_QUIESCE_VERIFIED'
+    } finally { $child.Dispose() }
 }
 
 function Invoke-RegisterAndLaunch {
