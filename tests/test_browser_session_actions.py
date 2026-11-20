@@ -15,10 +15,11 @@ from ordax_dev_agent.config import AgentConfig
 
 _HTML = b"""<!doctype html>
 <html><head><title>ORDAX Browser Test</title></head>
-<body>
+<body onload="document.getElementById('saved').textContent='Saved '+(localStorage.getItem('ordax-e2e')||'none')">
   <input id="name" aria-label="Name">
-  <button id="go" onclick="document.getElementById('out').textContent='Hello '+document.getElementById('name').value">Go</button>
+  <button id="go" onclick="document.getElementById('out').textContent='Hello '+document.getElementById('name').value;localStorage.setItem('ordax-e2e',document.getElementById('name').value)">Go</button>
   <p id="out">Idle</p>
+  <p id="saved">Saved none</p>
 </body></html>"""
 
 
@@ -149,6 +150,79 @@ class BrowserSessionActionsTests(unittest.TestCase):
         self.assertTrue(navigated.ok, navigated.summary)
         self.assertEqual(navigated.data["url"], self.url)
         self.assertEqual(navigated.data["requested_url"], self.url + "redirect")
+
+    def test_explicit_restart_reuses_only_the_stopped_ordax_profile(self):
+        started = self.registry.execute(
+            "browser.start",
+            {"project": "demo", "url": self.url, "headless": True, "wait_seconds": 15},
+        )
+        self.assertTrue(started.ok, started.summary)
+        self.session_id = started.data["session_id"]
+        profile = Path(started.data["profile"])
+        original_pid = started.data["pid"]
+
+        # A running profile must never spawn another Chromium against itself.
+        denied = self.registry.execute(
+            "browser.start", {"project": "demo", "resume_session_id": self.session_id},
+        )
+        self.assertFalse(denied.ok)
+        self.assertIn("still running", denied.summary)
+
+        before = self.registry.execute(
+            "browser.snapshot", {"project": "demo", "session_id": self.session_id},
+        )
+        self.assertTrue(before.ok, before.summary)
+        field = next(n for n in before.data["elements"] if n["tag"] == "input")
+        button = next(n for n in before.data["elements"] if n["tag"] == "button")
+        typed = self.registry.execute(
+            "browser.type", {
+                "project": "demo", "session_id": self.session_id,
+                "node_id": field["id"], "text": "remembered",
+            },
+        )
+        self.assertTrue(typed.ok, typed.summary)
+        clicked = self.registry.execute(
+            "browser.click", {
+                "project": "demo", "session_id": self.session_id,
+                "node_id": button["id"],
+            },
+        )
+        self.assertTrue(clicked.ok, clicked.summary)
+
+        stopped = self.registry.execute(
+            "browser.stop", {"project": "demo", "session_id": self.session_id},
+        )
+        self.assertTrue(stopped.ok, stopped.summary)
+        self.assertEqual(stopped.data["shutdown_method"], "cdp",
+                         "stored login state requires normal Chromium shutdown")
+        self.assertTrue(profile.is_dir(), "authorized profile should persist after stop")
+
+        resumed = self.registry.execute(
+            "browser.start", {
+                "project": "demo", "resume_session_id": self.session_id,
+                "url": self.url, "wait_seconds": 15,
+            },
+        )
+        self.assertTrue(resumed.ok, resumed.summary)
+        self.assertTrue(resumed.data["resumed"])
+        self.assertEqual(resumed.data["session_id"], self.session_id)
+        self.assertEqual(resumed.data["profile"], str(profile))
+        after = self.registry.execute(
+            "browser.snapshot", {"project": "demo", "session_id": self.session_id},
+        )
+        self.assertTrue(after.ok, after.summary)
+        self.assertIn("Saved remembered", after.data["text"])
+
+    def test_resume_rejects_invalid_or_missing_identity_without_new_profile(self):
+        for value in ("wrong", "../other", "00000000-0000-0000-0000-000000000000"):
+            with self.subTest(value=value):
+                result = self.registry.execute(
+                    "browser.start", {
+                        "project": "demo", "resume_session_id": value,
+                        "url": self.url, "headless": True,
+                    },
+                )
+                self.assertFalse(result.ok)
 
     def test_two_owned_tabs_keep_independent_dom_state(self):
         started = self.registry.execute(
