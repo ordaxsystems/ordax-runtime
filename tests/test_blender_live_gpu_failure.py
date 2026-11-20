@@ -109,10 +109,11 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
                 "ordax_dev_agent.blender_live_bridge.hashlib.file_digest",
                 return_value=expected,
             ):
-                self.assertEqual(
-                    _verified_software_vulkan_icd(Path(base) / "state"),
-                    manifest,
-                )
+                selected = _verified_software_vulkan_icd(Path(base) / "state")
+                self.assertIsNotNone(selected)
+                # Windows hosted runners can expose the same file through
+                # long-user-profile and 8.3 short-path aliases.
+                self.assertTrue(selected.samefile(manifest))
                 manifest.write_text('{"ICD":{"library_path":"../escaped.dll"}}', encoding="utf-8")
                 self.assertIsNone(_verified_software_vulkan_icd(Path(base) / "state"))
 
