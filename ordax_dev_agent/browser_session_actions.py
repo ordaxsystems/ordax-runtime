@@ -37,7 +37,7 @@ def _same_origin(left: str, right: str) -> bool:
     return (a.scheme, a.hostname, a.port) == (b.scheme, b.hostname, b.port)
 
 
-_BROWSER_START_LOCK = threading.Lock()
+_BROWSER_START_LOCK = threading.RLock()
 
 
 class BrowserSessionActions:
@@ -851,85 +851,123 @@ class BrowserSessionActions:
             return ActionResult(False, f"browser screenshot failed: {error}")
         return ActionResult(True, "browser screenshot captured", data)
 
-    def browser_stop(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
-        session_id = str(payload.get("session_id") or "")
-        state = self._refresh_browser_pid(project, self._load_browser_state(project, session_id))
-        pid = int(state.get("pid") or 0)
-        if not self._pid_running(pid):
-            return ActionResult(True, "browser session is already stopped", {**state, "running": False})
-        if not self._browser_owned(project, state):
-            return ActionResult(False, "refusing to stop a browser process not owned by ORDAX", state)
+    @staticmethod
+    def _request_browser_shutdown(state: dict[str, Any]) -> bool:
+        """Ask the OWNED Chrome process to close normally and flush its profile.
 
+        Never attach to another browser: only the exact loopback CDP browser
+        endpoint from the checked session is contacted. A failed request does
+        not authorize shutdown of unrelated processes.
+        """
+        port = int(state.get("debug_port") or 0)
+        if not 1 <= port <= 65535:
+            return False
         try:
-            if os.name == "nt":
-                deadline = time.monotonic() + 12.0
-                attempted: set[int] = set()
-                while time.monotonic() < deadline:
-                    candidates = [pid]
-                    discovered = self._discover_browser_pid(project, state)
-                    if discovered is not None:
-                        candidates.append(discovered)
-                    candidates = [item for item in candidates if item > 0 and item not in attempted]
-                    if not candidates:
-                        if self._discover_browser_pid(project, state) is None:
-                            break
-                        time.sleep(0.05)
-                        continue
-                    for candidate in candidates:
-                        attempted.add(candidate)
+            details = _http_json(f"http://127.0.0.1:{port}/json/version", timeout=2.0)
+            target = str(details.get("webSocketDebuggerUrl") or "")
+            parsed = urllib.parse.urlsplit(target)
+            if (parsed.scheme != "ws" or parsed.hostname != "127.0.0.1"
+                or parsed.port != port or not parsed.path.startswith("/devtools/browser/")):
+                return False
+            from websockets.sync.client import connect
+
+            with connect(target, open_timeout=3, close_timeout=1) as ws:
+                ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+            return True
+        except Exception:
+            # Chrome is allowed to close the socket while processing Browser.close.
+            # The caller checks the process state before any fallback.
+            return False
+
+    def browser_stop(self, payload: dict[str, Any]) -> ActionResult:
+        with _BROWSER_START_LOCK:
+            project = self._project(payload)
+            session_id = str(payload.get("session_id") or "")
+            state = self._refresh_browser_pid(project, self._load_browser_state(project, session_id))
+            pid = int(state.get("pid") or 0)
+            if not self._pid_running(pid):
+                return ActionResult(True, "browser session is already stopped", {**state, "running": False})
+            if not self._browser_owned(project, state):
+                return ActionResult(False, "refusing to stop a browser process not owned by ORDAX", state)
+
+            requested_graceful = self._request_browser_shutdown(state)
+            if requested_graceful:
+                graceful_deadline = time.monotonic() + 8.0
+                while time.monotonic() < graceful_deadline:
+                    if not self._pid_running(pid) and self._discover_browser_pid(project, state) is None:
+                        break
+                    time.sleep(0.1)
+            graceful_stopped = not self._pid_running(pid) and self._discover_browser_pid(project, state) is None
+            try:
+                if not graceful_stopped and os.name == "nt":
+                    deadline = time.monotonic() + 12.0
+                    attempted: set[int] = set()
+                    while time.monotonic() < deadline:
+                        candidates = [pid]
+                        discovered = self._discover_browser_pid(project, state)
+                        if discovered is not None:
+                            candidates.append(discovered)
+                        candidates = [item for item in candidates if item > 0 and item not in attempted]
+                        if not candidates:
+                            if self._discover_browser_pid(project, state) is None:
+                                break
+                            time.sleep(0.05)
+                            continue
+                        for candidate in candidates:
+                            attempted.add(candidate)
+                            subprocess.run(
+                                ["taskkill", "/PID", str(candidate), "/T", "/F"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                timeout=15,
+                                shell=False,
+                            )
+                        time.sleep(0.1)
+                elif not graceful_stopped:
+                    try:
+                        os.killpg(pid, 15)
+                    except ProcessLookupError:
+                        pass
+            except (OSError, subprocess.TimeoutExpired) as error:
+                return ActionResult(False, f"browser stop failed: {error}", state)
+
+            handle = getattr(self, "_browser_process_handles", {}).pop(session_id, None)
+            if handle is not None:
+                try:
+                    handle.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        handle.kill()
+                        handle.wait(timeout=5)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+
+            deadline = time.monotonic() + 8.0
+            while time.monotonic() < deadline:
+                owned_pid = self._discover_browser_pid(project, state)
+                original_running = self._pid_running(pid)
+                if owned_pid is None and not original_running:
+                    break
+                if os.name == "nt" and owned_pid is not None:
+                    try:
                         subprocess.run(
-                            ["taskkill", "/PID", str(candidate), "/T", "/F"],
+                            ["taskkill", "/PID", str(owned_pid), "/T", "/F"],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
-                            timeout=15,
+                            timeout=10,
                             shell=False,
                         )
-                    time.sleep(0.1)
-            else:
-                try:
-                    os.killpg(pid, 15)
-                except ProcessLookupError:
-                    pass
-        except (OSError, subprocess.TimeoutExpired) as error:
-            return ActionResult(False, f"browser stop failed: {error}", state)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                time.sleep(0.1)
 
-        handle = getattr(self, "_browser_process_handles", {}).pop(session_id, None)
-        if handle is not None:
-            try:
-                handle.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    handle.kill()
-                    handle.wait(timeout=5)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
-
-        deadline = time.monotonic() + 8.0
-        while time.monotonic() < deadline:
             owned_pid = self._discover_browser_pid(project, state)
-            original_running = self._pid_running(pid)
-            if owned_pid is None and not original_running:
-                break
-            if os.name == "nt" and owned_pid is not None:
-                try:
-                    subprocess.run(
-                        ["taskkill", "/PID", str(owned_pid), "/T", "/F"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=10,
-                        shell=False,
-                    )
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
-            time.sleep(0.1)
-
-        owned_pid = self._discover_browser_pid(project, state)
-        stopped = owned_pid is None and not self._pid_running(pid)
-        state.update({
-            "stopped_at_unix": time.time(),
-            "running": not stopped,
-            "ownership_valid": False if stopped else self._browser_owned(project, state),
-        })
-        self._write_browser_state(project, state)
-        return ActionResult(stopped, "browser session stopped", state)
+            stopped = owned_pid is None and not self._pid_running(pid)
+            state.update({
+                "stopped_at_unix": time.time(),
+                "shutdown_method": "cdp" if graceful_stopped else "fallback",
+                "running": not stopped,
+                "ownership_valid": False if stopped else self._browser_owned(project, state),
+            })
+            self._write_browser_state(project, state)
+            return ActionResult(stopped, "browser session stopped", state)
