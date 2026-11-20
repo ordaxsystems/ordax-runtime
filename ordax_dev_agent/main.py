@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
 import json
 import math
@@ -200,6 +200,33 @@ def product_idle_wait_seconds(
     if not all(math.isfinite(value) for value in (now, next_claim_due, next_heartbeat)):
         raise ValueError("Product idle deadlines must be finite")
     return max(0.10, min(next_claim_due - now, next_heartbeat - now))
+
+
+def _drain_project_binding_reconciliation(
+    future: Future[int] | None, runtime: dict,
+) -> Future[int] | None:
+    """Account for an independent Catalog reconciliation without blocking claims.
+
+    Only a completed future is inspected. Native credential revocations retain
+    their existing terminal behavior; network errors remain sanitized, and
+    never become a device-wide claim backoff.
+    """
+    if future is None or not future.done():
+        return future
+    from .remote_protocol import DeviceAuthorizationError
+
+    try:
+        confirmed = int(future.result())
+        if confirmed:
+            runtime["project_bindings_confirmed"] = int(
+                runtime.get("project_bindings_confirmed", 0)
+            ) + confirmed
+        runtime.pop("last_project_binding_error", None)
+    except DeviceAuthorizationError:
+        raise
+    except Exception as error:
+        runtime["last_project_binding_error"] = type(error).__name__
+    return None
 
 
 def _mark_transport_delivery_error(runtime: dict, error: Exception) -> None:
@@ -1290,6 +1317,13 @@ def run(
         thread_name_prefix="ordax-product-job",
     )
     job_futures: dict[object, str] = {}
+    # Project Catalog onboarding is independent of MCP job execution. Its
+    # network request can take ten seconds: run at most one off the claim loop,
+    # never holding a device action worker slot or creating a second queue.
+    project_binding_executor = ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="ordax-project-binding",
+    )
+    project_binding_future: Future[int] | None = None
     from .remote_protocol import DeviceAuthorizationError
     wake_listener = _start_optional_product_wake_listener(
         enabled=config.product_wake_enabled,
@@ -1358,6 +1392,11 @@ def run(
                         1.0 if recovery_healthy else 5.0
                     )
 
+                if project_binding_future is not None:
+                    project_binding_future = _drain_project_binding_reconciliation(
+                        project_binding_future, runtime,
+                    )
+
                 if now >= next_heartbeat:
                     with runtime_lock:
                         has_active_jobs = bool(runtime.get("active_jobs"))
@@ -1372,30 +1411,19 @@ def run(
                         },
                         status="busy" if has_active_jobs else "online",
                     )
-                    # Project binding reconciliation uses the same remote
-                    # transport. Skip it on a failed presence tick so its
-                    # bounded request cannot compound a transient heartbeat
-                    # outage; claims remain independently authorized below.
-                    if heartbeat_healthy:
+                    # A slow Project Catalog lookup used to block the ONLY
+                    # Product claim loop for up to its ten-second HTTP timeout.
+                    # Use the existing canonical reconciler on one independent
+                    # thread; never start another while it is still running.
+                    # Failed presence must not schedule fresh onboarding I/O.
+                    if heartbeat_healthy and project_binding_future is None:
                         reconcile_project_bindings = getattr(
                             control, "reconcile_project_bindings", None,
                         )
                         if callable(reconcile_project_bindings):
-                            try:
-                                confirmed = int(reconcile_project_bindings())
-                                if confirmed:
-                                    runtime["project_bindings_confirmed"] = int(
-                                        runtime.get("project_bindings_confirmed", 0)
-                                    ) + confirmed
-                                runtime.pop("last_project_binding_error", None)
-                            except DeviceAuthorizationError:
-                                raise
-                            except Exception as error:
-                                # Project onboarding is fail-closed and independent
-                                # from action dispatch. Never let a missing/stale
-                                # Native Project Catalog bridge become a new global
-                                # queue or make unrelated device actions unavailable.
-                                runtime["last_project_binding_error"] = type(error).__name__
+                            project_binding_future = project_binding_executor.submit(
+                                reconcile_project_bindings,
+                            )
                     with runtime_lock:
                         if runtime.get("active_jobs") and runtime.get("state") == "ready":
                             runtime["state"] = "busy"
@@ -1528,6 +1556,7 @@ def run(
         runtime["state"] = "stopping"
         stop_requested.set()
         job_executor.shutdown(wait=True, cancel_futures=False)
+        project_binding_executor.shutdown(wait=True, cancel_futures=False)
         if wake_listener is not None:
             wake_listener.close()
         try:
