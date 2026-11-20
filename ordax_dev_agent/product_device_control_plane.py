@@ -14,7 +14,7 @@ import httpx
 from ordax_connector.capabilities import canonical_capabilities, capability_digest
 
 from . import __version__ as DEVICE_AGENT_VERSION
-from .config import AgentConfig
+from .config import AgentConfig, product_execution_capacity
 from .device_credentials import resolve_token_path
 from .models import ActionResult, AgentJob
 from .product_central_session import ProductCentralSessionClient
@@ -296,10 +296,17 @@ class ProductDeviceControlPlane:
         self._terminal_outbox = TerminalOutbox(
             config.state_dir, "product-http-v1", self.device_id,
         )
+        # Claim, renewals, terminal receipts and heartbeats must not contend
+        # for an old four-connection HTTP pool when the local executor has
+        # more independent worker slots.
+        worker_capacity = product_execution_capacity()
         self.http = httpx.Client(
             timeout=httpx.Timeout(30.0),
             follow_redirects=False,
-            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            limits=httpx.Limits(
+                max_connections=worker_capacity + 2,
+                max_keepalive_connections=min(8, worker_capacity),
+            ),
             headers={
                 "X-Ordax-Device-Id": self.device_id,
                 "X-Ordax-Device-Token": self.device_token,
