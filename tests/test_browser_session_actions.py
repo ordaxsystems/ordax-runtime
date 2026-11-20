@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -72,6 +72,36 @@ class BrowserUrlValidationTests(unittest.TestCase):
 
 
 @unittest.skipIf(find_chromium() is None, "Chrome/Edge not available on CI runner")
+class BrowserShutdownLifecycleTests(unittest.TestCase):
+    def test_graceful_close_waits_on_owned_handle_before_child_discovery(self):
+        # No real Chromium required: verify the process-handle wait, then only
+        # one authoritative child scan after Chrome's parent PID is closed.
+        session_id = "11111111-1111-4111-8111-111111111111"
+        state = {"session_id": session_id, "pid": 12345, "debug_port": 55555}
+        project = Mock(slug="demo")
+        actions = BrowserSessionActions()
+        handle = Mock()
+        handle.pid = 12345
+        actions._browser_process_handles = {session_id: handle}
+        with (
+            patch.object(actions, "_project", return_value=project),
+            patch.object(actions, "_load_browser_state", return_value=state),
+            patch.object(actions, "_refresh_browser_pid", return_value=state),
+            patch.object(actions, "_browser_owned", return_value=True),
+            patch.object(actions, "_request_browser_shutdown", return_value=True),
+            patch.object(actions, "_pid_running", side_effect=[True, False, False, False]),
+            patch.object(actions, "_discover_browser_pid", return_value=None) as discovery,
+            patch.object(actions, "_write_browser_state"),
+        ):
+            result = actions.browser_stop({"project": "demo", "session_id": session_id})
+        self.assertTrue(result.ok, result.summary)
+        self.assertEqual(result.data["shutdown_method"], "cdp")
+        self.assertEqual(handle.wait.call_count, 2)
+        self.assertGreater(handle.wait.call_args_list[0].kwargs["timeout"], 20)
+        self.assertEqual(handle.wait.call_args_list[1].kwargs["timeout"], 5)
+        self.assertEqual(discovery.call_count, 3)
+
+
 class BrowserSessionActionsTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
