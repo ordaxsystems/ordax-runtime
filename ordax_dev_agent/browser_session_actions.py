@@ -8,6 +8,7 @@ import re
 import shutil
 import socket
 import subprocess
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -34,6 +35,9 @@ def _same_origin(left: str, right: str) -> bool:
     a = urllib.parse.urlsplit(left)
     b = urllib.parse.urlsplit(right)
     return (a.scheme, a.hostname, a.port) == (b.scheme, b.hostname, b.port)
+
+
+_BROWSER_START_LOCK = threading.Lock()
 
 
 class BrowserSessionActions:
@@ -325,211 +329,236 @@ class BrowserSessionActions:
         return remote.get("value")
 
     def browser_start(self, payload: dict[str, Any]) -> ActionResult:
-        project = self._project(payload)
-        browser = find_chromium()
-        if browser is None:
-            return ActionResult(False, "Chrome or Edge executable not found")
+        with _BROWSER_START_LOCK:
+            project = self._project(payload)
+            browser = find_chromium()
+            if browser is None:
+                return ActionResult(False, "Chrome or Edge executable not found")
 
-        url = self._valid_url(str(payload.get("url") or "about:blank"), allow_blank=True)
-        session_id = str(uuid.uuid4())
-        port = _free_port()
-        profile = self._browser_profile_path(project, session_id)
-        profile.mkdir(parents=True, exist_ok=True)
-        command = [
-            str(browser),
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-background-networking",
-            "--disable-sync",
-            "--disable-extensions",
-            f"--user-data-dir={profile}",
-            f"--remote-debugging-port={port}",
-            "--remote-debugging-address=127.0.0.1",
-            # Always establish an owned CDP target before navigating.
-            # Chromium may otherwise leave the only page at about:blank.
-            "about:blank",
-        ]
-        if bool(payload.get("headless", False)):
-            command.insert(1, "--headless=new")
+            url = self._valid_url(str(payload.get("url") or "about:blank"), allow_blank=True)
+            resume_id = payload.get("resume_session_id")
+            if resume_id is not None and (
+                not isinstance(resume_id, str) or
+                not resume_id or
+                resume_id != str(uuid.UUID(resume_id)) if isinstance(resume_id, str) and resume_id else True
+            ):
+                return ActionResult(False, "resume_session_id must be a canonical UUID")
+            resumed = resume_id is not None
+            previous = None
+            if resumed:
+                # Only an ORDAX-owned state for THIS project can select the profile.
+                # Do not attach to a personal Chrome profile or import any cookies.
+                previous = self._load_browser_state(project, resume_id)
+                session_id = resume_id
+                profile = self._browser_profile_path(project, session_id)
+                if (str(previous.get("profile") or "") != str(profile)
+                    or profile.is_symlink() or not profile.is_dir()):
+                    return ActionResult(False, "saved ORDAX browser profile is invalid")
+                current = self._refresh_browser_pid(project, previous)
+                if self._browser_owned(project, current) or self._discover_browser_pid(project, current) is not None:
+                    return ActionResult(False, "saved ORDAX browser session is still running")
+            else:
+                session_id = str(uuid.uuid4())
+                profile = self._browser_profile_path(project, session_id)
+                profile.mkdir(parents=True, exist_ok=False)
+            port = _free_port()
+            headless = bool(payload.get("headless", previous.get("headless", False) if previous else False))
+            command = [
+                str(browser),
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-background-networking",
+                "--disable-sync",
+                "--disable-extensions",
+                f"--user-data-dir={profile}",
+                f"--remote-debugging-port={port}",
+                "--remote-debugging-address=127.0.0.1",
+                # Always establish an owned CDP target before navigating.
+                # Chromium may otherwise leave the only page at about:blank.
+                "about:blank",
+            ]
+            if headless:
+                command.insert(1, "--headless=new")
 
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        start_new_session = os.name != "nt"
-        try:
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                shell=False,
-                creationflags=creationflags,
-                start_new_session=start_new_session,
-            )
-        except OSError as error:
-            return ActionResult(False, f"cannot start browser session: {error}")
-
-        state = {
-            "schema_version": 1,
-            "session_id": session_id,
-            "project": project.slug,
-            "pid": process.pid,
-            "debug_port": port,
-            "profile": str(profile),
-            "browser": str(browser),
-            "headless": bool(payload.get("headless", False)),
-            "started_at_unix": time.time(),
-        }
-        self._write_browser_state(project, state)
-        handles = getattr(self, "_browser_process_handles", None)
-        if handles is None:
-            handles = {}
-            self._browser_process_handles = handles
-        handles[session_id] = process
-
-        try:
-            deadline = time.monotonic() + max(
-                30.0,
-                min(float(payload.get("wait_seconds", 8)), 60.0),
-            )
-            target = None
-            last_error = None
-            while time.monotonic() < deadline:
-                exit_code = process.poll()
-                if exit_code is not None:
-                    raise BrowserCaptureError(
-                        f"Chromium exited before CDP became ready (exit code {exit_code})"
-                    )
-                try:
-                    target = self._browser_target(
-                        state,
-                        timeout_seconds=min(2.0, max(0.2, deadline - time.monotonic())),
-                        create_url="about:blank",
-                    )
-                    break
-                except BrowserCaptureError as error:
-                    last_error = error
-                    time.sleep(0.1)
-            if target is None:
-                raise last_error or BrowserCaptureError(
-                    "Chromium CDP page target is unavailable"
-                )
-        except BrowserCaptureError as error:
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            start_new_session = os.name != "nt"
             try:
-                if os.name == "nt":
-                    subprocess.run(
-                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=15,
-                        shell=False,
-                    )
-                else:
-                    try:
-                        os.killpg(process.pid, 15)
-                    except ProcessLookupError:
-                        pass
-                process.wait(timeout=5)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-            handles.pop(session_id, None)
-            state.update({
-                "startup_error": str(error),
-                "stopped_at_unix": time.time(),
-            })
-            self._write_browser_state(project, state)
-            return ActionResult(False, str(error), {**state, "running": False, "ownership_valid": False})
-        state = self._refresh_browser_pid(project, state)
-        state["primary_tab_id"] = self._validated_tab_id(target.get("id"))
-        self._write_browser_state(project, state)
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    shell=False,
+                    creationflags=creationflags,
+                    start_new_session=start_new_session,
+                )
+            except OSError as error:
+                return ActionResult(False, f"cannot start browser session: {error}")
 
-        if url == "about:blank":
-            ready = {
-                "url": str(target.get("url") or url),
-                "title": str(target.get("title") or ""),
+            state = {
+                "schema_version": 1,
+                "session_id": session_id,
+                "project": project.slug,
+                "pid": process.pid,
+                "debug_port": port,
+                "profile": str(profile),
+                "browser": str(browser),
+                "headless": headless,
+                "resumed": resumed,
+                "started_at_unix": time.time(),
             }
-        else:
-            def initialize_page(ws, _state, _target):
-                _cdp_call(ws, 1, "Page.enable")
-                navigation = _cdp_call(ws, 2, "Page.navigate", {"url": url})
-                if navigation.get("errorText"):
-                    raise BrowserCaptureError("Chromium rejected initial navigation")
-                deadline = time.monotonic() + max(
-                    5.0,
-                    min(float(payload.get("wait_seconds", 8)), 30.0),
-                )
-                request_id = 3
-                current_url = ""
-                title = ""
-                while time.monotonic() < deadline:
-                    ready_state = self._eval(ws, request_id, "document.readyState")
-                    request_id += 1
-                    current_url = str(self._eval(ws, request_id, "location.href") or "")
-                    request_id += 1
-                    title = str(self._eval(ws, request_id, "document.title") or "")
-                    request_id += 1
-                    if (ready_state in {"interactive", "complete"}
-                            and (current_url == url or _same_origin(current_url, url))):
-                        return {"url": current_url, "title": title}
-                    time.sleep(0.1)
-                raise BrowserCaptureError(
-                    f"Chromium page did not become ready: {current_url or 'unknown URL'}"
-                )
+            self._write_browser_state(project, state)
+            handles = getattr(self, "_browser_process_handles", None)
+            if handles is None:
+                handles = {}
+                self._browser_process_handles = handles
+            handles[session_id] = process
 
             try:
-                ready = self._with_page(
-                    project,
-                    session_id,
-                    initialize_page,
-                    preferred_url="about:blank",
+                deadline = time.monotonic() + max(
+                    30.0,
+                    min(float(payload.get("wait_seconds", 8)), 60.0),
                 )
-            except (ValueError, BrowserCaptureError) as error:
-                cleanup = None
-                try:
-                    cleanup = self.browser_stop(
-                        {"project": project.slug, "session_id": session_id}
-                    )
-                except (OSError, ValueError, subprocess.SubprocessError):
-                    cleanup = None
-                if cleanup is None or not cleanup.ok:
+                target = None
+                last_error = None
+                while time.monotonic() < deadline:
+                    exit_code = process.poll()
+                    if exit_code is not None:
+                        raise BrowserCaptureError(
+                            f"Chromium exited before CDP became ready (exit code {exit_code})"
+                        )
                     try:
-                        if os.name == "nt":
-                            subprocess.run(
-                                [
-                                    "taskkill",
-                                    "/PID",
-                                    str(int(state.get("pid") or process.pid)),
-                                    "/T",
-                                    "/F",
-                                ],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                timeout=15,
-                                shell=False,
-                            )
-                        else:
-                            try:
-                                os.killpg(int(state.get("pid") or process.pid), 15)
-                            except ProcessLookupError:
-                                pass
-                        process.wait(timeout=5)
-                    except (OSError, subprocess.TimeoutExpired):
-                        pass
-                    handles.pop(session_id, None)
-                state.update({"startup_error": str(error), "stopped_at_unix": time.time()})
+                        target = self._browser_target(
+                            state,
+                            timeout_seconds=min(2.0, max(0.2, deadline - time.monotonic())),
+                            create_url="about:blank",
+                        )
+                        break
+                    except BrowserCaptureError as error:
+                        last_error = error
+                        time.sleep(0.1)
+                if target is None:
+                    raise last_error or BrowserCaptureError(
+                        "Chromium CDP page target is unavailable"
+                    )
+            except BrowserCaptureError as error:
+                try:
+                    if os.name == "nt":
+                        subprocess.run(
+                            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=15,
+                            shell=False,
+                        )
+                    else:
+                        try:
+                            os.killpg(process.pid, 15)
+                        except ProcessLookupError:
+                            pass
+                    process.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                handles.pop(session_id, None)
+                state.update({
+                    "startup_error": str(error),
+                    "stopped_at_unix": time.time(),
+                })
                 self._write_browser_state(project, state)
-                return ActionResult(
-                    False,
-                    f"browser initial navigation failed: {error}",
-                    {**state, "running": False, "ownership_valid": False},
-                )
+                return ActionResult(False, str(error), {**state, "running": False, "ownership_valid": False})
+            state = self._refresh_browser_pid(project, state)
+            state["primary_tab_id"] = self._validated_tab_id(target.get("id"))
+            self._write_browser_state(project, state)
 
-        return ActionResult(True, "browser session started", {
-            **state,
-            "running": True,
-            "ownership_valid": self._browser_owned(project, state),
-            "url": ready["url"],
-            "title": ready["title"],
-            "tab_id": state["primary_tab_id"],
-        })
+            if url == "about:blank":
+                ready = {
+                    "url": str(target.get("url") or url),
+                    "title": str(target.get("title") or ""),
+                }
+            else:
+                def initialize_page(ws, _state, _target):
+                    _cdp_call(ws, 1, "Page.enable")
+                    navigation = _cdp_call(ws, 2, "Page.navigate", {"url": url})
+                    if navigation.get("errorText"):
+                        raise BrowserCaptureError("Chromium rejected initial navigation")
+                    deadline = time.monotonic() + max(
+                        5.0,
+                        min(float(payload.get("wait_seconds", 8)), 30.0),
+                    )
+                    request_id = 3
+                    current_url = ""
+                    title = ""
+                    while time.monotonic() < deadline:
+                        ready_state = self._eval(ws, request_id, "document.readyState")
+                        request_id += 1
+                        current_url = str(self._eval(ws, request_id, "location.href") or "")
+                        request_id += 1
+                        title = str(self._eval(ws, request_id, "document.title") or "")
+                        request_id += 1
+                        if (ready_state in {"interactive", "complete"}
+                                and (current_url == url or _same_origin(current_url, url))):
+                            return {"url": current_url, "title": title}
+                        time.sleep(0.1)
+                    raise BrowserCaptureError(
+                        f"Chromium page did not become ready: {current_url or 'unknown URL'}"
+                    )
+
+                try:
+                    ready = self._with_page(
+                        project,
+                        session_id,
+                        initialize_page,
+                        preferred_url="about:blank",
+                    )
+                except (ValueError, BrowserCaptureError) as error:
+                    cleanup = None
+                    try:
+                        cleanup = self.browser_stop(
+                            {"project": project.slug, "session_id": session_id}
+                        )
+                    except (OSError, ValueError, subprocess.SubprocessError):
+                        cleanup = None
+                    if cleanup is None or not cleanup.ok:
+                        try:
+                            if os.name == "nt":
+                                subprocess.run(
+                                    [
+                                        "taskkill",
+                                        "/PID",
+                                        str(int(state.get("pid") or process.pid)),
+                                        "/T",
+                                        "/F",
+                                    ],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL,
+                                    timeout=15,
+                                    shell=False,
+                                )
+                            else:
+                                try:
+                                    os.killpg(int(state.get("pid") or process.pid), 15)
+                                except ProcessLookupError:
+                                    pass
+                            process.wait(timeout=5)
+                        except (OSError, subprocess.TimeoutExpired):
+                            pass
+                        handles.pop(session_id, None)
+                    state.update({"startup_error": str(error), "stopped_at_unix": time.time()})
+                    self._write_browser_state(project, state)
+                    return ActionResult(
+                        False,
+                        f"browser initial navigation failed: {error}",
+                        {**state, "running": False, "ownership_valid": False},
+                    )
+
+            return ActionResult(True, "browser session started", {
+                **state,
+                "running": True,
+                "ownership_valid": self._browser_owned(project, state),
+                "url": ready["url"],
+                "title": ready["title"],
+                "tab_id": state["primary_tab_id"],
+            })
 
     def browser_status(self, payload: dict[str, Any]) -> ActionResult:
         project = self._project(payload)
