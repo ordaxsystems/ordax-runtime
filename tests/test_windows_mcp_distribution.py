@@ -235,6 +235,25 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertNotIn("Register-ScheduledTask", installer)
         self.assertNotIn("DeleteFile", installer)
 
+    def test_verified_upgrade_quiesce_has_outer_process_deadline(self):
+        lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(
+            encoding="utf-8"
+        )
+        quiesce = lifecycle.split("function Invoke-QuiesceRoot {", 1)[1].split(
+            "function Invoke-RegisterAndLaunch {", 1
+        )[0]
+        # An inner-loop TimeoutSeconds is not enough: individual Windows
+        # process calls can hang, so the parent owns a hard child deadline.
+        self.assertIn("ordax-upgrade-quiesce.ps1", quiesce)
+        self.assertIn("-TimeoutSeconds 25", quiesce)
+        self.assertIn("$child.WaitForExit(45000)", quiesce)
+        self.assertIn("$child.Kill()", quiesce)
+        self.assertIn("ReadToEndAsync()", quiesce)
+        self.assertIn("ORDAX_MCP_QUIESCE_HARD_DEADLINE", quiesce)
+        self.assertIn("ORDAX_UPGRADE_QUIESCED", quiesce)
+        self.assertIn("ORDAX_MCP_QUIESCE_VERIFIED", quiesce)
+        self.assertNotIn("& $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script", quiesce)
+
     def test_portable_dev_extractor_reuses_private_python_with_bounded_parallel_files(self):
         lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(
             encoding="utf-8"
