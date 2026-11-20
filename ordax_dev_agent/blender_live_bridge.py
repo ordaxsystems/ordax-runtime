@@ -220,6 +220,8 @@ class BlenderLiveBridge:
         self.results = self.root / "results"
         self.inflight = self.root / "inflight"
         self.presence = self.root / "presence.json"
+        self.user_config_root = self.root / "blender-user-config"
+        self.user_scripts_root = self.root / "blender-user-scripts"
         self.trajectory_path = self.root / "trajectory.jsonl"
         self.artifacts_root = (config.state_dir / "artifacts" / project.slug).resolve()
         self.scripts_root = project.path(
@@ -241,6 +243,8 @@ class BlenderLiveBridge:
         self.results.mkdir(parents=True, exist_ok=True)
         self.inflight.mkdir(parents=True, exist_ok=True)
         self.artifacts_root.mkdir(parents=True, exist_ok=True)
+        self.user_config_root.mkdir(parents=True, exist_ok=True)
+        self.user_scripts_root.mkdir(parents=True, exist_ok=True)
 
     def presence_is_fresh(self, max_age_seconds: float = 5.0) -> bool:
         try:
@@ -441,16 +445,19 @@ class BlenderLiveBridge:
 
         def launch(software_icd: Path | None):
             launch_command = list(command)
-            parameters: dict[str, Any] = {}
+            # Global Blender preferences and add-ons must not prevent this
+            # registered project's companion from reaching its heartbeat.
+            # Use one user environment under the canonical agent state.
+            env = os.environ.copy()
+            env["BLENDER_USER_CONFIG"] = str(self.user_config_root)
+            env["BLENDER_USER_SCRIPTS"] = str(self.user_scripts_root)
             if software_icd is not None:
                 # Only the Blender subprocess sees the software driver. Do
                 # not mutate the global Windows Vulkan ICD registration or
                 # the developer's desktop environment.
                 launch_command[3:3] = ["--gpu-backend", "vulkan"]
-                env = os.environ.copy()
                 env["VK_DRIVER_FILES"] = str(software_icd)
                 env["VK_ICD_FILENAMES"] = str(software_icd)
-                parameters["env"] = env
             with startup_log.open("a", encoding="utf-8", errors="replace") as log_handle:
                 mode = "vulkan-software" if software_icd is not None else "native-default"
                 log_handle.write(f"\n--- OrdaX Blender start {time.time():.3f} ({mode}) ---\n")
@@ -463,7 +470,7 @@ class BlenderLiveBridge:
                     stderr=subprocess.STDOUT,
                     shell=False,
                     creationflags=creationflags,
-                    **parameters,
+                    env=env,
                 )
 
         # Provisioning the pinned, verified local driver is an explicit
