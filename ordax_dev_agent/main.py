@@ -127,24 +127,15 @@ def product_idle_claim_delay_seconds(
         raise ValueError("active_jobs must be a non-negative integer")
     # A connected socket that has never delivered a real wake signal is not
     # evidence of push availability. Keep a responsive bounded SQL fallback.
-    if verified_wake and active_jobs == 0:
-        # Slow reconciliation is allowed only when the Runtime is truly idle.
-        # While another job is active, independent new work must remain
-        # discoverable through the responsive fallback even if a wake is lost.
-        # Product MCP queue entries currently expire after 120 seconds. A lost
-        # advisory wake must be reconciled well before that authority expires,
-        # otherwise the fallback cannot recover the queued action at all.
-        return 60.0
-    # The Runtime is an interactive control surface: an idle device must not
-    # wait 30–60 seconds before observing ordinary work. Retain the burst and
-    # cap the SQL fallback at 18 seconds. A 30-second presence heartbeat keeps
-    # the conservative per-device DB budget below 16k statements/day while
-    # leaving a full 30-second margin inside the 60-second readiness window.
-    # Once authenticated wake is verified, SQL polling becomes the one-minute
-    # lost-signal reconciliation path above. It must remain below the canonical
-    # Product action queue TTL.
-    ceiling = 18.0
-    return min(ceiling, 0.25 * (1.8 ** min(idle_misses - 1, 11)))
+    if verified_wake:
+        # Push interrupts either deadline. Reconcile sooner when a job is
+        # running so a missed notification cannot strand independent work.
+        return 18.0 if active_jobs else 60.0
+    # Without proven push, keep the first interactive retry. Repeated empty
+    # responses after each completed command are the expensive case.
+    if idle_misses == 1:
+        return 0.25
+    return min(18.0, 3.0 * 2 ** min(idle_misses - 2, 3))
 
 
 def _consume_product_wake(control: object, listener: object | None) -> bool:
@@ -1304,6 +1295,7 @@ def run(
     _mark_identity_loaded(runtime)
     recover_pending_reports = getattr(control, "recover_pending_reports", None)
     next_heartbeat = 0.0
+    heartbeat_failures = 0
     idle_claim_misses = 0
     transport_failures = 0
     next_claim_due = 0.0
@@ -1427,8 +1419,10 @@ def run(
                         if runtime.get("active_jobs") and runtime.get("state") == "ready":
                             runtime["state"] = "busy"
                     runtime.setdefault("startup_seconds", round(time.monotonic() - started_monotonic, 3))
-                    next_heartbeat = now + (
-                        _PRODUCT_HEARTBEAT_SECONDS if heartbeat_healthy else 5.0
+                    heartbeat_failures = 0 if heartbeat_healthy else heartbeat_failures + 1
+                    next_heartbeat = time.monotonic() + (
+                        _PRODUCT_HEARTBEAT_SECONDS if heartbeat_healthy
+                        else _transport_retry_delay(heartbeat_failures)
                     )
 
                 if _consume_product_wake(control, wake_listener):

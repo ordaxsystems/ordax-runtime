@@ -47,6 +47,21 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             product_idle_claim_delay_seconds(0, 12)
 
+    def test_repeated_interactive_work_limits_empty_claims(self):
+        # Count fallback attempts during the first ten seconds after an empty
+        # response. A real wake can interrupt the wait at any time.
+        for verified, expected in ((False, 3), (True, 0)):
+            elapsed = 0
+            retries = 0
+            while True:
+                elapsed += product_idle_claim_delay_seconds(
+                    retries + 1, 12, verified_wake=verified, active_jobs=1,
+                )
+                if elapsed > 10:
+                    break
+                retries += 1
+            self.assertEqual(retries, expected)
+
     def test_verified_wake_reconciliation_stays_inside_action_ttl(self):
         # Connection without an actual authenticated notification is not
         # permission to replace the safe bounded claim polling budget.
