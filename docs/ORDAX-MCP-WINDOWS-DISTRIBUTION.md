@@ -157,7 +157,8 @@ com um único `ORDAX Runtime.exe` e o mutex `Local\\ORDAXRuntime`.
 `packaging/windows/ordax-mcp.iss` registra **uma tarefa por usuário** no
 Agendador do Windows, chamada `OrdaX MCP`, com início no logon, manutenção
 periódica de um minuto, execução interativa limitada ao usuário atual e
-`MultipleInstances=IgnoreNew`. A tarefa aciona
+`MultipleInstances=IgnoreNew`. A tarefa usa prioridade normal (`4`) para
+manter o bootstrap do Python responsivo sob carga. A tarefa aciona
 `scripts/windows/ordax-mcp-lifecycle.ps1 -Operation Launch` e acompanha
 o **mesmo launcher**; não cria agente, identidade, grants nem credenciais
 novas. A entrada antiga `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run`
@@ -166,10 +167,10 @@ owners de inicialização. A desinstalação retira a tarefa.
 
 O launcher continua responsável pelo mutex e pelo restart progressivo do
 Python. O watchdog Windows já existente em
-`scripts/windows/ordax-agent-watchdog.ps1` é reutilizado no pacote e
-aponta para a tarefa `OrdaX MCP`; antes de parar um processo, confere PID,
-instante de criação e caminho do executável para impedir ação sobre PID
-reutilizado. A tarefa recupera o **launcher** quando ele encerra, inclusive
+`scripts/windows/ordax-agent-watchdog.ps1` observa o processo Python e,
+antes de pará-lo, confere PID, instante de criação e caminho do executável.
+Na instalação empacotada, o launcher nativo inicia o sucessor do Python.
+A tarefa `OrdaX MCP` recupera o **launcher** quando ele encerra, inclusive
 sem novo logon. Enquanto um instalador canônico estiver substituindo os
 arquivos, o supervisor não deve concorrer com o upgrade. Não há segundo
 Runtime ou serviço permanente adicional.

@@ -458,6 +458,52 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         plane.recover_pending_reports.assert_not_called()
         plane.close.assert_called_once_with()
 
+    def test_startup_sends_heartbeat_and_claims_while_a_durable_receipt_waits(self):
+        recovery_started = threading.Event()
+        release_recovery = threading.Event()
+        statuses = []
+        observed_at_claim = []
+        handles = {}
+        plane = Mock()
+
+        def recover():
+            recovery_started.set()
+            if not release_recovery.wait(2):
+                handles[signal.SIGTERM]()
+                return 0
+            return 1
+
+        def claim():
+            try:
+                recovery_pending = recovery_started.wait(1) and not release_recovery.is_set()
+                readiness = server.call_args.kwargs["readiness_provider"]()
+                observed_at_claim.append((recovery_pending, statuses.copy(),
+                                          readiness["runtime"]["product_dispatch_ready"]))
+            finally:
+                handles[signal.SIGTERM]()
+                release_recovery.set()
+            return None
+
+        plane.recover_pending_reports.side_effect = recover
+        plane.claim_next_job.side_effect = claim
+        plane.heartbeat.side_effect = lambda *args, **kwargs: statuses.append(kwargs["status"])
+        with (
+            patch("ordax_dev_agent.control_plane.build_control_plane", return_value=plane),
+            patch("ordax_dev_agent.main.start_status_server") as server,
+            patch("ordax_dev_agent.main._start_local_watchdog", return_value=None),
+            patch("ordax_dev_agent.main.signal.signal",
+                  side_effect=lambda kind, handler: handles.__setitem__(kind, handler)),
+            patch.object(ActionRegistry, "agent_status", side_effect=AssertionError("startup status scan")),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(run(self.config, device_credential_provider=self.provider,
+                                 native_access_enabled=lambda: True, status_port=0), 0)
+
+        self.assertEqual(observed_at_claim, [(True, ["online"], True)])
+        self.assertEqual(statuses, ["online", "offline"])
+        plane.recover_pending_reports.assert_called_once_with()
+        plane.close.assert_called_once_with()
+
     def test_existing_loop_executes_native_file_action_and_respects_policy(self):
         # Real registry, filesystem action and local policy; transport is isolated.
         # This is source integration evidence, not a credentialled device E2E.

@@ -97,6 +97,8 @@ class RuntimeOperationalStatusTests(unittest.TestCase):
             ({"state": "pairing", "paired": False}, True, True, "pairing_required"),
             ({**self._ready_runtime(), "transport_state": "reconnecting"}, True, True, "transport_reconnecting"),
             (self._ready_runtime(heartbeat_at=39.0), True, True, "heartbeat_stale"),
+            ({**self._ready_runtime(heartbeat_at=39.0), "last_heartbeat_error": {"at": 99.0}}, True, True, "transport_reconnecting"),
+            ({**self._ready_runtime(heartbeat_at=39.0), "last_heartbeat_error": {"at": 69.0}}, True, True, "heartbeat_stale"),
             (self._ready_runtime(heartbeat_at=106.0), True, True, "heartbeat_stale"),
             ({**self._ready_runtime(), "last_heartbeat_at": None}, True, True, "heartbeat_not_observed"),
             ({**self._ready_runtime(), "state": "credential-recovery-required"}, True, True, "credential_recovery_required"),
@@ -118,13 +120,13 @@ class RuntimeOperationalStatusTests(unittest.TestCase):
                    "transport_state": "connected", "last_result": None}
         _mark_identity_loaded(runtime)
         self.assertFalse(runtime["paired"])
-        self.assertEqual(runtime["state"], "pairing")
+        self.assertEqual(runtime["state"], "awaiting-heartbeat")
         self.assertEqual(runtime["transport_state"], "connecting")
         self.assertNotIn("last_heartbeat_at", runtime)
         self.assertFalse(runtime["last_result"]["ok"])
         unready = product_dispatch_readiness(
             runtime, action_registry_ready=True, remote_control_configured=True, now=100)
-        self.assertEqual(unready["product_readiness_code"], "pairing_required")
+        self.assertEqual(unready["product_readiness_code"], "heartbeat_not_observed")
         _record_product_heartbeat(runtime)
         self.assertTrue(runtime["paired"])
         self.assertEqual(runtime["state"], "ready")
@@ -144,7 +146,7 @@ class RuntimeOperationalStatusTests(unittest.TestCase):
             product_dispatch_readiness(
                 runtime, action_registry_ready=True, remote_control_configured=True, now=100.0,
             )["product_readiness_code"],
-            "runtime_not_ready",
+            "transport_reconnecting",
         )
         _record_product_heartbeat(runtime)
         self.assertEqual(runtime["state"], "ready")

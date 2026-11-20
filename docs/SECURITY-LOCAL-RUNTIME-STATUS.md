@@ -100,7 +100,12 @@ identidade, iniciar o dispatcher e publicar `/health` não atribuem
 
 O primeiro `POST /v3/device/transport/heartbeat` confirmado é o gate que
 define `paired=true`, `state=ready` e `last_heartbeat_at`. Erro HTTP,
-rede ou credencial não publica esse estado. A confirmação de presença não
+rede ou credencial não publica esse estado. Após carregar a credencial
+existente, `heartbeat_not_observed` indica que o primeiro recibo ainda não
+chegou. Falhas transitórias com heartbeat pendente ou expirado aparecem como
+`transport_reconnecting`, sem exigir nova matrícula. A recuperação da fila
+durável de recibos começa no mesmo loop, em segundo plano, e não atrasa
+heartbeat nem claims independentes. A confirmação de presença não
 autoriza ações, não atesta sessão Central nem comprova execução MCP E2E.
 
 A correção reutiliza o único Product transport/dispatcher existente; nenhum

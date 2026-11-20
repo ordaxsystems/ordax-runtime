@@ -58,7 +58,7 @@ jobs:
       - name: Check canonical independent installer ownership
         shell: pwsh
         run: |
-          python -m unittest tests.test_windows_mcp_distribution tests.test_windows_embedded_python_source
+          python -m unittest tests.test_windows_mcp_distribution tests.test_windows_embedded_python_source tests.test_windows_runtime_self_heal tests.test_agent_self_heal_scripts
           if ($LASTEXITCODE -ne 0) { throw 'MCP distribution source contract failed' }
           $tokens = $null
           $errors = $null
