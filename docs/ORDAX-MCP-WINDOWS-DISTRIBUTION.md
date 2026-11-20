@@ -486,3 +486,35 @@ troca de identidade; so um PID comprovadamente ausente tolera corrida de
 encerramento. Nunca interromper arvore inteira, Python/Node externo,
 novo agente, nem remover o journal `recovery-required` antes da prova.
 A mesma rotina e usada pelos candidatos MCP e Studio, com gates existentes.
+
+
+## Recuperação de atualização DEV — 20/11/2026
+
+No DESKTOP-4UFL03B, a transação verificada
+80b83746db6f4c709e6ec0fcd37d7c1f tentou ativar o portable canônico
+da main 25d0cd198956c4b0355a1fab342dc349b01d28f5 (SHA-256
+37478ba1c8a713046df090de24d2e69e05561a48eb48ccd6e660e44edecb507d).
+O pacote, manifesto e hash foram verificados. A fase applying terminou em
+recovery-required porque Windows recusou a movimentação da pasta de
+instalação devido a um arquivo em uso. A instalação anterior 2c9bd2af
+permaneceu no diretório canônico, sem transação committed.
+
+Falha estrutural na fonte anterior: o Scheduled Task permanente OrdaX MCP
+executava PowerShell com WorkingDirectory dentro da própria pasta a ser
+renomeada. Desativar o agendamento e encerrar o launcher não assegurava o
+fim da instância PowerShell já em execução, capaz de manter um handle da
+pasta. Para corrigir sem serviço paralelo:
+- a tarefa Launch passa a usar o diretório permanente de atualizações
+  fora da instalação, já pertencente ao mesmo Owner e ciclo de vida;
+- antes de mover o pacote, a tarefa de Upgrade termina a instância ativa
+  somente da tarefa canônica OrdaX MCP, verifica que ela deixou de estar
+  Running, desativa a programação e executa a quiescência de processos
+  já existente, sob identidade/pasta verificadas;
+- o esquema de journal, o executável, o mutex, os grants, o dispositivo,
+  o pacote e a autoridade de rollback não mudam.
+
+Esta correção de código e os contratos CI não significam que o mesmo
+desktop já recebeu o novo pacote. A confirmação física exige outra
+transação canônica com recibo committed e manifesto atualizado, sem
+reutilizar a transação recovery-required. A investigação deve verificar
+também locks independentes se o erro de movimentação persistir.
