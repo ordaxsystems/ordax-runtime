@@ -277,7 +277,10 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             staging.index("Assert-DevArchive -ArchivePath $staged -Commit $ExpectedCommit -Destination $expanded"),
             staging.index("Register-CanonicalTask -Name $upgradeTaskName"),
         )
-        self.assertIn("schema = 'ordax.mcp-dev-upgrade/3'", staging)
+        self.assertIn("schema = 'ordax.mcp-dev-upgrade/4'", staging)
+        self.assertIn("ThreadPoolExecutor(max_workers=8)", lifecycle)
+        self.assertIn("for attempt in range(4)", lifecycle)
+        self.assertIn("ORDAX_STAGE_IO_ERROR=", lifecycle)
         self.assertIn("preparedTreeSha256 = $preparedDigest", staging)
         self.assertIn("Get-PreparedTreeDigest -Root $expanded", activation)
         self.assertIn("Prepared DEV stage changed before activation", activation)
