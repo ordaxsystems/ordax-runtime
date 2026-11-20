@@ -309,6 +309,16 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         )
         self.assertIn("Cannot reconcile an active canonical upgrade", lifecycle)
         self.assertIn("Interrupted upgrade has moved Runtime directories", lifecycle)
+        reconciliation = lifecycle.split("    'ReconcileUpgrade' {", 1)[1].split(
+            "    'ApplyUpgrade' {", 1
+        )[0]
+        self.assertIn("$journal.phase -notin @('staged','applying')", reconciliation)
+        self.assertIn("$journal.targetCommit -cnotmatch", reconciliation)
+        self.assertIn("Cannot reconcile an active canonical upgrade", reconciliation)
+        self.assertIn("Canonical upgrade task belongs to a different transaction", reconciliation)
+        self.assertIn("$installRoot + '.previous-dev'", reconciliation)
+        self.assertIn("$journal.phase = 'recovery-required'", reconciliation)
+        self.assertIn("original Runtime intact", reconciliation)
 
         marker = "$digestCode = @'"
         self.assertIn(marker, lifecycle)
