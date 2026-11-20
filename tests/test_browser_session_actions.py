@@ -84,7 +84,7 @@ class BrowserShutdownLifecycleTests(unittest.TestCase):
         handle.pid = 12345
         actions._browser_process_handles = {session_id: handle}
         with (
-            patch.object(actions, "_project", return_value=project),
+            patch.object(actions, "_project", return_value=project, create=True),
             patch.object(actions, "_load_browser_state", return_value=state),
             patch.object(actions, "_refresh_browser_pid", return_value=state),
             patch.object(actions, "_browser_owned", return_value=True),
