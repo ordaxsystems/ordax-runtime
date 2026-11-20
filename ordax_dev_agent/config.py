@@ -11,6 +11,27 @@ from typing import Literal
 DEFAULT_PRODUCT_MCP_URL = "https://mcp.ordax.com.br"
 
 
+def product_execution_capacity() -> int:
+    """One bounded local capacity for remote workers, resource lanes and HTTP.
+
+    Product actions are often I/O-bound (terminal waits, file I/O, browser and
+    device observations). One worker per logical CPU was an unnecessary
+    admission ceiling. Permit two overlapping jobs per CPU, with conservative
+    bounds and the existing explicit DEV override. Resource-scoped locks still
+    prevent conflicting writes and graphical input.
+    """
+    override = os.environ.get("ORDAX_PRODUCT_CONCURRENT_JOBS")
+    if override is not None:
+        if not override.isascii() or not override.isdecimal():
+            raise ValueError("ORDAX_PRODUCT_CONCURRENT_JOBS must be an integer from 1 to 32")
+        capacity = int(override)
+        if not 1 <= capacity <= 32:
+            raise ValueError("ORDAX_PRODUCT_CONCURRENT_JOBS must be an integer from 1 to 32")
+        return capacity
+    logical_cpus = os.cpu_count() or 4
+    return min(16, max(4, logical_cpus * 2))
+
+
 @dataclass(frozen=True, slots=True)
 class AgentConfig:
     agent_name: str
