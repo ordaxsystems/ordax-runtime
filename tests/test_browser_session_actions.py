@@ -150,6 +150,78 @@ class BrowserSessionActionsTests(unittest.TestCase):
         self.assertEqual(navigated.data["url"], self.url)
         self.assertEqual(navigated.data["requested_url"], self.url + "redirect")
 
+    def test_two_owned_tabs_keep_independent_dom_state(self):
+        started = self.registry.execute(
+            "browser.start",
+            {"project": "demo", "url": self.url, "headless": True, "wait_seconds": 15},
+        )
+        self.assertTrue(started.ok, started.summary)
+        self.session_id = started.data["session_id"]
+        primary_id = started.data["tab_id"]
+
+        secondary = self.registry.execute(
+            "browser.tab_open",
+            {
+                "project": "demo", "session_id": self.session_id,
+                "url": self.url + "?second=1", "wait_seconds": 15,
+            },
+        )
+        self.assertTrue(secondary.ok, secondary.summary)
+        secondary_id = secondary.data["tab_id"]
+        self.assertNotEqual(primary_id, secondary_id)
+
+        listed = self.registry.execute(
+            "browser.tabs", {"project": "demo", "session_id": self.session_id},
+        )
+        self.assertTrue(listed.ok, listed.summary)
+        self.assertIn(primary_id, {entry["tab_id"] for entry in listed.data["tabs"]})
+        self.assertIn(secondary_id, {entry["tab_id"] for entry in listed.data["tabs"]})
+        self.assertEqual(sum(int(entry["primary"]) for entry in listed.data["tabs"]), 1)
+
+        second_snapshot = self.registry.execute(
+            "browser.snapshot",
+            {"project": "demo", "session_id": self.session_id, "tab_id": secondary_id},
+        )
+        self.assertTrue(second_snapshot.ok, second_snapshot.summary)
+        field = next(n for n in second_snapshot.data["elements"] if n["tag"] == "input")
+        button = next(n for n in second_snapshot.data["elements"] if n["tag"] == "button")
+        typed = self.registry.execute(
+            "browser.type",
+            {
+                "project": "demo", "session_id": self.session_id,
+                "tab_id": secondary_id, "node_id": field["id"], "text": "second",
+            },
+        )
+        self.assertTrue(typed.ok, typed.summary)
+        clicked = self.registry.execute(
+            "browser.click",
+            {
+                "project": "demo", "session_id": self.session_id,
+                "tab_id": secondary_id, "node_id": button["id"],
+            },
+        )
+        self.assertTrue(clicked.ok, clicked.summary)
+
+        secondary_after = self.registry.execute(
+            "browser.snapshot",
+            {"project": "demo", "session_id": self.session_id, "tab_id": secondary_id},
+        )
+        primary_after = self.registry.execute(
+            "browser.snapshot", {"project": "demo", "session_id": self.session_id},
+        )
+        self.assertTrue(secondary_after.ok, secondary_after.summary)
+        self.assertTrue(primary_after.ok, primary_after.summary)
+        self.assertIn("Hello second", secondary_after.data["text"])
+        self.assertIn("Idle", primary_after.data["text"])
+        self.assertNotIn("Hello second", primary_after.data["text"])
+
+        wrong = self.registry.execute(
+            "browser.snapshot",
+            {"project": "demo", "session_id": self.session_id,
+             "tab_id": "00000000000000000000000000000000"},
+        )
+        self.assertFalse(wrong.ok, "unknown tabs must not fall back to another conversation")
+
     def test_headless_browser_snapshot_type_click_screenshot_and_stop(self):
         started = self.registry.execute(
             "browser.start",

@@ -208,15 +208,20 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
         local_action="browser.list",
         allowed_fields=frozenset({"project"}),
     ),
+    "browser.tabs": ProductActionSpec(
+        name="browser.tabs",
+        local_action="browser.tabs",
+        allowed_fields=frozenset({"project", "session_id"}),
+    ),
     "browser.snapshot": ProductActionSpec(
         name="browser.snapshot",
         local_action="browser.snapshot",
-        allowed_fields=frozenset({"project", "session_id", "max_elements"}),
+        allowed_fields=frozenset({"project", "session_id", "tab_id", "max_elements"}),
     ),
     "browser.screenshot": ProductActionSpec(
         name="browser.screenshot",
         local_action="browser.screenshot",
-        allowed_fields=frozenset({"project", "session_id", "width", "height"}),
+        allowed_fields=frozenset({"project", "session_id", "tab_id", "width", "height"}),
     ),
     "computer.windows": ProductActionSpec(
         name="computer.windows",
@@ -396,22 +401,28 @@ PRODUCT_TYPED_ACTIONS: dict[str, ProductActionSpec] = {
         frozenset({"project", "url", "headless", "wait_seconds"}),
         effect="write",
     ),
+    "browser.tab_open": ProductActionSpec(
+        "browser.tab_open",
+        "browser.tab_open",
+        frozenset({"project", "session_id", "url", "wait_seconds"}),
+        effect="write",
+    ),
     "browser.navigate": ProductActionSpec(
         "browser.navigate",
         "browser.navigate",
-        frozenset({"project", "session_id", "url", "wait_seconds"}),
+        frozenset({"project", "session_id", "tab_id", "url", "wait_seconds"}),
         effect="write",
     ),
     "browser.click": ProductActionSpec(
         "browser.click",
         "browser.click",
-        frozenset({"project", "session_id", "node_id"}),
+        frozenset({"project", "session_id", "tab_id", "node_id"}),
         effect="write",
     ),
     "browser.type": ProductActionSpec(
         "browser.type",
         "browser.type",
-        frozenset({"project", "session_id", "node_id", "text", "clear"}),
+        frozenset({"project", "session_id", "tab_id", "node_id", "text", "clear"}),
         effect="write",
     ),
     "browser.stop": ProductActionSpec(

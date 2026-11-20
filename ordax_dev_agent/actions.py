@@ -224,6 +224,8 @@ class ActionRegistry(
             "browser.start": self.browser_start,
             "browser.status": self.browser_status,
             "browser.list": self.browser_list,
+            "browser.tabs": self.browser_tabs,
+            "browser.tab_open": self.browser_tab_open,
             "browser.navigate": self.browser_navigate,
             "browser.snapshot": self.browser_snapshot,
             "browser.click": self.browser_click,

@@ -721,28 +721,51 @@ def browser_list(device_id: str, project: str, space_id: str | None = None) -> d
     return _invoke(device_id=device_id, action="browser.list", project=project, space_id=space_id, arguments={"project": project})
 
 
-def browser_snapshot(device_id: str, project: str, session_id: str, max_elements: int = 200, space_id: str | None = None) -> dict[str, Any]:
-    return _invoke(device_id=device_id, action="browser.snapshot", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id, "max_elements": max_elements})
+def browser_tabs(device_id: str, project: str, session_id: str, space_id: str | None = None) -> dict[str, Any]:
+    return _invoke(device_id=device_id, action="browser.tabs", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id})
 
 
-def browser_screenshot(device_id: str, project: str, session_id: str, width: int = 1440, height: int = 900, space_id: str | None = None) -> dict[str, Any]:
-    return _invoke(device_id=device_id, action="browser.screenshot", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id, "width": width, "height": height})
+def browser_snapshot(device_id: str, project: str, session_id: str, max_elements: int = 200, space_id: str | None = None, tab_id: str | None = None) -> dict[str, Any]:
+    args = {"project": project, "session_id": session_id, "max_elements": max_elements}
+    if tab_id is not None:
+        args["tab_id"] = tab_id
+    return _invoke(device_id=device_id, action="browser.snapshot", project=project, space_id=space_id, arguments=args)
+
+
+def browser_screenshot(device_id: str, project: str, session_id: str, width: int = 1440, height: int = 900, space_id: str | None = None, tab_id: str | None = None) -> dict[str, Any]:
+    args = {"project": project, "session_id": session_id, "width": width, "height": height}
+    if tab_id is not None:
+        args["tab_id"] = tab_id
+    return _invoke(device_id=device_id, action="browser.screenshot", project=project, space_id=space_id, arguments=args)
 
 
 def browser_start(device_id: str, project: str, url: str = "about:blank", headless: bool = True, wait_seconds: float = 8.0, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="browser.start", project=project, space_id=space_id, arguments={"project": project, "url": url, "headless": headless, "wait_seconds": wait_seconds})
 
 
-def browser_navigate(device_id: str, project: str, session_id: str, url: str, wait_seconds: float = 15.0, space_id: str | None = None) -> dict[str, Any]:
-    return _invoke(device_id=device_id, action="browser.navigate", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id, "url": url, "wait_seconds": wait_seconds})
+def browser_tab_open(device_id: str, project: str, session_id: str, url: str = "about:blank", wait_seconds: float = 15.0, space_id: str | None = None) -> dict[str, Any]:
+    return _invoke(device_id=device_id, action="browser.tab_open", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id, "url": url, "wait_seconds": wait_seconds})
 
 
-def browser_click(device_id: str, project: str, session_id: str, node_id: str, space_id: str | None = None) -> dict[str, Any]:
-    return _invoke(device_id=device_id, action="browser.click", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id, "node_id": node_id})
+def browser_navigate(device_id: str, project: str, session_id: str, url: str, wait_seconds: float = 15.0, space_id: str | None = None, tab_id: str | None = None) -> dict[str, Any]:
+    args = {"project": project, "session_id": session_id, "url": url, "wait_seconds": wait_seconds}
+    if tab_id is not None:
+        args["tab_id"] = tab_id
+    return _invoke(device_id=device_id, action="browser.navigate", project=project, space_id=space_id, arguments=args)
 
 
-def browser_type(device_id: str, project: str, session_id: str, node_id: str, text: str, clear: bool = True, space_id: str | None = None) -> dict[str, Any]:
-    return _invoke(device_id=device_id, action="browser.type", project=project, space_id=space_id, arguments={"project": project, "session_id": session_id, "node_id": node_id, "text": text, "clear": clear})
+def browser_click(device_id: str, project: str, session_id: str, node_id: str, space_id: str | None = None, tab_id: str | None = None) -> dict[str, Any]:
+    args = {"project": project, "session_id": session_id, "node_id": node_id}
+    if tab_id is not None:
+        args["tab_id"] = tab_id
+    return _invoke(device_id=device_id, action="browser.click", project=project, space_id=space_id, arguments=args)
+
+
+def browser_type(device_id: str, project: str, session_id: str, node_id: str, text: str, clear: bool = True, space_id: str | None = None, tab_id: str | None = None) -> dict[str, Any]:
+    args = {"project": project, "session_id": session_id, "node_id": node_id, "text": text, "clear": clear}
+    if tab_id is not None:
+        args["tab_id"] = tab_id
+    return _invoke(device_id=device_id, action="browser.type", project=project, space_id=space_id, arguments=args)
 
 
 def browser_stop(device_id: str, project: str, session_id: str, space_id: str | None = None) -> dict[str, Any]:
