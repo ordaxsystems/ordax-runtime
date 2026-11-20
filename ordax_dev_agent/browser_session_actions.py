@@ -60,22 +60,6 @@ class BrowserSessionActions:
         return value
 
     @staticmethod
-    def _is_protected_provider_url(raw: str) -> bool:
-        try:
-            host = (urllib.parse.urlsplit(str(raw or "")).hostname or "").lower().rstrip(".")
-        except ValueError:
-            return False
-        return host in {"chatgpt.com", "chat.openai.com"} or host.endswith(".chatgpt.com")
-
-    @classmethod
-    def _assert_automation_url_allowed(cls, raw: str) -> None:
-        if cls._is_protected_provider_url(raw):
-            raise ValueError(
-                "ORDAX browser automation does not operate ChatGPT consumer pages; "
-                "use the official ORDAX MCP/Web Bridge for normal ChatGPT"
-            )
-
-    @staticmethod
     def _pid_running(pid: int) -> bool:
         if pid <= 0:
             return False
@@ -307,7 +291,6 @@ class BrowserSessionActions:
         if not self._browser_owned(project, state):
             raise ValueError("browser session is not running or is not owned by ORDAX")
         target = self._browser_target(state, create_url=preferred_url)
-        self._assert_automation_url_allowed(str(target.get("url") or ""))
         # Loading the registry must not require the optional CDP WebSocket
         # dependency; only an actual browser page operation needs it.
         from websockets.sync.client import connect
@@ -334,8 +317,6 @@ class BrowserSessionActions:
             return ActionResult(False, "Chrome or Edge executable not found")
 
         url = self._valid_url(str(payload.get("url") or "about:blank"), allow_blank=True)
-        if url != "about:blank":
-            self._assert_automation_url_allowed(url)
         session_id = str(uuid.uuid4())
         port = _free_port()
         profile = self._browser_profile_path(project, session_id)
@@ -559,7 +540,6 @@ class BrowserSessionActions:
         project = self._project(payload)
         session_id = str(payload.get("session_id") or "")
         url = self._valid_url(str(payload.get("url") or ""))
-        self._assert_automation_url_allowed(url)
 
         def run(ws, state, _target):
             _cdp_call(ws, 1, "Page.enable")
