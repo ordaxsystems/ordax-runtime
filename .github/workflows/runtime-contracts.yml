@@ -148,7 +148,7 @@ jobs:
         run: python -m compileall -q ordax_connector ordax_dev_agent ordax_device_agent ordax_studio mcp_blender_unity
 
       - name: Verify typed Blender rigging and companion bundle contracts
-        run: python -m unittest tests.test_blender_rigging_contracts tests.test_blender_companion_bundle tests.test_blender_product_mcp_contract tests.test_blender_live_gpu_failure -v
+        run: python -m unittest tests.test_blender_rigging_contracts tests.test_blender_companion_bundle tests.test_blender_product_mcp_contract tests.test_blender_live_gpu_failure tests.test_blender_live_results -v
 
       - name: Verify project workspace grant and Git boundaries (Windows)
         run: python -m unittest tests.test_project_workspace_port tests.test_workspace_resource_selection tests.test_windows_owner_workspace_picker tests.test_owner_project_scope_resolver tests.test_project_workspace_live_proof tests.test_workspace_device_live_authority -v
