@@ -682,12 +682,23 @@ switch ($Operation) {
         $journal = Read-OwnerJsonDocument -Path $journalPath
         if ($journal.schema -notin @('ordax.mcp-dev-upgrade/2','ordax.mcp-dev-upgrade/3','ordax.mcp-dev-upgrade/4') -or
             $journal.transactionId -cne $TransactionId -or
-            $journal.phase -cne 'applying') {
-            throw 'Reconcile requires an exact interrupted DEV transaction'
+            $journal.phase -notin @('staged','applying') -or
+            $journal.targetCommit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Reconcile requires an exact staged or interrupted DEV transaction'
         }
         $upgrade = Get-CanonicalScheduledTask -Name $upgradeTaskName
         if ($upgrade -and $upgrade.State -in @('Running','Queued')) {
             throw 'Cannot reconcile an active canonical upgrade'
+        }
+        if ($upgrade) {
+            # A different pending upgrade must never be reconciled by this ID.
+            $actions = @($upgrade.Actions)
+            $expectedApply = Join-Path $tx 'apply.ps1'
+            if ($actions.Count -ne 1 -or
+                [IO.Path]::GetFullPath([string]$actions[0].Execute) -ine $powershell -or
+                [string]$actions[0].Arguments -notlike ('*-File "' + $expectedApply + '" -Operation ApplyUpgrade -TransactionId ' + $TransactionId + '*')) {
+                throw 'Canonical upgrade task belongs to a different transaction'
+            }
         }
         if ((Test-Path -LiteralPath ($installRoot + '.previous-dev')) -or
             (Test-Path -LiteralPath (Join-Path $tx 'failed-candidate'))) {
@@ -698,7 +709,9 @@ switch ($Operation) {
             throw 'Installed candidate cannot be marked rolled back'
         }
         $journal.phase = 'recovery-required'
-        $journal | Add-Member -NotePropertyName error -NotePropertyValue 'Interrupted before atomic activation; original Runtime intact' -Force
+        # The same check safely covers a stale staged journal (task failed
+        # before writing applying) and a pre-activation interruption.
+        $journal | Add-Member -NotePropertyName error -NotePropertyValue 'Staged or interrupted before atomic activation; original Runtime intact' -Force
         Save-Journal $journalPath $journal
         Write-Output ("ORDAX_MCP_DEV_RECOVERY_RECORDED transaction={0}" -f $TransactionId)
     }
