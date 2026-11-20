@@ -160,12 +160,14 @@ function Get-CanonicalScheduledTask {
 # The same two canonical Windows tasks are owned through schtasks.exe.
 # PowerShell ScheduledTasks CIM cmdlets can hang indefinitely on the DEV host.
 function Invoke-CanonicalTaskAction {
-    param([string]$Name,[ValidateSet('Run','Enable','Disable','Delete')][string]$Action)
+    param([string]$Name,[ValidateSet('Run','Enable','Disable','Delete','End')][string]$Action)
     if ($Name -cnotin @($taskName,$upgradeTaskName)) { throw 'Unknown canonical scheduler task' }
+    if ($Action -eq 'End' -and $Name -cne $taskName) { throw 'Only the verified permanent owner task may be stopped' }
     $args = switch ($Action) {
         'Run' { @('/Run','/TN',$Name) }
         'Enable' { @('/Change','/TN',$Name,'/ENABLE') }
         'Disable' { @('/Change','/TN',$Name,'/DISABLE') }
+        'End' { @('/End','/TN',$Name) }
         'Delete' { @('/Delete','/TN',$Name,'/F') }
     }
     $out = Invoke-BoundedSchtasks -Arguments $args
@@ -400,7 +402,7 @@ switch ($Operation) {
         Assert-InstalledSource
         $existing = Get-CanonicalScheduledTask -Name $taskName
         Assert-OurTask $existing $lifecycle 'Launch'
-        Register-CanonicalTask -Name $taskName -Script $lifecycle -Operation Launch -WorkingDirectory $installRoot
+        Register-CanonicalTask -Name $taskName -Script $lifecycle -Operation Launch -WorkingDirectory $updatesRoot
         $registered = Get-CanonicalScheduledTask -Name $taskName
         if ($null -eq $registered) { throw 'Canonical owner task not registered' }
         Assert-OurTask $registered $lifecycle 'Launch'
@@ -553,6 +555,27 @@ switch ($Operation) {
             $existing = Get-CanonicalScheduledTask -Name $taskName
             Assert-OurTask $existing $lifecycle 'Launch'
             if ($existing) {
+                # The previous task registered PowerShell with its current
+                # directory INSIDE $installRoot. Even after the launcher PID
+                # exits, that task process can still hold a directory handle
+                # and make the atomic directory move fail with ERROR_SHARING_VIOLATION.
+                # End only our identity-verified canonical owner task before
+                # switching the installation; never terminate unrelated tasks.
+                if ($existing.State -eq 'Running') {
+                    Invoke-CanonicalTaskAction -Name $taskName -Action End
+                    $released = $false
+                    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                        $observed = Get-CanonicalScheduledTask -Name $taskName
+                        if ($null -eq $observed -or $observed.State -ne 'Running') {
+                            $released = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 300
+                    }
+                    if (!$released) {
+                        throw 'Canonical MCP owner task did not release its running process'
+                    }
+                }
                 Invoke-CanonicalTaskAction -Name $taskName -Action Disable
                 $ownerDisabled = $true
             }
