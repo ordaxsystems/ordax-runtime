@@ -680,6 +680,52 @@ def _object_fingerprints(command: dict) -> None:
     )
 
 
+def _armature_inspection(obj) -> dict:
+    """Bounded, deterministic read-only hierarchy and pose for an armature."""
+    all_bones = sorted(obj.data.bones, key=lambda bone: bone.name)
+    result = []
+    for bone in all_bones[:128]:
+        entry = {
+            "name": bone.name,
+            "parent": bone.parent.name if bone.parent else None,
+            "head_local": _round_vector(bone.head_local),
+            "tail_local": _round_vector(bone.tail_local),
+            "length": round(float(bone.length), 6),
+            "use_deform": bool(bone.use_deform),
+        }
+        pose_bone = obj.pose.bones.get(bone.name) if obj.pose else None
+        if pose_bone is not None:
+            pose = {
+                "location": _round_vector(pose_bone.location),
+                "rotation_mode": pose_bone.rotation_mode,
+                "scale": _round_vector(pose_bone.scale),
+                "head_world": _round_vector(obj.matrix_world @ pose_bone.head),
+                "tail_world": _round_vector(obj.matrix_world @ pose_bone.tail),
+                "constraint_count": len(pose_bone.constraints),
+                "constraints": [
+                    {
+                        "name": constraint.name,
+                        "type": constraint.type,
+                        "influence": round(float(constraint.influence), 6),
+                    }
+                    for constraint in list(pose_bone.constraints)[:16]
+                ],
+            }
+            if pose_bone.rotation_mode == "QUATERNION":
+                pose["rotation_quaternion"] = _round_vector(pose_bone.rotation_quaternion)
+            elif pose_bone.rotation_mode == "AXIS_ANGLE":
+                pose["rotation_axis_angle"] = _round_vector(pose_bone.rotation_axis_angle)
+            else:
+                pose["rotation_euler"] = _round_vector(pose_bone.rotation_euler)
+            entry["pose"] = pose
+        result.append(entry)
+    return {
+        "bone_count": len(all_bones),
+        "bones_truncated": len(all_bones) > len(result),
+        "bones": result,
+    }
+
+
 def _object_inspect(command: dict) -> None:
     command_id = command["id"]
     try:
@@ -688,12 +734,10 @@ def _object_inspect(command: dict) -> None:
         _response(command_id, False, str(error))
         return
 
-    _response(
-        command_id,
-        True,
-        "Blender object inspected",
-        object=_object_details(obj),
-    )
+    response = {"object": _object_details(obj)}
+    if obj.type == "ARMATURE" and obj.data is not None:
+        response["armature"] = _armature_inspection(obj)
+    _response(command_id, True, "Blender object inspected", **response)
 
 
 def _evaluated_world_bvh(obj, depsgraph):
