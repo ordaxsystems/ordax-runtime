@@ -70,6 +70,8 @@ if product_idle_claim_delay_seconds(40, 12.0, verified_wake=True) >= 120.0:
     raise SystemExit("Packaged Runtime can reconcile after Product action queue expiry")
 if product_idle_claim_delay_seconds(40, 12.0, verified_wake=True, active_jobs=1) != 18.0:
     raise SystemExit("Packaged Runtime lets active work depend on advisory wake")
+if product_idle_claim_delay_seconds(1, 12.0, verified_wake=True, active_jobs=1) != 18.0:
+    raise SystemExit("Packaged Runtime repeats empty claims despite verified wake")
 if _PRODUCT_HEARTBEAT_SECONDS != 30.0:
     raise SystemExit("Packaged Runtime heartbeat budget is not canonical")
 remaining = 86400.0
