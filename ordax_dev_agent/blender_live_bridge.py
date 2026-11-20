@@ -458,6 +458,12 @@ class BlenderLiveBridge:
                 launch_command[3:3] = ["--gpu-backend", "vulkan"]
                 env["VK_DRIVER_FILES"] = str(software_icd)
                 env["VK_ICD_FILENAMES"] = str(software_icd)
+                # A verified Lavapipe ICD is CPU-only. OIDN SYCL GPU
+                # enumeration can block Blender startup even before --version
+                # finishes on this Windows host. Scope the documented OIDN
+                # setting to this software-rendered Blender subprocess only.
+                # Native GPU launches and global settings remain untouched.
+                env["OIDN_DEVICE_SYCL"] = "0"
             with startup_log.open("a", encoding="utf-8", errors="replace") as log_handle:
                 mode = "vulkan-software" if software_icd is not None else "native-default"
                 log_handle.write(f"\n--- OrdaX Blender start {time.time():.3f} ({mode}) ---\n")
