@@ -479,41 +479,17 @@ class BrowserSessionActions:
                     "title": str(target.get("title") or ""),
                 }
             else:
-                def initialize_page(ws, _state, _target):
-                    _cdp_call(ws, 1, "Page.enable")
-                    navigation = _cdp_call(ws, 2, "Page.navigate", {"url": url})
-                    if navigation.get("errorText"):
-                        raise BrowserCaptureError("Chromium rejected initial navigation")
-                    deadline = time.monotonic() + max(
-                        5.0,
-                        min(float(payload.get("wait_seconds", 8)), 30.0),
-                    )
-                    request_id = 3
-                    current_url = ""
-                    title = ""
-                    while time.monotonic() < deadline:
-                        ready_state = self._eval(ws, request_id, "document.readyState")
-                        request_id += 1
-                        current_url = str(self._eval(ws, request_id, "location.href") or "")
-                        request_id += 1
-                        title = str(self._eval(ws, request_id, "document.title") or "")
-                        request_id += 1
-                        if (ready_state in {"interactive", "complete"}
-                                and (current_url == url or _same_origin(current_url, url))):
-                            return {"url": current_url, "title": title}
-                        time.sleep(0.1)
-                    raise BrowserCaptureError(
-                        f"Chromium page did not become ready: {current_url or 'unknown URL'}"
-                    )
-
-                try:
-                    ready = self._with_page(
-                        project,
-                        session_id,
-                        initialize_page,
-                        preferred_url="about:blank",
-                    )
-                except (ValueError, BrowserCaptureError) as error:
+                # One navigation implementation, one ownership gate. The
+                # initial target is already registered in session state; use
+                # that exact tab instead of a duplicate startup CDP path.
+                navigation = self.browser_navigate({
+                    "project": project.slug,
+                    "session_id": session_id,
+                    "tab_id": state["primary_tab_id"],
+                    "url": url,
+                    "wait_seconds": payload.get("wait_seconds", 15),
+                })
+                if not navigation.ok:
                     cleanup = None
                     try:
                         cleanup = self.browser_stop(
@@ -546,13 +522,17 @@ class BrowserSessionActions:
                         except (OSError, subprocess.TimeoutExpired):
                             pass
                         handles.pop(session_id, None)
-                    state.update({"startup_error": str(error), "stopped_at_unix": time.time()})
+                    state.update({
+                        "startup_error": navigation.summary,
+                        "stopped_at_unix": time.time(),
+                    })
                     self._write_browser_state(project, state)
                     return ActionResult(
                         False,
-                        f"browser initial navigation failed: {error}",
+                        f"browser initial navigation failed: {navigation.summary}",
                         {**state, "running": False, "ownership_valid": False},
                     )
+                ready = navigation.data
 
             return ActionResult(True, "browser session started", {
                 **state,
