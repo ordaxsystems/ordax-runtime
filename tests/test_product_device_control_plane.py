@@ -628,10 +628,20 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
                 "result": {"ok": True, "summary": "done", "data": {}},
                 "error_code": None,
             }
-            plane._terminal_outbox.persist(report)
+            healthy = plane._terminal_outbox.persist(report)
+            corrupt = healthy.with_name("11111111-1111-4111-8111-111111111111.json")
+            corrupt.write_text("invalid receipt", encoding="utf-8")
+            plane.http.close()
+            plane = self.plane(root, handler)
             plane.agent_version = "0.4.0-new"
-            recovered = plane.recover_pending_reports()
-            self.assertEqual(recovered, 1)
+            from ordax_dev_agent.terminal_outbox import TerminalReportRecoveryError
+            with self.assertRaises(TerminalReportRecoveryError) as failure:
+                plane.recover_pending_reports()
+            self.assertEqual(failure.exception.recovered, 1)
+            self.assertEqual(failure.exception.failed, 1)
+            self.assertFalse(healthy.exists())
+            self.assertTrue(corrupt.exists())
+            self.assertEqual(len(seen), 1)
             self.assertEqual(seen[-1][0], "/v3/device/transport/recover-report")
             self.assertEqual(seen[-1][1]["agent_version"], "0.3.0-old")
             self.assertEqual(seen[-1][1]["runtime_kind"], "desktop-agent")
