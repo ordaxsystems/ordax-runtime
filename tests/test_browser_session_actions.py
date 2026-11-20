@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import tempfile
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -33,28 +34,35 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-class BrowserProviderGuardTests(unittest.TestCase):
-    def test_chatgpt_consumer_pages_are_blocked_from_programmatic_browser_control(self):
+class BrowserUrlValidationTests(unittest.TestCase):
+    def test_chatgpt_pages_reach_the_existing_navigation_adapter(self):
+        # Test URL admission and dispatch, not a simulated ChatGPT login or reply.
+        actions = BrowserSessionActions()
+        actions._project = lambda _payload: object()
         for url in (
             "https://chatgpt.com/",
             "https://chatgpt.com/c/abc",
             "https://sub.chatgpt.com/path",
             "https://chat.openai.com/",
-        ):
-            with self.subTest(url=url):
-                self.assertTrue(BrowserSessionActions._is_protected_provider_url(url))
-                with self.assertRaisesRegex(ValueError, "official ORDAX MCP/Web Bridge"):
-                    BrowserSessionActions._assert_automation_url_allowed(url)
-
-    def test_regular_websites_remain_automation_eligible(self):
-        for url in (
             "https://example.com/",
-            "https://github.com/openai/tunnel-client",
-            "https://developers.openai.com/api/docs/guides/secure-mcp-tunnels",
         ):
             with self.subTest(url=url):
-                self.assertFalse(BrowserSessionActions._is_protected_provider_url(url))
-                BrowserSessionActions._assert_automation_url_allowed(url)
+                self.assertEqual(actions._valid_url(url), url)
+                with patch.object(
+                    actions, "_with_page",
+                    return_value={"session_id": "test-session", "url": url, "title": "Browser"},
+                ) as dispatch:
+                    result = actions.browser_navigate({"session_id": "test-session", "url": url})
+                self.assertTrue(result.ok, result.summary)
+                dispatch.assert_called_once()
+
+    def test_browser_urls_keep_scheme_validation(self):
+        for url in ("javascript:alert(1)", "file:///tmp/secret", "data:text/html,x", ""):
+            with self.subTest(url=url), self.assertRaisesRegex(ValueError, "http or https"):
+                BrowserSessionActions._valid_url(url)
+        self.assertEqual(
+            BrowserSessionActions._valid_url("about:blank", allow_blank=True), "about:blank"
+        )
 
 
 @unittest.skipIf(find_chromium() is None, "Chrome/Edge not available on CI runner")
