@@ -81,6 +81,20 @@ def run() -> None:
         require(len(rig.data.bones) == 3, "armature bones missing")
         require(rig.data.bones["Spine"].parent.name == "Root", "Spine parenting")
         require(rig.data.bones["Head"].parent.name == "Spine", "Head parenting")
+        companion._object_inspect({
+            "id": "ci-rig-inspect", "operation": "object_inspect", "object_name": name,
+        })
+        inspection = json.loads(
+            (companion.RESULTS / "ci-rig-inspect.json").read_text(encoding="utf-8")
+        )
+        require(inspection.get("ok") is True, "rig inspection failed")
+        details = inspection.get("armature") or {}
+        require(details.get("bone_count") == 3, "inspection bone count")
+        require(details.get("bones_truncated") is False, "unexpected bone truncation")
+        inspected = {bone["name"]: bone for bone in details["bones"]}
+        require(inspected["Spine"]["parent"] == "Root", "inspected Spine parent")
+        require(inspected["Head"]["parent"] == "Spine", "inspected Head parent")
+        require(inspected["Head"]["pose"]["head_world"] == [0.0, 0.0, 2.0], "inspected pose")
         before_count = len(bpy.data.objects)
 
         companion._rig_create(
@@ -141,6 +155,19 @@ def run() -> None:
         require(len(rig.data.bones) == 3, "reopened bone count mismatch")
         require(rig.data.bones["Spine"].parent.name == "Root", "reopened Spine parent")
         require(rig.data.bones["Head"].parent.name == "Spine", "reopened Head parent")
+        companion._object_inspect({
+            "id": "ci-reopened-rig-inspect", "operation": "object_inspect", "object_name": name,
+        })
+        reopened_inspection = json.loads(
+            (companion.RESULTS / "ci-reopened-rig-inspect.json").read_text(encoding="utf-8")
+        )
+        require(reopened_inspection.get("ok") is True, "reopened rig inspection failed")
+        reopened_bones = {
+            bone["name"]: bone
+            for bone in reopened_inspection["armature"]["bones"]
+        }
+        require(reopened_bones["Head"]["parent"] == "Spine", "reopened inspected hierarchy")
+        require("pose" in reopened_bones["Head"], "reopened pose missing")
         require(bpy.data.objects.get("OrdaX_CI_Invalid") is None, "invalid rig persisted")
         positive = json.loads(
             (companion.RESULTS / "ci-positive.json").read_text(encoding="utf-8")

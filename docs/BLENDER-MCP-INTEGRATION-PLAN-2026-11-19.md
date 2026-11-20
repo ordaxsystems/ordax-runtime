@@ -199,3 +199,30 @@ corretamente uma tentativa de ping sem presença fresca, sem enfileirar
 comando. Quando a presença voltou, ambos os comandos de leitura passaram.
 Esse perfil não constitui, por si só, a homologação do caminho público
 ChatGPT → Platform grants → Device Agent → Blender sem Project registrado.
+
+## Inspeção tipada de armature — 20/11/2026
+
+Incremento sem ferramenta ou transportador adicional: a ação existente
+`blender.live_object_inspect` retorna, somente para objetos ARMATURE, uma
+seção `armature` com `bone_count`, `bones_truncated` e até 128 ossos
+em ordem determinística. Cada osso contém nome, parent, head/tail locais,
+comprimento, flag de deformação e, se disponível, dados de pose (posição,
+rotação conforme rotation_mode, escala, posição mundial da cabeça/cauda,
+constraints limitadas a 16). A inspeção não altera cena nem cria execução
+de Python livre na superfície MCP.
+
+O teste real já existente `tests/blender_real_rig_e2e.py` foi ampliado:
+verifica o resultado `object_inspect` via recibo durável, pai/filho e
+pose, antes de salvar e após reabrir o arquivo .blend. Não cria novo smoke
+nem instala outro Blender. Compilação sintática dos arquivos alterados:
+aprovada. Testes locais `test_blender_rigging_contracts`: 12/12;
+`test_blender_companion_bundle`: 57/57. `git diff --check`: aprovado.
+
+Limitação física reproduzida: tentativa headless Blender 5.3 com GPU
+nativa e OIDN_DEVICE_SYCL=0 ficou sem iniciar o script e terminou por
+timeout após 180 s, sem gerar evidência. **Não considerar smoke físico
+aprovado**. A variante validada com Vulkan/Lavapipe deve ocorrer pelo
+lançamento canônico do Runtime ou pela CI Linux, preservando o diretório
+protegido de estado do agente. Não há prova nova do caminho remoto
+ChatGPT → Platform → Device nem de aplicação da alteração no Runtime
+instalado até esse gate ser executado.
