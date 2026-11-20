@@ -473,6 +473,24 @@ class BlenderLiveBridge:
                     env=env,
                 )
 
+        def stop_owned_startup_process(target: subprocess.Popen[Any]) -> bool:
+            # Never terminate a process that has already published a live
+            # companion. Failed startup can otherwise leave an orphaned GUI
+            # and compete with the next legitimate launch.
+            if self.presence_is_fresh():
+                return False
+            try:
+                if target.poll() is None:
+                    target.terminate()
+                    try:
+                        target.wait(timeout=2.0)
+                    except subprocess.TimeoutExpired:
+                        target.kill()
+                        target.wait(timeout=2.0)
+                return target.poll() is not None
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                return False
+
         # Provisioning the pinned, verified local driver is an explicit
         # selection of software Vulkan for this Blender subprocess. Prefer it
         # immediately: unsupported GPUs do not always create the modal
@@ -519,15 +537,7 @@ class BlenderLiveBridge:
                 if graphics_error is not None:
                     # This exact process was launched by this action and has
                     # not opened a scene. Do not leave an orphaned modal.
-                    try:
-                        process.terminate()
-                        try:
-                            process.wait(timeout=2.0)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
-                            process.wait(timeout=2.0)
-                    except (OSError, ValueError, subprocess.TimeoutExpired):
-                        pass
+                    stop_owned_startup_process(process)
                     if not software_vulkan_attempted:
                         software_icd = _verified_software_vulkan_icd(self.config.state_dir)
                         if software_icd is not None:
@@ -563,10 +573,17 @@ class BlenderLiveBridge:
                     )
             time.sleep(0.10)
 
+        terminated_owned_startup = stop_owned_startup_process(process)
         return ActionResult(
             False,
             "Blender opened but live companion did not become ready in time",
-            {"pid": process.pid, "log_file": str(startup_log), **self.status()},
+            {
+                "error_code": "blender_companion_startup_timeout",
+                "pid": process.pid,
+                "log_file": str(startup_log),
+                "terminated_owned_startup": terminated_owned_startup,
+                **self.status(),
+            },
         )
 
     def request(
