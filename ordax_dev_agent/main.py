@@ -324,6 +324,37 @@ def _recover_terminal_reports_tick(
     return True
 
 
+def _schedule_terminal_report_recovery(
+    executor: ThreadPoolExecutor,
+    future: Future[bool] | None,
+    recover_pending_reports: Callable[[], int] | None,
+    runtime: dict,
+    *,
+    now: float,
+    next_due: float,
+) -> tuple[Future[bool] | None, float]:
+    """Reconcile durable terminal receipts without blocking new MCP claims.
+
+    A single in-flight recovery owns the same canonical outbox and report RPC
+    that startup uses. No second recovery starts until the first has completed.
+    Device credential revocation is propagated on the claim thread when its
+    completed future is inspected, preserving the existing fail-closed exit.
+    """
+    if future is not None:
+        if not future.done():
+            return future, next_due
+        healthy = bool(future.result())  # DeviceAuthorizationError must propagate.
+        future = None
+        next_due = now + (1.0 if healthy else 5.0)
+    if future is None and callable(recover_pending_reports) and now >= next_due:
+        future = executor.submit(
+            _recover_terminal_reports_tick,
+            recover_pending_reports,
+            runtime,
+        )
+    return future, next_due
+
+
 def _mark_identity_loaded(runtime: dict) -> None:
     """An enrolled token is not a remote heartbeat receipt."""
     runtime["paired"] = False
@@ -1317,13 +1348,15 @@ def run(
         thread_name_prefix="ordax-product-job",
     )
     job_futures: dict[object, str] = {}
-    # Project Catalog onboarding is independent of MCP job execution. Its
-    # network request can take ten seconds: run at most one off the claim loop,
-    # never holding a device action worker slot or creating a second queue.
-    project_binding_executor = ThreadPoolExecutor(
-        max_workers=1, thread_name_prefix="ordax-project-binding",
+    # One existing local control-maintenance pool handles two unrelated I/O
+    # tasks independently: Project Catalog reconciliation and durable terminal
+    # report recovery. Both are single-flight; neither can hold a command slot,
+    # queue duplicate maintenance work or block the claim loop.
+    control_maintenance_executor = ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="ordax-control-maintenance",
     )
     project_binding_future: Future[int] | None = None
+    terminal_recovery_future: Future[bool] | None = None
     from .remote_protocol import DeviceAuthorizationError
     wake_listener = _start_optional_product_wake_listener(
         enabled=config.product_wake_enabled,
@@ -1379,18 +1412,20 @@ def run(
                     job_changed.clear()
                     continue
 
-                if (
-                    callable(recover_pending_reports)
-                    and now >= next_terminal_recovery
-                ):
-                    recovery_healthy = _recover_terminal_reports_tick(
-                        recover_pending_reports, runtime,
+                # A single slow report RPC can take 30 seconds. Its recovery
+                # is durable and independent of claims: never wait for it on
+                # this loop, and never schedule a second recovery until it
+                # finishes. Preserve the previous 1s/5s retry cadence.
+                terminal_recovery_future, next_terminal_recovery = (
+                    _schedule_terminal_report_recovery(
+                        control_maintenance_executor,
+                        terminal_recovery_future,
+                        recover_pending_reports,
+                        runtime,
+                        now=now,
+                        next_due=next_terminal_recovery,
                     )
-                    # Retry stale/uncertain receipts separately. A failed
-                    # recovery never becomes a global claim backoff.
-                    next_terminal_recovery = now + (
-                        1.0 if recovery_healthy else 5.0
-                    )
+                )
 
                 if project_binding_future is not None:
                     project_binding_future = _drain_project_binding_reconciliation(
@@ -1421,7 +1456,7 @@ def run(
                             control, "reconcile_project_bindings", None,
                         )
                         if callable(reconcile_project_bindings):
-                            project_binding_future = project_binding_executor.submit(
+                            project_binding_future = control_maintenance_executor.submit(
                                 reconcile_project_bindings,
                             )
                     with runtime_lock:
@@ -1556,7 +1591,7 @@ def run(
         runtime["state"] = "stopping"
         stop_requested.set()
         job_executor.shutdown(wait=True, cancel_futures=False)
-        project_binding_executor.shutdown(wait=True, cancel_futures=False)
+        control_maintenance_executor.shutdown(wait=True, cancel_futures=False)
         if wake_listener is not None:
             wake_listener.close()
         try:
