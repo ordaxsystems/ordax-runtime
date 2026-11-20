@@ -175,6 +175,8 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
             self.assertIn("vulkan", cpu_args[0])
             self.assertEqual(cpu_kwargs["env"]["VK_DRIVER_FILES"], str(cpu_icd))
             self.assertEqual(cpu_kwargs["env"]["VK_ICD_FILENAMES"], str(cpu_icd))
+            self.assertEqual(cpu_kwargs["env"]["OIDN_DEVICE_SYCL"], "0")
+            self.assertEqual(native_kwargs["env"].get("OIDN_DEVICE_SYCL"), os.environ.get("OIDN_DEVICE_SYCL"))
             self.assertEqual(cpu_kwargs["env"]["BLENDER_USER_CONFIG"], str(bridge.user_config_root))
             self.assertEqual(cpu_kwargs["env"]["BLENDER_USER_SCRIPTS"], str(bridge.user_scripts_root))
 
@@ -192,6 +194,7 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
                 patch.dict(os.environ, {
                     "BLENDER_USER_CONFIG": "user-global-preferences",
                     "BLENDER_USER_SCRIPTS": "user-global-scripts",
+                    "OIDN_DEVICE_SYCL": "1",
                 }),
                 patch("ordax_dev_agent.blender_live_bridge.find_blender", return_value=base / "blender.exe"),
                 patch.object(bridge, "_companion_fingerprint", return_value="valid"),
@@ -209,6 +212,7 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
                 env = spawn.call_args.kwargs["env"]
                 self.assertEqual(env["BLENDER_USER_CONFIG"], str(bridge.user_config_root))
                 self.assertEqual(env["BLENDER_USER_SCRIPTS"], str(bridge.user_scripts_root))
+                self.assertEqual(env["OIDN_DEVICE_SYCL"], "1")
                 self.assertTrue(bridge.user_config_root.is_dir())
                 self.assertTrue(bridge.user_scripts_root.is_dir())
                 self.assertNotIn("VK_DRIVER_FILES", {
@@ -216,6 +220,7 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
                 })
                 self.assertEqual(os.environ["BLENDER_USER_CONFIG"], "user-global-preferences")
                 self.assertEqual(os.environ["BLENDER_USER_SCRIPTS"], "user-global-scripts")
+                self.assertEqual(os.environ["OIDN_DEVICE_SYCL"], "1")
             sibling = BlenderLiveBridge(
                 SimpleNamespace(state_dir=base / "state"),
                 Project(slug="other_registered_project", root=base, apps=("blender",)),
@@ -285,6 +290,7 @@ class BlenderLiveGpuFailureTests(unittest.TestCase):
             self.assertEqual(argv[0][3:5], ["--gpu-backend", "vulkan"])
             self.assertEqual(kwargs["env"]["VK_DRIVER_FILES"], str(icd))
             self.assertEqual(kwargs["env"]["VK_ICD_FILENAMES"], str(icd))
+            self.assertEqual(kwargs["env"]["OIDN_DEVICE_SYCL"], "0")
             self.assertEqual(kwargs["env"]["BLENDER_USER_CONFIG"], str(bridge.user_config_root))
             self.assertEqual(kwargs["env"]["BLENDER_USER_SCRIPTS"], str(bridge.user_scripts_root))
             gpu_probe.assert_not_called()
