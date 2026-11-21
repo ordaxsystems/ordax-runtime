@@ -20,6 +20,7 @@ from .models import ActionResult, AgentJob
 from .product_central_session import ProductCentralSessionClient
 from .desktop_project_binding import resolve_desktop_project_workspace
 from .projects import Project, canonical_github_repository_full_name
+from .product_action_scope import DEVICE_BLENDER_ACTIONS
 from .remote_protocol import (
     DeviceAuthorizationError,
     TransientDeliveryError,
@@ -588,6 +589,10 @@ class ProductDeviceControlPlane:
     ) -> tuple[dict[str, Any], Project | None]:
         capability = str(row.get("capability") or row.get("operation") or "")
         raw_scope = payload.pop("_ordax_project_scope", None)
+        if capability in DEVICE_BLENDER_ACTIONS:
+            if raw_scope is not None or row.get("project_id") is not None or row.get("space_id") is not None or "project" in payload:
+                raise RuntimeError("device Blender cannot carry a project or Space binding")
+            return payload, None
         if capability not in _PROJECT_SCOPE_ACTIONS:
             if raw_scope is not None:
                 raise RuntimeError("canonical Product project scope attestation is unexpected")

@@ -195,6 +195,9 @@ class ActionConcurrencyCoordinator:
         if action == "computer.terminate_process":
             return False, (f"computer:pid:{payload.get('pid') or 'unknown'}",)
 
+        if action.startswith("computer.blender_"):
+            return False, ("device:blender",)
+
         if action.startswith("computer.transfer_"):
             transfer_id = payload.get("transfer_id")
             if transfer_id:
