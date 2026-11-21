@@ -967,6 +967,15 @@ class ProductGatewayTests(unittest.TestCase):
         self.assertEqual(result.data["artifact_name"], "preview.png")
         self.assertNotIn("path", result.data)
 
+    def test_artifact_preview_batch_uses_same_project_grant(self) -> None:
+        payload = {"project": "scene", "project_artifact_paths": ["a.png", "b.png"]}
+        result = self.gateway.execute(
+            "artifact.preview", payload, context=self.context,
+            grant=self.grant("artifact.preview"),
+        )
+        self.assertTrue(result.ok, result.summary)
+        self.assertEqual(self.executor.calls[-1], ("artifact.preview", payload))
+
 
 if __name__ == "__main__":
     unittest.main()

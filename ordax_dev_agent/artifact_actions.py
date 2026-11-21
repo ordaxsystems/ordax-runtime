@@ -115,6 +115,16 @@ class ArtifactActions:
 
         with path.open("rb") as handle:
             before = os.fstat(handle.fileno())
+            path_before = path.stat()
+            # Windows fstat and stat can report different ctime semantics.
+            # Compare the open handle and path by shared identity; compare
+            # each source's own change token before and after the read.
+            def identity(stat):
+                return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+            if identity(before) != identity(path_before):
+                return ActionResult(False, "artifact changed before read; discard download",
+                                    {"error_code": "artifact_changed"})
             observed = version(before)
             if expected is not None and expected != observed:
                 return ActionResult(False, "artifact changed; restart download from offset zero",
@@ -123,7 +133,7 @@ class ArtifactActions:
                 return ActionResult(False, "offset is beyond end of artifact")
             handle.seek(offset)
             chunk = handle.read(max_bytes)
-            if version(os.fstat(handle.fileno())) != observed or version(path.stat()) != observed:
+            if version(os.fstat(handle.fileno())) != observed or version(path.stat()) != version(path_before):
                 return ActionResult(False, "artifact changed during read; discard download",
                                     {"error_code": "artifact_changed"})
         next_offset = offset + len(chunk)
@@ -139,7 +149,120 @@ class ArtifactActions:
             "base64": base64.b64encode(chunk).decode("ascii"),
         })
 
+    def _artifact_image_sheet(self, payload: dict[str, Any]) -> ActionResult:
+        """Build a bounded, labeled contact sheet from authorized project artifacts."""
+        import io
+        import math
+        import time
+
+        started = time.monotonic()
+        paths = payload.get("project_artifact_paths")
+        if not isinstance(paths, list) or not 1 <= len(paths) <= 100:
+            return ActionResult(False, "project_artifact_paths must contain 1 to 100 paths")
+        if any(not isinstance(path, str) or not path.strip() for path in paths):
+            return ActionResult(False, "each artifact path must be a nonempty string")
+        if payload.get("artifact_name") is not None or payload.get("project_artifact_path") is not None:
+            return ActionResult(False, "choose a single artifact or a batch")
+        if sum(len(path.encode("utf-8")) for path in paths) > 16384:
+            return ActionResult(False, "batch path byte budget exceeded")
+        if any(Path(path).is_absolute() or Path(path).drive for path in paths):
+            return ActionResult(False, "batch paths must be relative to project Artifacts")
+        try:
+            from PIL import Image, ImageDraw, ImageOps
+        except ImportError:
+            return ActionResult(False, "Pillow is required for artifact thumbnails")
+
+        def bounded(name: str, default: int, low: int, high: int) -> int:
+            value = payload.get(name, default)
+            if type(value) is not int or not low <= value <= high:
+                raise ValueError(f"{name} must be between {low} and {high}")
+            return value
+
+        try:
+            width = bounded("max_width", 1600, 64, 4096)
+            height = bounded("max_height", 1200, 64, 4096)
+            quality = bounded("quality", 72, 30, 92)
+            max_bytes = bounded("max_bytes", 262144, 4096, 262144)
+            columns = max(1, min(len(paths), round(math.sqrt(len(paths) * width / height))))
+            rows = math.ceil(len(paths) / columns)
+            cell_width, cell_height = width // columns, height // rows
+            if cell_width < 48 or cell_height < 64:
+                return ActionResult(False, "sheet resolution is too small for this batch")
+            label_height = 22
+            sheet = Image.new("RGB", (columns * cell_width, rows * cell_height), "white")
+            draw = ImageDraw.Draw(sheet)
+            project = self._project(payload)
+            root = (project.root / "Artifacts").resolve()
+            seen: dict[str, str] = {}
+            items: list[dict[str, Any]] = []
+            source_bytes = 0
+            relative_path_bytes = 0
+            unique_source_bytes = 0
+            for index, relative in enumerate(paths, 1):
+                path = self._artifact_path({"project": payload.get("project"), "project_artifact_path": relative})
+                if isinstance(path, ActionResult):
+                    return path
+                if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+                    return ActionResult(False, "batch supports PNG, JPEG and WebP images")
+                limit = min(32 * 1024 * 1024, 256 * 1024 * 1024 - source_bytes)
+                with path.open("rb") as handle:
+                    raw = handle.read(limit + 1)
+                if len(raw) > limit or not raw:
+                    return ActionResult(False, "batch source byte budget exceeded or empty image")
+                source_bytes += len(raw)
+                digest = hashlib.sha256(raw).hexdigest()
+                image_id = f"I{index:03}"
+                tile_id = seen.get(digest)
+                if tile_id is None:
+                    tile_id = image_id
+                    tile_index = len(seen)
+                    with Image.open(io.BytesIO(raw)) as image:
+                        if image.width * image.height > 24_000_000:
+                            return ActionResult(False, "batch image pixel budget exceeded")
+                        image.draft("RGB", (cell_width, cell_height - label_height))
+                        corrected = ImageOps.exif_transpose(image)
+                        corrected.thumbnail((cell_width - 4, cell_height - label_height - 4), Image.Resampling.LANCZOS)
+                        rgba = corrected.convert("RGBA")
+                        tile = Image.new("RGB", corrected.size, "white")
+                        tile.paste(rgba, mask=rgba.getchannel("A"))
+                        x = (tile_index % columns) * cell_width
+                        y = (tile_index // columns) * cell_height
+                        sheet.paste(tile, (x + (cell_width - tile.width) // 2,
+                                           y + (cell_height - label_height - tile.height) // 2))
+                        draw.text((x + 4, y + cell_height - label_height + 3), tile_id, fill="black")
+                    seen[digest] = tile_id
+                    unique_source_bytes += len(raw)
+                resolved_relative = path.relative_to(root).as_posix()
+                relative_path_bytes += len(resolved_relative.encode("utf-8"))
+                if relative_path_bytes > 16384:
+                    return ActionResult(False, "batch resolved path byte budget exceeded")
+                items.append({"image_id": image_id, "tile_id": tile_id,
+                              "project_artifact_path": resolved_relative,
+                              "source_sha256": digest, "source_size_bytes": len(raw)})
+            final_rows = math.ceil(len(seen) / columns)
+            if final_rows < rows:
+                sheet = sheet.crop((0, 0, sheet.width, final_rows * cell_height))
+            buffer = io.BytesIO()
+            sheet.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True)
+            data = buffer.getvalue()
+            if len(data) > max_bytes:
+                return ActionResult(False, "sheet exceeds preview byte budget; reduce resolution, quality or batch size",
+                                    {"error_code": "artifact_sheet_too_large"})
+            return ActionResult(True, "artifact image sheet ready", {
+                "items": items, "image_count": len(items), "unique_image_count": len(seen),
+                "source_size_bytes": source_bytes, "unique_source_size_bytes": unique_source_bytes,
+                "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                "mime_type": "image/jpeg", "format": "jpeg", "thumbnail": True,
+                "thumbnail_size": [sheet.width, sheet.height],
+                "processing_ms": round((time.monotonic() - started) * 1000, 2),
+                "base64": base64.b64encode(data).decode("ascii"),
+            })
+        except (OSError, ValueError, Image.DecompressionBombError) as error:
+            return ActionResult(False, f"artifact image sheet failed: {error}")
+
     def artifact_preview(self, payload: dict[str, Any]) -> ActionResult:
+        if "project_artifact_paths" in payload:
+            return self._artifact_image_sheet(payload)
         path = self._artifact_path(payload)
         if isinstance(path, ActionResult):
             return path
