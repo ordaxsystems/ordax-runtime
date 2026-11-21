@@ -456,6 +456,9 @@ class ComputerControlActions:
         mode = str(payload.get("mode") or "desktop").strip().lower()
         if mode not in {"desktop", "active_window"}:
             return ActionResult(False, "mode must be desktop or active_window")
+        include_preview = payload.get("include_preview", False)
+        if type(include_preview) is not bool:
+            return ActionResult(False, "include_preview must be boolean")
         target = self._computer_artifact_path()
         try:
             # Windows-only capture dependency. The OrdaX OS Native Product
@@ -473,13 +476,9 @@ class ComputerControlActions:
             else:
                 image = ImageGrab.grab(all_screens=True)
             image.save(target, "PNG")
-        except Exception as error:
-            return ActionResult(False, f"desktop screenshot failed: {type(error).__name__}: {error}")
-        width, height = image.size
-        return ActionResult(
-            True,
-            "desktop screenshot captured",
-            {
+            width, height = image.size
+            original_size = int(target.stat().st_size)
+            result = {
                 "scope": "device",
                 "mode": mode,
                 "coordinate_space": "physical_pixels",
@@ -487,9 +486,44 @@ class ComputerControlActions:
                 "image_path": str(target),
                 "width": int(width),
                 "height": int(height),
-                "size_bytes": int(target.stat().st_size),
-            },
-        )
+                "size_bytes": original_size,
+            }
+            if include_preview:
+                # Explicit opt-in avoids unnecessary binary receipts. Reuse
+                # captured pixels without a second capture or a new storage service.
+                import base64
+                import hashlib
+                import io
+                from PIL import Image
+
+                preview = image.copy()
+                preview.thumbnail((960, 720), Image.Resampling.LANCZOS)
+                if preview.mode != "RGB":
+                    preview = preview.convert("RGB")
+                jpeg = b""
+                for quality in (72, 58, 42, 30):
+                    buffer = io.BytesIO()
+                    preview.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True)
+                    jpeg = buffer.getvalue()
+                    if len(jpeg) <= 262144:
+                        break
+                    preview.thumbnail((max(64, preview.width * 3 // 4),
+                                       max(64, preview.height * 3 // 4)), Image.Resampling.LANCZOS)
+                if not jpeg or len(jpeg) > 262144:
+                    return ActionResult(False, "screenshot preview byte budget exceeded",
+                                        {"error_code": "screenshot_preview_too_large"})
+                result.update({
+                    "source_size_bytes": original_size,
+                    "size_bytes": len(jpeg),
+                    "sha256": hashlib.sha256(jpeg).hexdigest(),
+                    "mime_type": "image/jpeg",
+                    "thumbnail": True,
+                    "thumbnail_size": [preview.width, preview.height],
+                    "base64": base64.b64encode(jpeg).decode("ascii"),
+                })
+        except Exception as error:
+            return ActionResult(False, f"desktop screenshot failed: {type(error).__name__}: {error}")
+        return ActionResult(True, "desktop screenshot captured", result)
 
     @staticmethod
     def _current_thread_id() -> int:

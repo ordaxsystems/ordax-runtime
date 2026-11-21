@@ -783,8 +783,8 @@ def computer_active_window(device_id: str, project: str, space_id: str | None = 
     return _invoke(device_id=device_id, action="computer.active_window", project=project, space_id=space_id, arguments={"project": project})
 
 
-def computer_screenshot(device_id: str, project: str, mode: str = "desktop", space_id: str | None = None) -> dict[str, Any]:
-    return _invoke(device_id=device_id, action="computer.screenshot", project=project, space_id=space_id, arguments={"project": project, "mode": mode})
+def computer_screenshot(device_id: str, project: str, mode: str = "desktop", space_id: str | None = None, include_preview: bool = False) -> dict[str, Any]:
+    return _invoke(device_id=device_id, action="computer.screenshot", project=project, space_id=space_id, arguments={"project": project, "mode": mode, "include_preview": include_preview})
 
 
 def computer_screen_info(device_id: str, project: str, space_id: str | None = None) -> dict[str, Any]:

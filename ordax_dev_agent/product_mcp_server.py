@@ -125,12 +125,13 @@ def computer_screenshot(
     device_id: str,
     mode: str = "desktop",
     space_id: str | None = None,
+    include_preview: bool = False,
 ) -> dict[str, Any]:
     return _invoke(
         device_id=device_id,
         action="computer.screenshot",
         space_id=space_id,
-        arguments={"mode": mode},
+        arguments={"mode": mode, "include_preview": include_preview},
     )
 
 
