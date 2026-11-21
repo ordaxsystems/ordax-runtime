@@ -110,10 +110,14 @@ def resolve_windows_project_workspace(
     if project is None or not project.root.is_dir():
         raise ValueError("Registered Windows Project workspace is unavailable")
     raw = Path(config.projects[project.slug]["path"])
-    if (not raw.is_absolute() or raw.is_symlink()
-            or (hasattr(raw, "is_junction") and raw.is_junction())
-            or raw.resolve() != project.root):
+    if not raw.is_absolute() or raw.resolve() != project.root:
         raise ValueError("Windows Project workspace path is not canonical")
+    # Reject reparse/symlink components above the checkout too. A path that
+    # resolves into a different tree is never local Project Catalog authority.
+    for component in (raw, *raw.parents):
+        if component.is_symlink() or (
+                hasattr(component, "is_junction") and component.is_junction()):
+            raise ValueError("Windows Project workspace path is not canonical")
     if project_repository_full_name(project) != canonical:
         raise ValueError("Windows Project Git origin does not match Owner intent")
     return project

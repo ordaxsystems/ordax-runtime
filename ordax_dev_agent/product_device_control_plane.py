@@ -63,6 +63,22 @@ _PROJECT_SCOPE_ACTIONS = frozenset({
     "blender.live_rig_create",
     "blender.live_material_apply",
     "blender.live_save",
+    # Match the Platform's explicit project-scoped Browser/Artifact catalog.
+    # Previously these actions failed at this runtime boundary even after
+    # the correct Owner binding and grant were installed.
+    "browser.click",
+    "browser.list",
+    "browser.navigate",
+    "browser.screenshot",
+    "browser.snapshot",
+    "browser.start",
+    "browser.tab_open",
+    "browser.tabs",
+    "browser.status",
+    "browser.stop",
+    "browser.type",
+    "artifacts.list",
+    "artifact.preview",
 })
 
 _PROJECT_BINDING_CONFIRM_ERRORS = frozenset({

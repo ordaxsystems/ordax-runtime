@@ -202,6 +202,51 @@ class WindowsProjectBindingTests(unittest.TestCase):
                 plane.product_central_session.close()
                 plane.http.close()
 
+    def test_browser_and_artifact_actions_require_same_attested_project_scope(self):
+        with tempfile.TemporaryDirectory() as raw:
+            config = _mapped_config(Path(raw))
+            plane = ProductDeviceControlPlane(
+                config, project_binding_provider=lambda: windows_project_links(config),
+                project_binding_resolver=lambda link, repo: resolve_windows_project_workspace(config, link, repo),
+            )
+            try:
+                scope = {"project_id": PROJECT, "repository_full_name": REPOSITORY}
+                for capability in ("browser.screenshot", "browser.list", "browser.start",
+                                   "artifact.preview", "artifacts.list"):
+                    with self.subTest(capability=capability):
+                        row = {"capability": capability, "project_id": PROJECT}
+                        payload, project = plane._bind_project_scope(
+                            row, {"project": REPOSITORY, "_ordax_project_scope": scope},
+                        )
+                        self.assertEqual(payload["project"], "project-7")
+                        self.assertNotIn("_ordax_project_scope", payload)
+                        self.assertEqual(project.slug, "project-7")
+                        with self.assertRaises(RuntimeError):
+                            plane._bind_project_scope(row, {"project": REPOSITORY})
+                        with self.assertRaises(RuntimeError):
+                            plane._bind_project_scope(row, {
+                                "project": REPOSITORY,
+                                "_ordax_project_scope": {**scope, "project_id": DEVICE},
+                            })
+            finally:
+                plane.product_central_session.close()
+                plane.http.close()
+
+    def test_parent_symlink_reparse_is_rejected_before_git_origin_resolution(self):
+        with tempfile.TemporaryDirectory() as raw:
+            config = _mapped_config(Path(raw))
+            root = Path(config.projects["project-7"]["path"])
+            alias = root.parent
+            original = Path.is_symlink
+
+            def linked_parent(path):
+                return path == alias or original(path)
+
+            with patch.object(Path, "is_symlink", linked_parent), self.assertRaises(ValueError):
+                resolve_windows_project_workspace(
+                    config, windows_project_links(config)["links"][0], REPOSITORY,
+                )
+
     def test_windows_and_os_host_providers_never_mix(self):
         with tempfile.TemporaryDirectory() as raw:
             config = _mapped_config(Path(raw))

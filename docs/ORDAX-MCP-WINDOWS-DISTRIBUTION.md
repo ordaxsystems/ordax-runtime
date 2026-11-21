@@ -519,3 +519,45 @@ desktop já recebeu o novo pacote. A confirmação física exige outra
 transação canônica com recibo committed e manifesto atualizado, sem
 reutilizar a transação recovery-required. A investigação deve verificar
 também locks independentes se o erro de movimentação persistir.
+
+## Catálogo explícito de projetos no agente Windows independente (DEV)
+
+O agente Windows `ORDAX Runtime.exe` usa o **registro `projects` já existente** em
+`%LOCALAPPDATA%\\OrdaX\\DevAgent\\agent-settings.json`. Não existe um segundo banco,
+serviço ou registro de grants. Para um vínculo futuro criado pelo **OrdaX Owner**,
+o usuário registra uma identidade local opaca `project-N` e uma pasta Git real:
+
+```json
+{
+  "projects": {
+    "project-7": {
+      "path": "C:\\\\Users\\\\ordax\\\\Documents\\\\GitHub\\\\ordax-runtime",
+      "cloud_project_id": "<UUID real do Project criado pelo Owner>",
+      "space_id": "<UUID real do Space existente>"
+    }
+  }
+}
+```
+
+Os campos acima são **exemplo de estrutura**, não IDs que o Runtime gera ou
+aceita como autorização; preservar as demais configurações ao editar o arquivo.
+A vinculação continua dependendo do fluxo assinado Owner → intenção de 5 minutos
+→ confirmação pelo Device matriculado e verificação local de `git origin`.
+O Runtime valida UUIDs canônicos, identidade `project-N`, ausência de
+caminhos redirecionados e correspondência exata entre repositório autorizado e
+checkout cadastrado; não infere o projeto a partir do nome da pasta ou de um
+repositório que o ChatGPT digitou. O retorno à Platform não contém caminho local.
+
+O mesmo reconciliador de `ProductDeviceControlPlane` atende ao perfil
+`ordax-desktop` usando a ponte Native Project Catalog do OS e ao agente
+Windows usando somente o allowlist explícito. **Com 0 vínculos locais o
+reconciliador não consulta o endpoint de intenções/SQL**, preservando o
+orçamento de Hyperdrive. O processo precisa reiniciar pelo supervisor canônico
+após um cadastro local novo; não reiniciar por uma operação de leitura.
+
+Essa implementação **não ativa** `OWNER_PROJECT_DEVICE_BINDING_ENABLED`, não
+configura automaticamente GitHub App, não cria `ordax_projects`, não emite
+grants e não habilita `project-browser-automation` sozinho. Esses passos são
+Owner-only; a prova E2E positiva permanece bloqueada enquanto faltarem.
+O vínculo confirmado também passa a rebinder as ações `browser.*`,
+`artifacts.list` e `artifact.preview` ao mesmo projeto local verificado.
