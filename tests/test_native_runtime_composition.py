@@ -490,6 +490,55 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         plane.recover_pending_reports.assert_not_called()
         plane.close.assert_called_once_with()
 
+    def test_product_transport_status_counts_attempts_without_remote_probe(self):
+        plane = Mock()
+        plane.recover_pending_reports.return_value = 0
+        plane.pair_if_needed.return_value = False
+        handlers = {}
+        snapshots = []
+
+        def claim_empty():
+            # Read only the existing local status provider. No additional
+            # Product action, heartbeat, grant or SQL query may be triggered.
+            snapshots.append(server.call_args.args[0]()["runtime"])
+            handlers[signal.SIGTERM]()
+            return None
+
+        plane.claim_next_job.side_effect = claim_empty
+        with (
+            patch("ordax_dev_agent.control_plane.build_control_plane", return_value=plane),
+            patch("ordax_dev_agent.main.start_status_server") as server,
+            patch("ordax_dev_agent.main._start_local_watchdog", return_value=None),
+            patch("ordax_dev_agent.main.signal.signal",
+                  side_effect=lambda kind, handler: handlers.__setitem__(kind, handler)),
+            patch.object(ActionRegistry, "agent_status",
+                         return_value=ActionResult(True, "test", {})),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(run(
+                self.config, device_credential_provider=self.provider,
+                native_access_enabled=lambda: True, status_port=0,
+            ), 0)
+
+        self.assertEqual(len(snapshots), 1)
+        counters = snapshots[0]
+        self.assertEqual(counters["product_heartbeat_attempts"], 1)
+        self.assertEqual(counters["product_heartbeat_successes"], 1)
+        self.assertEqual(counters["product_claim_attempts"], 1)
+        self.assertEqual(counters["product_empty_claims"], 0)
+        self.assertEqual(counters["product_jobs_claimed"], 0)
+        self.assertEqual(counters["product_wake_reconciliations"], 0)
+        self.assertEqual(counters["product_catalog_reconcile_submissions"], 1)
+        # The first observation was captured inside claim_next_job(), before
+        # it returned an empty queue. All subsequent local reads are passive.
+        for _ in range(3):
+            finished = server.call_args.args[0]()["runtime"]
+            self.assertEqual(finished["product_claim_attempts"], 1)
+            self.assertEqual(finished["product_empty_claims"], 1)
+            self.assertEqual(finished["product_heartbeat_attempts"], 1)
+        plane.claim_next_job.assert_called_once_with()
+        self.assertEqual(plane.heartbeat.call_count, 2)  # online, offline
+
     def test_startup_sends_heartbeat_and_claims_while_a_durable_receipt_waits(self):
         recovery_started = threading.Event()
         release_recovery = threading.Event()
