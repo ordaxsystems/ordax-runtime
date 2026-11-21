@@ -572,7 +572,7 @@ class ProductDeviceControlPlane:
                 # A local Project Catalog id is not enough. Confirm only after
                 # the private File Space workspace exists and its Git origin
                 # independently matches the server-authoritative repository.
-                local_project = self._project_binding_resolver(
+                local_project = getattr(self, "_project_binding_resolver", resolve_desktop_project_workspace)(
                     link, intent["repository_full_name"],
                 )
             except (OSError, ValueError):
@@ -637,7 +637,7 @@ class ProductDeviceControlPlane:
         if len(matches) != 1:
             raise RuntimeError("OS Project Catalog binding is missing or ambiguous")
         try:
-            local_project = self._project_binding_resolver(
+            local_project = getattr(self, "_project_binding_resolver", resolve_desktop_project_workspace)(
                 matches[0], repository_full_name,
             )
         except (OSError, ValueError) as error:
