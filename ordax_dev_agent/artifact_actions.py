@@ -242,18 +242,42 @@ class ArtifactActions:
             final_rows = math.ceil(len(seen) / columns)
             if final_rows < rows:
                 sheet = sheet.crop((0, 0, sheet.width, final_rows * cell_height))
-            buffer = io.BytesIO()
-            sheet.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True)
-            data = buffer.getvalue()
+            # Keep one authorized read/decode of each original. If the image
+            # exceeds the inline budget, re-encode only the composed sheet:
+            # do not request the originals again or issue another MCP action.
+            # At most 10 bounded JPEG encodes; preserve legible tile labels
+            # by never shrinking the sheet below half its initial dimensions.
+            data = b""
+            rendered = sheet
+            encoded_quality = quality
+            for scale in (1.0, 0.75, 0.5):
+                rendered = sheet if scale == 1.0 else sheet.resize(
+                    (max(1, round(sheet.width * scale)),
+                     max(1, round(sheet.height * scale))),
+                    Image.Resampling.LANCZOS,
+                )
+                candidates = (quality, min(quality, 60), min(quality, 40), 30)
+                for candidate_quality in dict.fromkeys(candidates):
+                    buffer = io.BytesIO()
+                    rendered.save(buffer, format="JPEG", quality=candidate_quality,
+                                  optimize=True, progressive=True)
+                    data = buffer.getvalue()
+                    encoded_quality = candidate_quality
+                    if len(data) <= max_bytes:
+                        break
+                if len(data) <= max_bytes:
+                    break
             if len(data) > max_bytes:
-                return ActionResult(False, "sheet exceeds preview byte budget; reduce resolution, quality or batch size",
+                return ActionResult(False, "sheet exceeds preview byte budget even after bounded adaptation; reduce batch size",
                                     {"error_code": "artifact_sheet_too_large"})
             return ActionResult(True, "artifact image sheet ready", {
                 "items": items, "image_count": len(items), "unique_image_count": len(seen),
                 "source_size_bytes": source_bytes, "unique_source_size_bytes": unique_source_bytes,
                 "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
                 "mime_type": "image/jpeg", "format": "jpeg", "thumbnail": True,
-                "thumbnail_size": [sheet.width, sheet.height],
+                "thumbnail_size": [rendered.width, rendered.height],
+                "encoded_quality": encoded_quality, "adapted_for_budget":
+                    encoded_quality != quality or rendered.size != sheet.size,
                 "processing_ms": round((time.monotonic() - started) * 1000, 2),
                 "base64": base64.b64encode(data).decode("ascii"),
             })

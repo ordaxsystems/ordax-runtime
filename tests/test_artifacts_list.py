@@ -108,6 +108,45 @@ class ArtifactsListTests(unittest.TestCase):
                     self.assertEqual(tuple(data["thumbnail_size"]), sheet.size)
                 print(f"sheet images={count} unique={data['unique_image_count']} source_bytes={data['source_size_bytes']} sheet_bytes={data['size_bytes']} elapsed_ms={data['processing_ms']}")
 
+    def test_image_sheet_adapts_high_entropy_batch_without_a_second_request(self):
+        import base64
+        import hashlib
+        import io
+        import random
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            host = _Host(Path(tmp))
+            root = host.project.root / "Artifacts"
+            root.mkdir()
+            paths = []
+            for index in range(25):
+                name = f"noisy-{index}.png"
+                pixels = random.Random(index).randbytes(256 * 192 * 3)
+                Image.frombytes("RGB", (256, 192), pixels).save(root / name)
+                paths.append(name)
+            result = host.artifact_preview({
+                "project": "demo", "project_artifact_paths": paths,
+                "max_width": 1600, "max_height": 1200,
+                "quality": 92, "max_bytes": 150000,
+            })
+            self.assertTrue(result.ok, result.summary)
+            data = result.data
+            self.assertEqual(data["image_count"], 25)
+            self.assertEqual(data["unique_image_count"], 25)
+            self.assertEqual([item["project_artifact_path"] for item in data["items"]], paths)
+            self.assertTrue(data["adapted_for_budget"])
+            self.assertLessEqual(data["encoded_quality"], 92)
+            self.assertGreaterEqual(data["encoded_quality"], 30)
+            self.assertLessEqual(data["size_bytes"], 150000)
+            preview = base64.b64decode(data["base64"], validate=True)
+            self.assertEqual(hashlib.sha256(preview).hexdigest(), data["sha256"])
+            with Image.open(io.BytesIO(preview)) as image:
+                self.assertEqual(image.format, "JPEG")
+                self.assertEqual(image.size, tuple(data["thumbnail_size"]))
+                self.assertGreaterEqual(image.width, 800)
+                self.assertGreaterEqual(image.height, 600)
+
     def test_image_sheet_preserves_artifact_boundary(self):
         from PIL import Image
 
