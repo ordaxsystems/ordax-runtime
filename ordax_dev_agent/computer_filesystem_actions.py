@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import ActionResult
+from .product_action_scope import DEVICE_BLENDER_ACTIONS
 from .product_update import installed_windows_product
 
 
@@ -618,6 +619,8 @@ class ComputerFilesystemActions:
                 "target_scope": "verified_win32_edit",
                 "fallback": "none",
             }
+
+        classify(tuple(sorted(DEVICE_BLENDER_ACTIONS)), "background", target_scope="managed_blender_session")
 
         execution_mode_unclassified_actions = sorted(
             set(registered_computer_actions) - set(execution_mode_definitions)

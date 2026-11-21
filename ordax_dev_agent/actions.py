@@ -16,6 +16,7 @@ from .projects import load_projects, Project
 from .observations import ObservationActions
 from .references import ReferenceActions
 from .blender_actions import BlenderActions
+from .product_action_scope import DEVICE_BLENDER_OPERATIONS
 from .unity_status_actions import UnityStatusActions
 from .unity_actions import UnityActions
 from .agent_actions import AgentActions
@@ -322,6 +323,9 @@ class ActionRegistry(
             "blender.adoption_install": self.blender_adoption_install,
             "blender.instances": self.blender_instances,
             "blender.adopt": self.blender_adopt,
+            **{"computer.blender_" + name: (
+                lambda payload, operation=name: self._execute_device_blender(operation, payload)
+            ) for name in DEVICE_BLENDER_OPERATIONS},
             "blender.live_start": self.blender_live_start,
             "blender.live_status": self.blender_live_status,
             "blender.live_inspect": self.blender_live_inspect,
@@ -652,6 +656,32 @@ class ActionRegistry(
             return _action_error_result(action, error)
         finally:
             concurrency_lease.release()
+
+    def _execute_device_blender(self, operation: str, payload: dict[str, Any]) -> ActionResult:
+        """Use the existing Blender bridge in a device-owned local workspace.
+
+        No cloud project, Git checkout, arbitrary root or project fallback is involved.
+        The separate capability and Computer policy authorize this before dispatch.
+        The reserved bridge identity cannot collide with a registered project slug.
+        """
+        if operation not in DEVICE_BLENDER_OPERATIONS or "project" in payload or "space_id" in payload:
+            raise ValueError("device Blender does not accept project or Space selectors")
+        if getattr(self._project_execution_local, "project", None) is not None:
+            raise ValueError("device Blender cannot run inside a project scope")
+        state_root = self.config.state_dir.resolve()
+        root = state_root / "blender-workspace"
+        root.mkdir(parents=True, exist_ok=True)
+        if root.resolve() != root or not root.is_dir():
+            raise ValueError("device Blender workspace is not a local directory")
+        # Project is the bridge's existing local filesystem descriptor, not a
+        # registered Product Project. It is never inserted into self.projects.
+        scope = Project(slug="_device_blender", root=root, apps=("blender",))
+        self._project_execution_local.project = scope
+        try:
+            handler = getattr(self, "blender_live_" + operation)
+            return handler({**payload, "project": scope.slug})
+        finally:
+            self._project_execution_local.project = None
 
     @contextmanager
     def verified_project_execution_scope(self, slug: str, root: str | Path):
