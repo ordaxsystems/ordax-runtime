@@ -56,6 +56,32 @@ class ArtifactsListTests(unittest.TestCase):
             self.assertEqual(len(result.data["items"]), 2)
             self.assertTrue(result.data["truncated"])
 
+    def test_listing_stops_before_visiting_later_subtrees(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            host = _Host(Path(tmp))
+            root = host.config.state_dir / "artifacts" / "demo"
+            earlier = root / "a"
+            later = root / "z"
+            earlier.mkdir(parents=True)
+            later.mkdir()
+            (earlier / "0.txt").write_text("0", encoding="utf-8")
+            (earlier / "1.txt").write_text("1", encoding="utf-8")
+            (later / "never.txt").write_text("later", encoding="utf-8")
+            original_iterdir = Path.iterdir
+
+            def bounded_iterdir(folder):
+                if folder == later:
+                    raise AssertionError("unneeded subtree was scanned")
+                return original_iterdir(folder)
+
+            with patch.object(Path, "iterdir", bounded_iterdir):
+                result = host.artifacts_list({"project": "demo", "max_items": 1})
+            self.assertTrue(result.ok, result.summary)
+            self.assertTrue(result.data["truncated"])
+            self.assertEqual([item["relative_path"] for item in result.data["items"]], ["a/0.txt"])
+
     def test_rejects_invalid_limit(self):
         with tempfile.TemporaryDirectory() as tmp:
             host = _Host(Path(tmp))
