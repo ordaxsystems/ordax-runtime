@@ -245,7 +245,7 @@ class ArtifactActions:
             # Keep one authorized read/decode of each original. If the image
             # exceeds the inline budget, re-encode only the composed sheet:
             # do not request the originals again or issue another MCP action.
-            # At most 10 bounded JPEG encodes; preserve legible tile labels
+            # At most 9 bounded JPEG encodes; preserve legible tile labels
             # by never shrinking the sheet below half its initial dimensions.
             data = b""
             rendered = sheet
@@ -256,7 +256,7 @@ class ArtifactActions:
                      max(1, round(sheet.height * scale))),
                     Image.Resampling.LANCZOS,
                 )
-                candidates = (quality, min(quality, 60), min(quality, 40), 30)
+                candidates = (quality, min(quality, 50), 30)
                 for candidate_quality in dict.fromkeys(candidates):
                     buffer = io.BytesIO()
                     rendered.save(buffer, format="JPEG", quality=candidate_quality,
