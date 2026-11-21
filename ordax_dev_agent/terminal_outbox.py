@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -25,6 +26,10 @@ class TerminalOutbox:
         self.root = state_dir / "terminal-outbox" / protocol
         self.protocol = protocol
         self.device_id = device_id
+        # One Runtime owns this Device outbox, but completion and the
+        # asynchronous recovery tick use distinct threads. On Windows a
+        # concurrent read handle can block unlink with WinError 32.
+        self._io_lock = threading.RLock()
 
     @staticmethod
     def _validate_uuid(value: Any, field: str) -> str:
@@ -57,6 +62,10 @@ class TerminalOutbox:
             os.close(directory_fd)
 
     def persist(self, report: dict[str, Any]) -> Path:
+        with self._io_lock:
+            return self._persist_locked(report)
+
+    def _persist_locked(self, report: dict[str, Any]) -> Path:
         if not isinstance(report, dict):
             raise RuntimeError("terminal outbox report must be an object")
         self._validate_uuid(report.get("report_id"), "report_id")
@@ -173,6 +182,12 @@ class TerminalOutbox:
     def pending(
         self, *, on_invalid_entry: Callable[[], None] | None = None,
     ) -> list[tuple[Path, dict[str, Any]]]:
+        with self._io_lock:
+            return self._pending_locked(on_invalid_entry=on_invalid_entry)
+
+    def _pending_locked(
+        self, *, on_invalid_entry: Callable[[], None] | None = None,
+    ) -> list[tuple[Path, dict[str, Any]]]:
         if not self.root.exists():
             return []
         if not self.root.is_dir():
@@ -202,8 +217,9 @@ class TerminalOutbox:
             entries.append((path, report))
         return entries
 
-    @staticmethod
-    def acknowledge(path: Path) -> None:
-        # Cloud acceptance is idempotent. Two delivery paths may both receive
-        # the same success receipt; the second local acknowledgement is benign.
-        path.unlink(missing_ok=True)
+    def acknowledge(self, path: Path) -> None:
+        # Cloud acceptance is idempotent. Two delivery paths may receive the
+        # same receipt. Serialize removal with pending/persist read handles to
+        # avoid Windows sharing violations during concurrent recovery.
+        with self._io_lock:
+            path.unlink(missing_ok=True)
