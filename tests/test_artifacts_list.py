@@ -170,6 +170,34 @@ class ArtifactsListTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertEqual(result.data["error_code"], "artifact_changed")
 
+    def test_image_sheet_rechecks_sources_after_jpeg_encoding(self):
+        from unittest.mock import patch
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            host = _Host(Path(tmp))
+            root = host.project.root / "Artifacts"
+            root.mkdir()
+            original = root / "source.png"
+            Image.new("RGB", (64, 64), "orange").save(original)
+            save_original = Image.Image.save
+            changed = False
+
+            def change_while_encoding(image, fp, *args, **kwargs):
+                nonlocal changed
+                if kwargs.get("format") == "JPEG" and not changed:
+                    original.write_bytes(original.read_bytes() + b"changed")
+                    changed = True
+                return save_original(image, fp, *args, **kwargs)
+
+            with patch.object(Image.Image, "save", change_while_encoding):
+                result = host.artifact_preview({
+                    "project": "demo", "project_artifact_paths": ["source.png"],
+                })
+            self.assertTrue(changed)
+            self.assertFalse(result.ok)
+            self.assertEqual(result.data["error_code"], "artifact_changed")
+
     def test_image_sheet_adapts_high_entropy_batch_without_a_second_request(self):
         import base64
         import hashlib
