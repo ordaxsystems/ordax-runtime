@@ -108,6 +108,68 @@ class ArtifactsListTests(unittest.TestCase):
                     self.assertEqual(tuple(data["thumbnail_size"]), sheet.size)
                 print(f"sheet images={count} unique={data['unique_image_count']} source_bytes={data['source_size_bytes']} sheet_bytes={data['size_bytes']} elapsed_ms={data['processing_ms']}")
 
+    def test_image_sheet_reads_repeated_authorized_path_once(self):
+        from unittest.mock import patch
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            host = _Host(Path(tmp))
+            root = host.project.root / "Artifacts"
+            root.mkdir()
+            image = root / "same.png"
+            Image.new("RGB", (64, 64), "orange").save(image)
+            source_size = image.stat().st_size
+            original_open = Path.open
+            reads = []
+
+            def counting_open(path, *args, **kwargs):
+                if path == image and args and args[0] == "rb":
+                    reads.append(path)
+                return original_open(path, *args, **kwargs)
+
+            with patch.object(Path, "open", counting_open):
+                result = host.artifact_preview({
+                    "project": "demo",
+                    "project_artifact_paths": ["same.png"] * 4,
+                })
+            self.assertTrue(result.ok, result.summary)
+            self.assertEqual(len(reads), 1)
+            self.assertEqual(result.data["image_count"], 4)
+            self.assertEqual(result.data["unique_image_count"], 1)
+            self.assertEqual(result.data["reused_path_count"], 3)
+            self.assertEqual(result.data["source_size_bytes"], 4 * source_size)
+            self.assertEqual(result.data["source_read_bytes"], source_size)
+            self.assertEqual([item["tile_id"] for item in result.data["items"]], ["I001"] * 4)
+
+    def test_image_sheet_rejects_changed_cached_original(self):
+        from unittest.mock import patch
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            host = _Host(Path(tmp))
+            root = host.project.root / "Artifacts"
+            root.mkdir()
+            image = root / "same.png"
+            Image.new("RGB", (64, 64), "orange").save(image)
+            original_resolve = host._artifact_path
+            resolutions = 0
+
+            def change_on_repeat(payload):
+                nonlocal resolutions
+                result = original_resolve(payload)
+                resolutions += 1
+                if resolutions == 2:
+                    image.write_bytes(image.read_bytes() + b"changed")
+                return result
+
+            with patch.object(host, "_artifact_path", side_effect=change_on_repeat):
+                result = host.artifact_preview({
+                    "project": "demo",
+                    "project_artifact_paths": ["same.png", "same.png"],
+                })
+            self.assertFalse(result.ok)
+            self.assertEqual(result.data["error_code"], "artifact_changed")
+
     def test_image_sheet_adapts_high_entropy_batch_without_a_second_request(self):
         import base64
         import hashlib
