@@ -13,7 +13,7 @@ import uuid
 from ordax_dev_agent.orchestrator_app_bridge import (
     OrchestratorAppReadClient, OrchestratorBridgeUnavailable, ExpectedOrchestratorIdentity,
     VerifiedOrchestratorReadAuthorization, InheritedOrchestratorPipe, READ_OPERATIONS,
-    READ_CAPABILITY, SCHEMA, CONTRACT_SHA256, LEASE_RENEWAL, _canonical,
+    READ_CAPABILITY, SCHEMA, CONTRACT_SHA256, LEASE_RENEWAL, _canonical, _CONTRACT,
 )
 
 
@@ -61,6 +61,9 @@ class OrchestratorHostTests(unittest.TestCase):
         self.assertEqual(lock["projectionSha256"], CONTRACT_SHA256)
         self.assertNotIn(b"\r\n", (root / "ordax_dev_agent/assets/forge_app_contract.json").read_bytes())
         self.assertEqual(len(READ_OPERATIONS), 7)
+        self.assertEqual(len(_CONTRACT["tools"]), 7)
+        self.assertTrue(all(tool["readOnly"] is True for tool in _CONTRACT["tools"]))
+        self.assertEqual({tool["operation"] for tool in _CONTRACT["tools"]}, READ_OPERATIONS)
         self.assertNotIn("work_send", READ_OPERATIONS)
         self.assertNotIn("orchestrator_chat", READ_OPERATIONS)
 
