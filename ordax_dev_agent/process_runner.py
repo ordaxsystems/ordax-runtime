@@ -89,52 +89,68 @@ def run_command(
     )
     timed_out = False
     cleanup_unverified = False
+    timeout_phase: str | None = None
     try:
         stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as error:
         timed_out = True
-        if sys.platform == "win32":
-            # The foreground Product lane is serial. Never hold it forever
-            # after the caller's deadline while Windows descendants still own
-            # inherited stdout/stderr pipes. Kill only this process tree.
-            try:
-                killed = subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=10,
-                    shell=False,
-                )
-                cleanup_unverified = killed.returncode != 0
-            except (subprocess.TimeoutExpired, OSError):
-                cleanup_unverified = True
-        else:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        try:
-            stdout, stderr = process.communicate(timeout=3)
-        except subprocess.TimeoutExpired:
-            # Even after taskkill, grandchildren may hold inherited pipes.
-            # A final communicate() WITHOUT a timeout deadlocks this Runtime's
-            # only claim lane. Close our own handles and bound process reaping.
+        # On Windows, the command may have already exited while a descendant
+        # retains an inherited stdout/stderr pipe. In that case taskkill /PID
+        # targets a dead parent (or a recycled PID), not the pipe holder.
+        parent_already_exited = sys.platform == "win32" and process.poll() is not None
+        timeout_phase = "pipe_open_after_parent_exit" if parent_already_exited else "process_wait"
+        if parent_already_exited:
+            # Fail closed and free the claim lane without touching other PIDs.
+            # Preserve the bytes already captured before the deadline.
             cleanup_unverified = True
-            try:
-                process.kill()
-            except OSError:
-                pass
+            stdout = error.stdout or b""
+            stderr = error.stderr or b""
             for stream in (process.stdout, process.stderr):
                 if stream is not None:
                     try:
                         stream.close()
                     except OSError:
                         pass
+        else:
+            if sys.platform == "win32":
+                # Kill only the still-live foreground process tree.
+                try:
+                    killed = subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                        shell=False,
+                    )
+                    cleanup_unverified = killed.returncode != 0
+                except (subprocess.TimeoutExpired, OSError):
+                    cleanup_unverified = True
+            else:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             try:
-                process.wait(timeout=2)
+                stdout, stderr = process.communicate(timeout=3)
             except subprocess.TimeoutExpired:
-                pass
-            stdout, stderr = b"", b""
+                # Descendants may still hold inherited pipes. Closing only
+                # our handles avoids an unbounded communicate() deadlock.
+                cleanup_unverified = True
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except OSError:
+                            pass
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+                stdout, stderr = error.stdout or b"", error.stderr or b""
 
     raw_stdout = stdout or b""
     raw_stderr = stderr or b""
@@ -161,6 +177,7 @@ def run_command(
         "command": command,
         "timed_out": timed_out,
         "timeout_seconds": timeout if timed_out else None,
+        **({"timeout_phase": timeout_phase} if timed_out else {}),
         # A failed tree kill is not a successful cleanup. Keep the caller
         # informed without exposing another process's path or identity.
         **({"cleanup_unverified": True} if cleanup_unverified else {}),
