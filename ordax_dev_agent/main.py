@@ -840,6 +840,17 @@ def _start_local_watchdog(
         print(f"local watchdog script missing: {script}", file=sys.stderr)
         return None
 
+    # The watchdog may outlive the packaged agent during an atomic upgrade.
+    # Its process working directory must NEVER hold an open directory handle
+    # inside the package root that the canonical updater needs to rename.
+    watchdog_cwd = repo_root
+    if packaged_root:
+        watchdog_cwd = config.state_dir.resolve()
+        package_path = repo_root.resolve()
+        if watchdog_cwd == package_path or package_path in watchdog_cwd.parents:
+            raise ValueError("Packaged watchdog state directory cannot be inside Runtime installation")
+        watchdog_cwd.mkdir(parents=True, exist_ok=True)
+
     command = [
         "powershell.exe",
         "-NoProfile",
@@ -860,7 +871,7 @@ def _start_local_watchdog(
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         process = subprocess.Popen(
             command,
-            cwd=str(repo_root),
+            cwd=str(watchdog_cwd),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
