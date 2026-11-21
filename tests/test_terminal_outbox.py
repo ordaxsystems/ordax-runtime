@@ -137,6 +137,47 @@ class TerminalOutboxTests(unittest.TestCase):
             outbox.acknowledge(path)
             outbox.acknowledge(path)
 
+    def test_acknowledge_waits_for_pending_reader_before_removing_receipt(self) -> None:
+        """Windows cannot unlink an open receipt while recovery scans it."""
+        with tempfile.TemporaryDirectory() as raw:
+            outbox = TerminalOutbox(Path(raw), "product-http-v1", DEVICE_ID)
+            expected = report()
+            receipt = outbox.persist(expected)
+            read_entered = threading.Event()
+            release_reader = threading.Event()
+            ack_entered = threading.Event()
+            ack_finished = threading.Event()
+            real_read = outbox._read_path
+
+            def paused_read(path: Path):
+                read_entered.set()
+                if not release_reader.wait(timeout=5):
+                    raise AssertionError("outbox read never released")
+                return real_read(path)
+
+            def acknowledge_concurrently():
+                ack_entered.set()
+                outbox.acknowledge(receipt)
+                ack_finished.set()
+
+            try:
+                with mock.patch.object(outbox, "_read_path", side_effect=paused_read):
+                    with ThreadPoolExecutor(max_workers=2) as workers:
+                        scan = workers.submit(outbox.pending)
+                        self.assertTrue(read_entered.wait(timeout=3))
+                        acknowledgement = workers.submit(acknowledge_concurrently)
+                        self.assertTrue(ack_entered.wait(timeout=3))
+                        self.assertFalse(ack_finished.wait(timeout=0.2),
+                                         "must not delete a receipt held open by recovery")
+                        release_reader.set()
+                        self.assertEqual(scan.result(timeout=5), [(receipt, expected)])
+                        acknowledgement.result(timeout=5)
+            finally:
+                release_reader.set()
+            self.assertTrue(ack_finished.is_set())
+            self.assertFalse(receipt.exists())
+            self.assertEqual(outbox.pending(), [])
+
     def test_native_outbox_flushes_new_receipt_directory_entry(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             outbox = TerminalOutbox(Path(raw), "cloudflare-v3", DEVICE_ID)
