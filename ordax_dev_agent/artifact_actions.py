@@ -281,12 +281,6 @@ class ArtifactActions:
                 items.append({"image_id": image_id, "tile_id": tile_id,
                               "project_artifact_path": resolved_relative,
                               "source_sha256": digest, "source_size_bytes": size})
-            # A mutable original must not be reported as a stable SHA-backed
-            # preview if it was replaced while other tiles were rendered.
-            for cached_path, (snapshot, _, _) in read_cache.items():
-                if version(cached_path.stat()) != snapshot:
-                    return ActionResult(False, "artifact changed during batch; retry",
-                                        {"error_code": "artifact_changed"})
             final_rows = math.ceil(len(seen) / columns)
             if final_rows < rows:
                 sheet = sheet.crop((0, 0, sheet.width, final_rows * cell_height))
@@ -318,6 +312,12 @@ class ArtifactActions:
             if len(data) > max_bytes:
                 return ActionResult(False, "sheet exceeds preview byte budget even after bounded adaptation; reduce batch size",
                                     {"error_code": "artifact_sheet_too_large"})
+            # A mutable original must not be reported as a stable SHA-backed
+            # preview if it was replaced while other tiles were rendered.
+            for cached_path, (snapshot, _, _) in read_cache.items():
+                if version(cached_path.stat()) != snapshot:
+                    return ActionResult(False, "artifact changed during batch; retry",
+                                        {"error_code": "artifact_changed"})
             return ActionResult(True, "artifact image sheet ready", {
                 "items": items, "image_count": len(items), "unique_image_count": len(seen),
                 "source_size_bytes": source_bytes, "unique_source_size_bytes": unique_source_bytes,
