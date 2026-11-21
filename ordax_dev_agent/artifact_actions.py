@@ -54,12 +54,19 @@ class ArtifactActions:
         items: list[dict[str, Any]] = []
         truncated = False
 
+        def ordered_files(folder: Path):
+            # Sort one directory at a time and stop at max_items + 1.
+            # Sorting the entire recursive tree scales poorly for galleries.
+            for candidate in sorted(folder.iterdir()):
+                if candidate.is_dir() and not candidate.is_symlink():
+                    yield from ordered_files(candidate)
+                elif candidate.is_file():
+                    yield candidate
+
         for source, root in roots:
             if not root.is_dir():
                 continue
-            for candidate in sorted(root.rglob("*")):
-                if not candidate.is_file():
-                    continue
+            for candidate in ordered_files(root):
                 try:
                     resolved = candidate.resolve()
                     relative = resolved.relative_to(root)
@@ -194,26 +201,72 @@ class ArtifactActions:
             project = self._project(payload)
             root = (project.root / "Artifacts").resolve()
             seen: dict[str, str] = {}
+            # Same-path repeats within one authorized operation reuse the digest
+            # and thumbnail. Never cache an authorization decision across calls.
+            read_cache: dict[Path, tuple[tuple[int, int, int, int, int], str, int]] = {}
             items: list[dict[str, Any]] = []
             source_bytes = 0
+            source_read_bytes = 0
+            reused_path_count = 0
             relative_path_bytes = 0
             unique_source_bytes = 0
+
+            def identity(stat: os.stat_result) -> tuple[int, int, int, int]:
+                return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+            def version(stat: os.stat_result) -> tuple[int, int, int, int, int]:
+                return (*identity(stat), stat.st_ctime_ns)
+
             for index, relative in enumerate(paths, 1):
+                # Resolve and authorize every entry, including cache hits.
                 path = self._artifact_path({"project": payload.get("project"), "project_artifact_path": relative})
                 if isinstance(path, ActionResult):
                     return path
                 if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
                     return ActionResult(False, "batch supports PNG, JPEG and WebP images")
-                limit = min(32 * 1024 * 1024, 256 * 1024 * 1024 - source_bytes)
-                with path.open("rb") as handle:
-                    raw = handle.read(limit + 1)
-                if len(raw) > limit or not raw:
-                    return ActionResult(False, "batch source byte budget exceeded or empty image")
-                source_bytes += len(raw)
-                digest = hashlib.sha256(raw).hexdigest()
+                resolved_relative = path.relative_to(root).as_posix()
+                relative_path_bytes += len(resolved_relative.encode("utf-8"))
+                if relative_path_bytes > 16384:
+                    return ActionResult(False, "batch resolved path byte budget exceeded")
+
+                current = path.stat()
+                observed = version(current)
+                cached = read_cache.get(path)
+                raw: bytes | None = None
+                if cached is not None:
+                    if cached[0] != observed:
+                        return ActionResult(False, "artifact changed during batch; retry",
+                                            {"error_code": "artifact_changed"})
+                    digest, size = cached[1], cached[2]
+                    reused_path_count += 1
+                else:
+                    limit = min(32 * 1024 * 1024, 256 * 1024 * 1024 - source_read_bytes)
+                    if limit <= 0:
+                        return ActionResult(False, "batch source byte budget exceeded")
+                    with path.open("rb") as handle:
+                        opened = os.fstat(handle.fileno())
+                        if identity(opened) != identity(current):
+                            return ActionResult(False, "artifact changed before batch read",
+                                                {"error_code": "artifact_changed"})
+                        raw = handle.read(limit + 1)
+                        if (identity(os.fstat(handle.fileno())) != identity(opened)
+                                or version(path.stat()) != observed):
+                            return ActionResult(False, "artifact changed during batch read",
+                                                {"error_code": "artifact_changed"})
+                    if len(raw) > limit or not raw:
+                        return ActionResult(False, "batch source byte budget exceeded or empty image")
+                    size = len(raw)
+                    source_read_bytes += size
+                    digest = hashlib.sha256(raw).hexdigest()
+                    read_cache[path] = (observed, digest, size)
+
+                source_bytes += size
                 image_id = f"I{index:03}"
                 tile_id = seen.get(digest)
                 if tile_id is None:
+                    if raw is None:
+                        return ActionResult(False, "artifact changed during batch; retry",
+                                            {"error_code": "artifact_changed"})
                     tile_id = image_id
                     tile_index = len(seen)
                     with Image.open(io.BytesIO(raw)) as image:
@@ -231,14 +284,10 @@ class ArtifactActions:
                                            y + (cell_height - label_height - tile.height) // 2))
                         draw.text((x + 4, y + cell_height - label_height + 3), tile_id, fill="black")
                     seen[digest] = tile_id
-                    unique_source_bytes += len(raw)
-                resolved_relative = path.relative_to(root).as_posix()
-                relative_path_bytes += len(resolved_relative.encode("utf-8"))
-                if relative_path_bytes > 16384:
-                    return ActionResult(False, "batch resolved path byte budget exceeded")
+                    unique_source_bytes += size
                 items.append({"image_id": image_id, "tile_id": tile_id,
                               "project_artifact_path": resolved_relative,
-                              "source_sha256": digest, "source_size_bytes": len(raw)})
+                              "source_sha256": digest, "source_size_bytes": size})
             final_rows = math.ceil(len(seen) / columns)
             if final_rows < rows:
                 sheet = sheet.crop((0, 0, sheet.width, final_rows * cell_height))
@@ -270,9 +319,16 @@ class ArtifactActions:
             if len(data) > max_bytes:
                 return ActionResult(False, "sheet exceeds preview byte budget even after bounded adaptation; reduce batch size",
                                     {"error_code": "artifact_sheet_too_large"})
+            # A mutable original must not be reported as a stable SHA-backed
+            # preview if it was replaced while other tiles were rendered.
+            for cached_path, (snapshot, _, _) in read_cache.items():
+                if version(cached_path.stat()) != snapshot:
+                    return ActionResult(False, "artifact changed during batch; retry",
+                                        {"error_code": "artifact_changed"})
             return ActionResult(True, "artifact image sheet ready", {
                 "items": items, "image_count": len(items), "unique_image_count": len(seen),
                 "source_size_bytes": source_bytes, "unique_source_size_bytes": unique_source_bytes,
+                "source_read_bytes": source_read_bytes, "reused_path_count": reused_path_count,
                 "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
                 "mime_type": "image/jpeg", "format": "jpeg", "thumbnail": True,
                 "thumbnail_size": [rendered.width, rendered.height],

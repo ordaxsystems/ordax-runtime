@@ -56,6 +56,32 @@ class ArtifactsListTests(unittest.TestCase):
             self.assertEqual(len(result.data["items"]), 2)
             self.assertTrue(result.data["truncated"])
 
+    def test_listing_stops_before_visiting_later_subtrees(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            host = _Host(Path(tmp))
+            root = host.config.state_dir / "artifacts" / "demo"
+            earlier = root / "a"
+            later = root / "z"
+            earlier.mkdir(parents=True)
+            later.mkdir()
+            (earlier / "0.txt").write_text("0", encoding="utf-8")
+            (earlier / "1.txt").write_text("1", encoding="utf-8")
+            (later / "never.txt").write_text("later", encoding="utf-8")
+            original_iterdir = Path.iterdir
+
+            def bounded_iterdir(folder):
+                if folder == later:
+                    raise AssertionError("unneeded subtree was scanned")
+                return original_iterdir(folder)
+
+            with patch.object(Path, "iterdir", bounded_iterdir):
+                result = host.artifacts_list({"project": "demo", "max_items": 1})
+            self.assertTrue(result.ok, result.summary)
+            self.assertTrue(result.data["truncated"])
+            self.assertEqual([item["relative_path"] for item in result.data["items"]], ["a/0.txt"])
+
     def test_rejects_invalid_limit(self):
         with tempfile.TemporaryDirectory() as tmp:
             host = _Host(Path(tmp))
@@ -107,6 +133,96 @@ class ArtifactsListTests(unittest.TestCase):
                 with Image.open(io.BytesIO(binary)) as sheet:
                     self.assertEqual(tuple(data["thumbnail_size"]), sheet.size)
                 print(f"sheet images={count} unique={data['unique_image_count']} source_bytes={data['source_size_bytes']} sheet_bytes={data['size_bytes']} elapsed_ms={data['processing_ms']}")
+
+    def test_image_sheet_reads_repeated_authorized_path_once(self):
+        from unittest.mock import patch
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            host = _Host(Path(tmp))
+            root = host.project.root / "Artifacts"
+            root.mkdir()
+            image = root / "same.png"
+            Image.new("RGB", (64, 64), "orange").save(image)
+            source_size = image.stat().st_size
+            original_open = Path.open
+            reads = []
+
+            def counting_open(path, *args, **kwargs):
+                if args and args[0] == "rb" and path.samefile(image):
+                    reads.append(path)
+                return original_open(path, *args, **kwargs)
+
+            with patch.object(Path, "open", counting_open):
+                result = host.artifact_preview({
+                    "project": "demo",
+                    "project_artifact_paths": ["same.png"] * 4,
+                })
+            self.assertTrue(result.ok, result.summary)
+            self.assertEqual(len(reads), 1)
+            self.assertEqual(result.data["image_count"], 4)
+            self.assertEqual(result.data["unique_image_count"], 1)
+            self.assertEqual(result.data["reused_path_count"], 3)
+            self.assertEqual(result.data["source_size_bytes"], 4 * source_size)
+            self.assertEqual(result.data["source_read_bytes"], source_size)
+            self.assertEqual([item["tile_id"] for item in result.data["items"]], ["I001"] * 4)
+
+    def test_image_sheet_rejects_changed_cached_original(self):
+        from unittest.mock import patch
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            host = _Host(Path(tmp))
+            root = host.project.root / "Artifacts"
+            root.mkdir()
+            image = root / "same.png"
+            Image.new("RGB", (64, 64), "orange").save(image)
+            original_resolve = host._artifact_path
+            resolutions = 0
+
+            def change_on_repeat(payload):
+                nonlocal resolutions
+                result = original_resolve(payload)
+                resolutions += 1
+                if resolutions == 2:
+                    image.write_bytes(image.read_bytes() + b"changed")
+                return result
+
+            with patch.object(host, "_artifact_path", side_effect=change_on_repeat):
+                result = host.artifact_preview({
+                    "project": "demo",
+                    "project_artifact_paths": ["same.png", "same.png"],
+                })
+            self.assertFalse(result.ok)
+            self.assertEqual(result.data["error_code"], "artifact_changed")
+
+    def test_image_sheet_rechecks_sources_after_jpeg_encoding(self):
+        from unittest.mock import patch
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            host = _Host(Path(tmp))
+            root = host.project.root / "Artifacts"
+            root.mkdir()
+            original = root / "source.png"
+            Image.new("RGB", (64, 64), "orange").save(original)
+            save_original = Image.Image.save
+            changed = False
+
+            def change_while_encoding(image, fp, *args, **kwargs):
+                nonlocal changed
+                if kwargs.get("format") == "JPEG" and not changed:
+                    original.write_bytes(original.read_bytes() + b"changed")
+                    changed = True
+                return save_original(image, fp, *args, **kwargs)
+
+            with patch.object(Image.Image, "save", change_while_encoding):
+                result = host.artifact_preview({
+                    "project": "demo", "project_artifact_paths": ["source.png"],
+                })
+            self.assertTrue(changed)
+            self.assertFalse(result.ok)
+            self.assertEqual(result.data["error_code"], "artifact_changed")
 
     def test_image_sheet_adapts_high_entropy_batch_without_a_second_request(self):
         import base64

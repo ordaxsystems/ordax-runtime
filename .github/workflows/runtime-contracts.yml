@@ -183,6 +183,7 @@ jobs:
           tests.test_agent_recovery_governance_contract
           tests.test_agent_self_heal_scripts
           tests.test_product_gateway
+          tests.test_artifacts_list
           tests.test_orchestrator_app_bridge
           tests.test_orchestrator_product_authority
           tests.test_orchestrator_product_execution
