@@ -940,7 +940,23 @@ def main() -> int:
         from .desktop_host_main import main as desktop_main
         return desktop_main()
     _startup_log(None, f"MAIN_ENTER pid={os.getpid()} version={__version__}")
-    return run(AgentConfig.from_env())
+    config = AgentConfig.from_env()
+    if sys.platform == "win32":
+        from .windows_project_binding import (
+            windows_project_links, resolve_windows_project_workspace,
+        )
+
+        # The existing agent-settings.json projects allowlist is the Windows
+        # local Project Catalog. Cloud scope IDs must be explicit and already
+        # registered; no Git basename -> project binding inference.
+        return run(
+            config,
+            project_binding_provider=lambda: windows_project_links(config),
+            project_binding_resolver=lambda link, repo: resolve_windows_project_workspace(
+                config, link, repo,
+            ),
+        )
+    return run(config)
 
 
 def _native_local_access_granted(provider: Callable[[], bool] | None) -> bool:
@@ -1025,6 +1041,7 @@ def run(
     orchestrator_installation_provider: Callable | None = None,
     native_access_enabled: Callable[[], bool] | None = None,
     project_binding_provider: Callable[[], dict[str, Any] | None] | None = None,
+    project_binding_resolver: Callable[[dict[str, str], str], Any] | None = None,
     status_server_ready: Callable[[int], None] | None = None,
 ) -> int:
     """Run the canonical lifecycle with host-owned configuration and identity.
@@ -1265,6 +1282,8 @@ def run(
         }
         if project_binding_provider is not None:
             control_kwargs["project_binding_provider"] = project_binding_provider
+        if project_binding_resolver is not None:
+            control_kwargs["project_binding_resolver"] = project_binding_resolver
         control = build_control_plane(config, **control_kwargs)
     except Exception:
         close_status_server()

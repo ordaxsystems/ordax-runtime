@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .config import AgentConfig
+from .projects import Project
 from .product_device_control_plane import ProductDeviceControlPlane
 
 
@@ -11,6 +12,7 @@ def build_control_plane(
     *,
     device_credential_provider: Callable[[], dict[str, str] | None] | None = None,
     project_binding_provider: Callable[[], dict[str, Any] | None] | None = None,
+    project_binding_resolver: Callable[[dict[str, str], str], Project] | None = None,
 ) -> ProductDeviceControlPlane:
     """Build the single canonical Product device transport.
 
@@ -24,4 +26,5 @@ def build_control_plane(
         config,
         device_credential_provider=device_credential_provider,
         project_binding_provider=project_binding_provider,
+        project_binding_resolver=project_binding_resolver,
     )
