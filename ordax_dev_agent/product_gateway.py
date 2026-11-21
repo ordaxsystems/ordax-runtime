@@ -190,6 +190,7 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
                 "project",
                 "artifact_name",
                 "project_artifact_path",
+                "project_artifact_paths",
                 "max_bytes",
                 "thumbnail",
                 "max_width",

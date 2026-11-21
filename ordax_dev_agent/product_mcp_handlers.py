@@ -540,24 +540,27 @@ def artifact_preview(
     project_artifact_path: str | None = None,
     thumbnail: bool = False,
     max_bytes: int = 262144,
-    max_width: int = 480,
-    max_height: int = 320,
+    max_width: int | None = None,
+    max_height: int | None = None,
     quality: int = 72,
     space_id: str | None = None,
+    project_artifact_paths: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Read a bounded preview of one granted artifact."""
+    """Read one granted artifact or a labeled sheet of project artifacts."""
     arguments: dict[str, Any] = {
         "project": project,
         "thumbnail": thumbnail,
         "max_bytes": max_bytes,
-        "max_width": max_width,
-        "max_height": max_height,
+        "max_width": max_width if max_width is not None else (1600 if project_artifact_paths is not None else 480),
+        "max_height": max_height if max_height is not None else (1200 if project_artifact_paths is not None else 320),
         "quality": quality,
     }
     if artifact_name is not None:
         arguments["artifact_name"] = artifact_name
     if project_artifact_path is not None:
         arguments["project_artifact_path"] = project_artifact_path
+    if project_artifact_paths is not None:
+        arguments["project_artifact_paths"] = project_artifact_paths
     return _invoke(
         device_id=device_id,
         action="artifact.preview",

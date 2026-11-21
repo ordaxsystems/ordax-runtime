@@ -200,7 +200,7 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(
         name="artifact_preview",
         action="artifact.preview",
-        description="Read a bounded preview of a granted project artifact.",
+        description="Read a bounded preview of a granted project artifact or a labeled image sheet.",
     ),
     ProductMcpToolSpec(name="project_text_write", action="project.text_write", effect="write", description="Write a granted project text file with SHA-256 concurrency protection."),
     ProductMcpToolSpec(name="project_text_patch", action="project.text_patch", effect="write", description="Patch a granted project text file with exact-match and SHA-256 guards."),
