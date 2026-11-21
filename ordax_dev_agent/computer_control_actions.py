@@ -489,38 +489,15 @@ class ComputerControlActions:
                 "size_bytes": original_size,
             }
             if include_preview:
-                # Explicit opt-in avoids unnecessary binary receipts. Reuse
-                # captured pixels without a second capture or a new storage service.
-                import base64
-                import hashlib
-                import io
-                from PIL import Image
+                # Reuse the same captured pixels as Chromium; no extra grab.
+                from .image_preview import bounded_jpeg_preview
 
-                preview = image.copy()
-                preview.thumbnail((960, 720), Image.Resampling.LANCZOS)
-                if preview.mode != "RGB":
-                    preview = preview.convert("RGB")
-                jpeg = b""
-                for quality in (72, 58, 42, 30):
-                    buffer = io.BytesIO()
-                    preview.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True)
-                    jpeg = buffer.getvalue()
-                    if len(jpeg) <= 262144:
-                        break
-                    preview.thumbnail((max(64, preview.width * 3 // 4),
-                                       max(64, preview.height * 3 // 4)), Image.Resampling.LANCZOS)
-                if not jpeg or len(jpeg) > 262144:
+                try:
+                    result.update({"source_size_bytes": original_size,
+                                   **bounded_jpeg_preview(image)})
+                except ValueError:
                     return ActionResult(False, "screenshot preview byte budget exceeded",
                                         {"error_code": "screenshot_preview_too_large"})
-                result.update({
-                    "source_size_bytes": original_size,
-                    "size_bytes": len(jpeg),
-                    "sha256": hashlib.sha256(jpeg).hexdigest(),
-                    "mime_type": "image/jpeg",
-                    "thumbnail": True,
-                    "thumbnail_size": [preview.width, preview.height],
-                    "base64": base64.b64encode(jpeg).decode("ascii"),
-                })
         except Exception as error:
             return ActionResult(False, f"desktop screenshot failed: {type(error).__name__}: {error}")
         return ActionResult(True, "desktop screenshot captured", result)

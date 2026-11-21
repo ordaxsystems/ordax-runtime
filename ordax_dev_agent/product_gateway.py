@@ -222,7 +222,7 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
     "browser.screenshot": ProductActionSpec(
         name="browser.screenshot",
         local_action="browser.screenshot",
-        allowed_fields=frozenset({"project", "session_id", "tab_id", "width", "height"}),
+        allowed_fields=frozenset({"project", "session_id", "tab_id", "width", "height", "include_preview"}),
     ),
     "computer.windows": ProductActionSpec(
         name="computer.windows",
