@@ -85,7 +85,15 @@ def _canonical_uuid(value: object) -> bool:
 
 
 def _canonical_project_binding_links(value: object) -> list[dict[str, str]]:
-    """Validate only the OS-owned explicit Project Catalog link projection."""
+    """Validate a host-owned Project Catalog, never an action payload.
+
+    Both host adapters project only local opaque refs and exact cloud scopes.
+    The underlying local checkout is verified again by that host's resolver.
+    """
+    if isinstance(value, dict) and value.get("schema") == "ordax.windows-project-links/1":
+        from .windows_project_binding import validate_windows_project_links
+
+        return validate_windows_project_links(value)
     if not isinstance(value, dict) or set(value) != {
         "schema", "host", "persistence", "links",
     }:
@@ -232,6 +240,7 @@ class ProductDeviceControlPlane:
         *,
         device_credential_provider: Callable[[], dict[str, str] | None] | None = None,
         project_binding_provider: Callable[[], dict[str, Any] | None] | None = None,
+        project_binding_resolver: Callable[[dict[str, str], str], Project] | None = None,
     ):
         if not config.product_mcp_url:
             raise RuntimeError("ORDAX_PRODUCT_MCP_URL is required for the canonical device transport.")
@@ -241,6 +250,12 @@ class ProductDeviceControlPlane:
         if project_binding_provider is not None and not callable(project_binding_provider):
             raise TypeError("Project binding provider must be callable")
         self._project_binding_provider = project_binding_provider
+        if project_binding_resolver is not None and (
+                project_binding_provider is None or not callable(project_binding_resolver)):
+            raise TypeError("Project binding resolver requires a callable provider")
+        self._project_binding_resolver = (
+            project_binding_resolver or resolve_desktop_project_workspace
+        )
         # A timed-out confirmation is never replayed blindly. The next
         # reconciliation must first re-read the authoritative pending intents.
         self._uncertain_project_binding_confirmations: set[str] = set()
@@ -507,14 +522,20 @@ class ProductDeviceControlPlane:
                 pass
 
     def reconcile_project_bindings(self) -> int:
-        """Confirm only OS Project Catalog links for current Platform intents.
+        """Confirm only explicit host Project Catalog links for Owner intents.
 
-        The repository carried by the intent is validated but is deliberately
-        not used to derive a local identity. The only accepted local ref is an
-        explicit durable OS link matching both cloud Project and Space.
+        Read the local mapping BEFORE contacting PostgreSQL: without any
+        registered Project/Space link there is nothing safe to confirm, so
+        avoid a needless database query on every device heartbeat.
         """
         provider = self._project_binding_provider
         if provider is None:
+            return 0
+        snapshot = provider()
+        if snapshot is None:
+            return 0
+        links = _canonical_project_binding_links(snapshot)
+        if not links:
             return 0
         raw = self._post(
             "project-binding-intents",
@@ -538,10 +559,6 @@ class ProductDeviceControlPlane:
         if not intents:
             return 0
 
-        snapshot = provider()
-        if snapshot is None:
-            return 0
-        links = _canonical_project_binding_links(snapshot)
         by_scope = {
             (link["cloudProjectId"], link["spaceId"]): link
             for link in links
@@ -555,7 +572,7 @@ class ProductDeviceControlPlane:
                 # A local Project Catalog id is not enough. Confirm only after
                 # the private File Space workspace exists and its Git origin
                 # independently matches the server-authoritative repository.
-                local_project = resolve_desktop_project_workspace(
+                local_project = self._project_binding_resolver(
                     link, intent["repository_full_name"],
                 )
             except (OSError, ValueError):
@@ -620,7 +637,7 @@ class ProductDeviceControlPlane:
         if len(matches) != 1:
             raise RuntimeError("OS Project Catalog binding is missing or ambiguous")
         try:
-            local_project = resolve_desktop_project_workspace(
+            local_project = self._project_binding_resolver(
                 matches[0], repository_full_name,
             )
         except (OSError, ValueError) as error:
