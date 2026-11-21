@@ -1101,6 +1101,15 @@ def run(
         "started_at": time.time(),
         "job_phase": "idle",
         "jobs_completed": 0,
+        # In-memory transport attempt counters for local /status only.
+        # These are NOT SQL query counts and never make remote requests.
+        "product_claim_attempts": 0,
+        "product_empty_claims": 0,
+        "product_jobs_claimed": 0,
+        "product_heartbeat_attempts": 0,
+        "product_heartbeat_successes": 0,
+        "product_catalog_reconcile_submissions": 0,
+        "product_wake_reconciliations": 0,
         "active_jobs": {},
         "active_job_count": 0,
         "max_concurrent_jobs": _MAX_CONCURRENT_PRODUCT_JOBS,
@@ -1422,6 +1431,7 @@ def run(
                     )
 
                 if now >= next_heartbeat:
+                    runtime["product_heartbeat_attempts"] += 1
                     with runtime_lock:
                         has_active_jobs = bool(runtime.get("active_jobs"))
                     heartbeat_healthy = _product_heartbeat_tick(
@@ -1437,6 +1447,8 @@ def run(
                     # Use the existing canonical reconciler on one independent
                     # thread; never start another while it is still running.
                     # Failed presence must not schedule fresh onboarding I/O.
+                    if heartbeat_healthy:
+                        runtime["product_heartbeat_successes"] += 1
                     if heartbeat_healthy and project_binding_future is None:
                         reconcile_project_bindings = getattr(
                             control, "reconcile_project_bindings", None,
@@ -1445,6 +1457,7 @@ def run(
                             project_binding_future = control_maintenance_executor.submit(
                                 reconcile_project_bindings,
                             )
+                            runtime["product_catalog_reconcile_submissions"] += 1
                     with runtime_lock:
                         if runtime.get("active_jobs") and runtime.get("state") == "ready":
                             runtime["state"] = "busy"
@@ -1456,6 +1469,7 @@ def run(
                     )
 
                 if _consume_product_wake(control, wake_listener):
+                    runtime["product_wake_reconciliations"] += 1
                     next_claim_due = 0.0
 
                 if len(job_futures) >= _MAX_CONCURRENT_PRODUCT_JOBS:
@@ -1477,10 +1491,12 @@ def run(
                     )
                     continue
 
+                runtime["product_claim_attempts"] += 1
                 job = control.claim_next_job()
                 transport_failures = 0
                 runtime.pop("transport_retry_seconds", None)
                 if job is None:
+                    runtime["product_empty_claims"] += 1
                     idle_claim_misses += 1
                     # Stay very responsive during interactive work, then ease
                     # toward the configured ceiling while the agent is idle.
@@ -1510,6 +1526,7 @@ def run(
                     )
                     continue
 
+                runtime["product_jobs_claimed"] += 1
                 idle_claim_misses = 0
                 next_claim_due = 0.0
                 job_runtime = {
