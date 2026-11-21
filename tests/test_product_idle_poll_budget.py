@@ -127,13 +127,31 @@ class ProductIdlePollBudgetTests(unittest.TestCase):
             remaining_seconds -= product_idle_claim_delay_seconds(misses, 12)
             misses += 1
             requests += 1
-        # Account for two SQL roundtrips per claim and one heartbeat every
-        # 30 seconds, each conservatively estimated at two DB statements.
-        upper_bound_queries = requests * 2 + 2880 * 2
-        self.assertLess(upper_bound_queries, 16000)
-        # The account Free limit is shared by devices, not per device.
-        # Even 4 idle agents must leave plenty of room for real commands.
-        self.assertLess(upper_bound_queries * 4, 100000)
+        # The current Platform uses one SQL statement for each valid claim
+        # and heartbeat. This is an IDLE baseline, not a full daily budget:
+        # action-status reads, enqueues, receipts and other clients add usage.
+        claim_queries = requests
+        heartbeat_queries = 2880
+        idle_queries = claim_queries + heartbeat_queries
+        self.assertLess(idle_queries, 11000)
+        self.assertLess(idle_queries * 4, 50000)
+
+    def test_daily_budget_accounts_for_status_reads_and_active_commands(self):
+        # Scenario inputs are explicit so an idle-only test cannot be
+        # misinterpreted as a guarantee of 24-hour production headroom.
+        daily_quota = 100000
+        base_claims = 4800
+        heartbeats = 2880
+        status_reads = 70000
+        enqueues = 1000
+        terminal_receipts = 1200
+        total = base_claims + heartbeats + status_reads + enqueues + terminal_receipts
+        self.assertEqual(total, 79880)
+        self.assertEqual(daily_quota - total, 20120)
+        # The observed half-hour active rate, sustained for 24h, exceeds
+        # the free quota even before idle heartbeat / claim traffic.
+        observed_hourly_rate = 4512
+        self.assertGreater(observed_hourly_rate * 24, daily_quota)
 
     def test_invalid_ceiling_fails_closed(self):
         for v in (float("nan"), float("inf"), -float("inf")):
