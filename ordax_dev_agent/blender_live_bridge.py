@@ -630,18 +630,25 @@ class BlenderLiveBridge:
                 status,
             )
 
+        # Correlation is owned by the bridge; callers cannot replace its ID
+        # or operation and strand a committed result.
+        if payload is not None and ("id" in payload or "operation" in payload):
+            return ActionResult(False, "Blender live payload must not override id or operation")
+
         self._ensure_dirs()
         command_id = uuid.uuid4().hex
         command_path = self.inbox / f"{command_id}.json"
         temp_path = self.inbox / f"{command_id}.tmp"
         response_path = self.responses / f"{command_id}.json"
+        durable_path = self.results / f"{command_id}.json"
         inflight_path = self.inflight / f"{command_id}.json"
 
-        body = {"id": command_id, "operation": operation, **(payload or {})}
+        body = {**(payload or {}), "id": command_id, "operation": operation}
         temp_path.write_text(json.dumps(body), encoding="utf-8")
         temp_path.replace(command_path)
 
-        deadline = time.monotonic() + max(1.0, timeout_seconds)
+        submitted_at = time.monotonic()
+        deadline = submitted_at + max(1.0, timeout_seconds)
         while time.monotonic() < deadline:
             if response_path.is_file():
                 try:
@@ -657,12 +664,29 @@ class BlenderLiveBridge:
                 except OSError:
                     pass
 
+                if response.get("id") != command_id:
+                    return ActionResult(False, "Blender live response ID mismatch", {
+                        "command_id": command_id,
+                        "retry_without_querying_result": False,
+                    })
                 ok = bool(response.get("ok"))
                 return ActionResult(
                     ok,
                     str(response.get("summary") or "Blender live response"),
                     {"transport": "blender-visible-companion", **response},
                 )
+
+            # The companion commits the durable receipt before its ephemeral
+            # reply. Recover from a missing reply without waiting for timeout;
+            # leave a short window for the normal reply to be consumed first.
+            if durable_path.is_file() and time.monotonic() - submitted_at >= 0.20:
+                durable_result = self.result(command_id)
+                if durable_result.data.get("durable_result"):
+                    try:
+                        response_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    return durable_result
 
             if not inflight_path.is_file() and not self.presence_is_fresh(max_age_seconds=12.0):
                 # On software-rendered desktops the Blender GUI can stop
@@ -698,8 +722,7 @@ class BlenderLiveBridge:
 
         # A response can become durable immediately after the last loop
         # iteration. Prefer its existing receipt to an uncertain timeout.
-        durable = self.results / f"{command_id}.json"
-        if durable.is_file():
+        if durable_path.is_file():
             return self.result(command_id)
         inflight = inflight_path.is_file()
         if not inflight:

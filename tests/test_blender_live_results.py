@@ -200,6 +200,87 @@ class BlenderLiveResultTests(unittest.TestCase):
             self.assertEqual("done", result.summary)
             self.assertGreaterEqual(calls["count"], 3)
 
+    def test_durable_receipt_recovers_without_ephemeral_response(self) -> None:
+        # A missing short-lived reply must not hold a committed operation
+        # until the remote timeout or cause a second command to be queued.
+        import time
+
+        with tempfile.TemporaryDirectory() as raw:
+            bridge = self.make_bridge(Path(raw))
+            bridge._ensure_dirs()
+            command_id = "e" * 32
+            (bridge.results / f"{command_id}.json").write_text(
+                json.dumps({"id": command_id, "ok": True, "summary": "rig committed"}),
+                encoding="utf-8",
+            )
+            current = {
+                "protocol_compatible": True,
+                "companion_current": True,
+                "capabilities": ["rig_create"],
+            }
+            started = time.monotonic()
+            with (
+                patch.object(bridge, "presence_is_fresh", return_value=True),
+                patch.object(bridge, "status", return_value=current),
+                patch("ordax_dev_agent.blender_live_bridge.uuid.uuid4",
+                      return_value=SimpleNamespace(hex=command_id)),
+            ):
+                result = bridge.request("rig_create", {"name": "Rig"}, timeout_seconds=1)
+            self.assertTrue(result.ok, result.summary)
+            self.assertEqual("rig committed", result.summary)
+            self.assertTrue(result.data["durable_result"])
+            self.assertLess(time.monotonic() - started, 0.8)
+            commands = list(bridge.inbox.glob("*.json"))
+            self.assertEqual(1, len(commands))
+            queued = json.loads(commands[0].read_text(encoding="utf-8"))
+            self.assertEqual(command_id, queued["id"])
+            self.assertEqual("rig_create", queued["operation"])
+
+    def test_response_id_mismatch_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            bridge = self.make_bridge(Path(raw))
+            bridge._ensure_dirs()
+            command_id = "b" * 32
+            (bridge.responses / f"{command_id}.json").write_text(
+                json.dumps({"id": "a" * 32, "ok": True, "summary": "wrong command"}),
+                encoding="utf-8",
+            )
+            current = {
+                "protocol_compatible": True,
+                "companion_current": True,
+                "capabilities": ["ping"],
+            }
+            with (
+                patch.object(bridge, "presence_is_fresh", return_value=True),
+                patch.object(bridge, "status", return_value=current),
+                patch("ordax_dev_agent.blender_live_bridge.uuid.uuid4",
+                      return_value=SimpleNamespace(hex=command_id)),
+            ):
+                result = bridge.request("ping", timeout_seconds=1)
+            self.assertFalse(result.ok)
+            self.assertIn("ID mismatch", result.summary)
+            self.assertEqual(command_id, result.data["command_id"])
+            self.assertFalse(result.data["retry_without_querying_result"])
+
+    def test_transport_fields_cannot_override_correlation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            bridge = self.make_bridge(Path(raw))
+            current = {
+                "protocol_compatible": True,
+                "companion_current": True,
+                "capabilities": ["ping"],
+            }
+            with (
+                patch.object(bridge, "presence_is_fresh", return_value=True),
+                patch.object(bridge, "status", return_value=current),
+            ):
+                for field in ("id", "operation"):
+                    with self.subTest(field=field):
+                        result = bridge.request("ping", {field: "untrusted"}, timeout_seconds=1)
+                        self.assertFalse(result.ok)
+                        self.assertIn("must not override", result.summary)
+            self.assertFalse(bridge.inbox.exists())
+
     def test_stale_heartbeat_does_not_fail_a_live_blender_command(self) -> None:
         # Physical Windows regression: software-Vulkan Blender kept its PID
         # alive and eventually committed a successful transform, but a stale

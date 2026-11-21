@@ -269,3 +269,28 @@ existe um Project do OS/Platform vinculado ao dispositivo. O catálogo
 local de projetos consultado estava vazio. Não inventar Project/grant,
 não inferir homologação do roteamento remoto de ações Blender e não
 reexecutar as ações mutáveis sem consulta aos recibos existentes.
+
+## Recuperação rápida de recibos Blender — 20/11/2026
+
+O bridge canônico BlenderLiveBridge.request agora consulta o recibo
+persistente durante a espera, quando a resposta temporária do companion
+não aparece. Uma janela de 0,20 s prioriza a resposta normal e evita
+esperar todo o timeout de operações já concluídas. O recibo é correlacionado
+pelo UUID gerado pelo bridge; o comando **não** é repetido.
+
+A validação de correlação rejeita id e operation sobrepostos por
+payloads de ferramentas e falha fechado caso uma resposta temporária
+contenha outro ID. Reconsultar blender.live_result permanece o fluxo
+de recuperação para resultado incerto, sem reexecutar mutações.
+
+Prova: 55/55 testes de Runtime/Blender aprovados no checkout source
+(com sys.path apontando explicitamente para este repositório),
+incluindo três regressões novas. Não usar o Python do Runtime instalado
+sem ajustar o caminho do código-fonte em testes de desenvolvimento:
+esse Python importa primeiro o pacote do Runtime instalado, o que
+produziria resultados de uma versão anterior. git diff --check: aprovado.
+
+Essa melhoria de Runtime não cria outro servidor, nem altera projeto,
+grants, drivers, companion, GPU ou o arquivo .blend físico já homologado.
+O gate das ferramentas Blender diretamente invocáveis pelo Product MCP
+permanece separado.
