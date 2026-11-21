@@ -215,6 +215,24 @@ class AgentSelfHealScriptTests(unittest.TestCase):
         self.assertIn("$journal.phase = 'recovery-required'", script)
         self.assertIn("$journal.phase = 'committed'", script)
 
+    def test_mcp_upgrade_is_on_demand_without_duplicate_timer(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        lifecycle = (
+            root / "scripts/windows/ordax-mcp-lifecycle.ps1"
+        ).read_text(encoding="utf-8")
+        upgrade_registration = lifecycle.split(
+            "$startBoundary = [DateTimeOffset]::Now.AddMinutes(1)", 1
+        )[1].split("} else {", 1)[0]
+        # The permanent watchdog keeps its logon/recovery triggers, but the
+        # temporary verified-upgrade task must run only by explicit /Run.
+        self.assertIn("$trigger = ''", upgrade_registration)
+        self.assertNotIn("<TimeTrigger>", upgrade_registration)
+        self.assertIn("<AllowStartOnDemand>true</AllowStartOnDemand>", lifecycle)
+        self.assertIn("<Triggers>$trigger</Triggers>", lifecycle)
+        self.assertIn("Invoke-CanonicalTaskAction -Name $upgradeTaskName -Action Run", lifecycle)
+        self.assertIn("<LogonTrigger>", lifecycle)
+        self.assertIn("<Interval>PT1M</Interval>", lifecycle)
+
     def test_mcp_scheduler_snapshot_uses_bounded_owner_queries(self) -> None:
         root = Path(__file__).resolve().parents[1]
         lifecycle = (
