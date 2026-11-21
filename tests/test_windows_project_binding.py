@@ -114,7 +114,7 @@ class WindowsProjectBindingTests(unittest.TestCase):
             for projects in [
                 {"ordax-runtime": {"path": str(checkout), "cloud_project_id": PROJECT, "space_id": SPACE}},
                 {"project-7": {"path": str(checkout), "cloud_project_id": PROJECT}},
-                {"project-7": {"path": str(checkout), "cloud_project_id": PROJECT.upper(), "space_id": SPACE}},
+                {"project-7": {"path": str(checkout), "cloud_project_id": "AAAAAAAA-3333-4333-8333-333333333333", "space_id": SPACE}},
                 {"project-7": {"path": str(checkout), "cloud_project_id": PROJECT, "space_id": "1234"}},
             ]:
                 with self.subTest(projects=projects):
