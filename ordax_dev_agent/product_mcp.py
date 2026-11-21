@@ -117,7 +117,7 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(name="browser_stop", action="browser.stop", effect="write", description="Stop an ORDAX-owned browser session."),
     ProductMcpToolSpec(name="computer_windows", action="computer.windows", description="List visible Windows desktop windows for a granted ORDAX project context."),
     ProductMcpToolSpec(name="computer_active_window", action="computer.active_window", description="Inspect the current foreground Windows desktop window."),
-    ProductMcpToolSpec(name="computer_screenshot", action="computer.screenshot", description="Capture the Windows desktop or foreground window for visual inspection."),
+    ProductMcpToolSpec(name="computer_screenshot", action="computer.screenshot", description="Capture the Windows desktop or foreground window. Set include_preview=true to return one bounded JPEG visual preview."),
     ProductMcpToolSpec(name="computer_screen_info", action="computer.screen_info", description="Inspect monitor geometry, virtual desktop bounds and current cursor position."),
     ProductMcpToolSpec(name="computer_clipboard_read", action="computer.clipboard_read", description="Read bounded Unicode text from the authorized interactive Windows clipboard."),
     ProductMcpToolSpec(name="computer_access_status", action="computer.access_status", description="Read the local ORDAX computer-access policy and allowed filesystem roots."),
