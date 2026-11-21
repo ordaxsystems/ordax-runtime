@@ -149,7 +149,7 @@ class ArtifactsListTests(unittest.TestCase):
             reads = []
 
             def counting_open(path, *args, **kwargs):
-                if path == image and args and args[0] == "rb":
+                if args and args[0] == "rb" and path.samefile(image):
                     reads.append(path)
                 return original_open(path, *args, **kwargs)
 
