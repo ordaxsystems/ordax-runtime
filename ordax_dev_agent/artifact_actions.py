@@ -54,12 +54,19 @@ class ArtifactActions:
         items: list[dict[str, Any]] = []
         truncated = False
 
+        def ordered_files(folder: Path):
+            # Sort one directory at a time and stop at max_items + 1.
+            # Sorting the entire recursive tree scales poorly for galleries.
+            for candidate in sorted(folder.iterdir()):
+                if candidate.is_dir() and not candidate.is_symlink():
+                    yield from ordered_files(candidate)
+                elif candidate.is_file():
+                    yield candidate
+
         for source, root in roots:
             if not root.is_dir():
                 continue
-            for candidate in sorted(root.rglob("*")):
-                if not candidate.is_file():
-                    continue
+            for candidate in ordered_files(root):
                 try:
                     resolved = candidate.resolve()
                     relative = resolved.relative_to(root)
