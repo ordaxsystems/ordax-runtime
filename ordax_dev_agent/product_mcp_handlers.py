@@ -735,10 +735,12 @@ def browser_snapshot(device_id: str, project: str, session_id: str, max_elements
     return _invoke(device_id=device_id, action="browser.snapshot", project=project, space_id=space_id, arguments=args)
 
 
-def browser_screenshot(device_id: str, project: str, session_id: str, width: int = 1440, height: int = 900, space_id: str | None = None, tab_id: str | None = None) -> dict[str, Any]:
+def browser_screenshot(device_id: str, project: str, session_id: str, width: int = 1440, height: int = 900, space_id: str | None = None, tab_id: str | None = None, include_preview: bool = False) -> dict[str, Any]:
     args = {"project": project, "session_id": session_id, "width": width, "height": height}
     if tab_id is not None:
         args["tab_id"] = tab_id
+    if include_preview:
+        args["include_preview"] = include_preview
     return _invoke(device_id=device_id, action="browser.screenshot", project=project, space_id=space_id, arguments=args)
 
 

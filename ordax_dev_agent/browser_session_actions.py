@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import re
@@ -826,6 +827,9 @@ class BrowserSessionActions:
     def browser_screenshot(self, payload: dict[str, Any]) -> ActionResult:
         project = self._project(payload)
         session_id = str(payload.get("session_id") or "")
+        include_preview = payload.get("include_preview", False)
+        if type(include_preview) is not bool:
+            return ActionResult(False, "include_preview must be boolean")
         width = max(320, min(int(payload.get("width", 1440)), 2560))
         height = max(240, min(int(payload.get("height", 900)), 1600))
         selected = self._validated_tab_id(payload["tab_id"]) if "tab_id" in payload else "primary"
@@ -843,7 +847,7 @@ class BrowserSessionActions:
             if not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 raise BrowserCaptureError("Chromium returned an invalid PNG")
             output.write_bytes(data)
-            return {
+            result = {
                 "session_id": session_id,
                 "artifact_name": output.name,
                 "image_path": str(output),
@@ -851,6 +855,21 @@ class BrowserSessionActions:
                 "height": height,
                 "size_bytes": len(data),
             }
+            if include_preview:
+                # One CDP capture: retain the original PNG and convert only
+                # in memory, through the same JPEG budget as desktop images.
+                try:
+                    from PIL import Image
+                    from .image_preview import bounded_jpeg_preview
+
+                    with Image.open(io.BytesIO(data)) as image:
+                        result.update({"source_size_bytes": len(data),
+                                       **bounded_jpeg_preview(image)})
+                except (ImportError, OSError, ValueError) as error:
+                    raise BrowserCaptureError(
+                        f"browser screenshot preview unavailable: {type(error).__name__}"
+                    ) from error
+            return result
 
         try:
             data = self._with_page(project, session_id, run, tab_id=payload.get("tab_id"))

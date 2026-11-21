@@ -108,7 +108,7 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(name="browser_list", action="browser.list", description="List ORDAX-managed Chromium sessions for the granted project."),
     ProductMcpToolSpec(name="browser_tabs", action="browser.tabs", description="List page tabs within one ORDAX-owned Chromium session."),
     ProductMcpToolSpec(name="browser_snapshot", action="browser.snapshot", description="Read a bounded DOM/text snapshot from an ORDAX-managed browser session, including interactive element ids."),
-    ProductMcpToolSpec(name="browser_screenshot", action="browser.screenshot", description="Capture an ORDAX-managed browser page through CDP even when the ORDAX Studio preview pane is not foreground."),
+    ProductMcpToolSpec(name="browser_screenshot", action="browser.screenshot", description="Capture an ORDAX-managed Chromium page through CDP. Set include_preview=true to receive one bounded JPEG image from the same capture."),
     ProductMcpToolSpec(name="browser_start", action="browser.start", effect="write", description="Start an isolated ORDAX-managed Chromium session for a granted project."),
     ProductMcpToolSpec(name="browser_tab_open", action="browser.tab_open", effect="write", description="Open another page tab in the same authorized Chromium session and profile."),
     ProductMcpToolSpec(name="browser_navigate", action="browser.navigate", effect="write", description="Navigate an ORDAX-managed browser session to an http/https URL permitted by the browser policy."),
