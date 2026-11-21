@@ -226,3 +226,46 @@ lançamento canônico do Runtime ou pela CI Linux, preservando o diretório
 protegido de estado do agente. Não há prova nova do caminho remoto
 ChatGPT → Platform → Device nem de aplicação da alteração no Runtime
 instalado até esse gate ser executado.
+
+## Reexecução física no Windows via OrdaX MCP — 20/11/2026
+
+No dispositivo autorizado DESKTOP-4UFL03B, o cliente ChatGPT executou
+computer.terminal_exec pela Platform e recebeu os resultados do Runtime
+instalado em 47bc44dc83fb361f2309d80b1c065aa075d2ca66.
+O teste físico usa o **teste canônico já existente**
+tests/blender_real_rig_e2e.py; não cria bridge, agente, projeto,
+MCP, testes ou drivers novos.
+
+- Blender original 5.3.0, em --background, --gpu-backend vulkan,
+  perfil isolado (BLENDER_USER_CONFIG/BLENDER_USER_SCRIPTS) e somente
+  no processo OIDN_DEVICE_SYCL=0, VK_DRIVER_FILES e
+  VK_ICD_FILENAMES apontando para o ICD já instalado.
+- Lavapipe vulkan_lvp.dll: SHA-256
+  1c178d0e2a5fe0a3e7b9b85c49e78c0a8facdd0625903dfcda3d483b629f3b21,
+  correspondente ao hash pinado em blender_live_bridge.py. Manifesto
+  ICD versão 1.0.1, library_arch=64, Vulkan 1.4.363.
+- A primeira execução física passou pelo Blender, mas terminou com
+  código 2 porque o comando de teste **omitiu**, por erro de invocação,
+  os cinco argumentos --ordax-* que a CI já exige. Não houve mudança
+  necessária no código do teste nem sucesso inferido dessa tentativa.
+- A execução corrigida reproduziu os argumentos do workflow
+  .github/workflows/blender-real-e2e.yml, preservando o mesmo workspace:
+  fase create código 0 em **13,12 s** e fase verify (outro
+  processo Blender) código 0 em **3,95 s**.
+- rig_create criou três ossos Root → Spine → Head; object_inspect
+  confirmou a hierarquia, contagem e pose. Nomes duplicados e osso de
+  comprimento zero foram rejeitados sem mutação parcial. O .blend
+  foi salvo e reaberto com mesmo conteúdo, hierarquia e recibos duráveis.
+- Arquivo real ordax-rig-e2e.blend: SHA-256
+  6216881ae86099a1e34f41ef66da1752ed40c11c5d7db3efb18fb6976c8afc24.
+  Recibos evidence-create.json, evidence-verify.json, logs e arquivo
+  .blend preservados no estado existente
+  DevAgent/blender-e2e/physical-20261120-bc49b114.
+
+**Gate separado ainda pendente:** o sucesso do Blender via comando
+autorizado computer.terminal_exec **não demonstra** que ferramentas
+tipadas Blender estão invocáveis pelo Product MCP nesta conversa nem que
+existe um Project do OS/Platform vinculado ao dispositivo. O catálogo
+local de projetos consultado estava vazio. Não inventar Project/grant,
+não inferir homologação do roteamento remoto de ações Blender e não
+reexecutar as ações mutáveis sem consulta aos recibos existentes.
