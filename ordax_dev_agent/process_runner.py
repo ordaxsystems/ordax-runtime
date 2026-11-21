@@ -71,9 +71,14 @@ def run_command(
 
     # Terminal/process output is a UTF-8 text contract. Capture bytes first so
     # Windows locale/ACP never silently decodes UTF-8 as CP1252/Latin-1.
+    # Foreground Product commands are explicitly non-interactive. Do not
+    # inherit the Runtime service's stdin/console handle: a child requesting
+    # input must receive EOF instead of blocking the shared dispatch lane.
+    # Interactive sessions already have the supervised process/stdin actions.
     process = subprocess.Popen(
         launch_command,
         cwd=str(cwd) if cwd else None,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=False,
