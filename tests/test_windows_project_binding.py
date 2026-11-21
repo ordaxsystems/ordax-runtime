@@ -247,6 +247,30 @@ class WindowsProjectBindingTests(unittest.TestCase):
                     config, windows_project_links(config)["links"][0], REPOSITORY,
                 )
 
+    def test_windows_launcher_wires_existing_project_allowlist_into_canonical_transport(self):
+        import os
+        from ordax_dev_agent import main as runtime_main
+
+        with tempfile.TemporaryDirectory() as raw:
+            config = _mapped_config(Path(raw))
+            with patch.dict(os.environ, {}, clear=True), patch.object(
+                runtime_main.sys, "platform", "win32",
+            ), patch.object(
+                runtime_main.AgentConfig, "from_env", return_value=config,
+            ), patch.object(
+                runtime_main, "_startup_log",
+            ), patch.object(
+                runtime_main, "run", return_value=0,
+            ) as runner:
+                self.assertEqual(runtime_main.main(), 0)
+            runner.assert_called_once()
+            self.assertIs(runner.call_args.args[0], config)
+            provider = runner.call_args.kwargs["project_binding_provider"]
+            resolver = runner.call_args.kwargs["project_binding_resolver"]
+            links = provider()["links"]
+            self.assertEqual(len(links), 1)
+            self.assertEqual(resolver(links[0], REPOSITORY).slug, "project-7")
+
     def test_windows_and_os_host_providers_never_mix(self):
         with tempfile.TemporaryDirectory() as raw:
             config = _mapped_config(Path(raw))
