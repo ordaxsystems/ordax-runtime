@@ -528,6 +528,14 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         self.assertEqual(counters["product_empty_claims"], 0)
         self.assertEqual(counters["product_jobs_claimed"], 0)
         self.assertEqual(counters["product_wake_reconciliations"], 0)
+        self.assertEqual(counters["product_catalog_reconcile_submissions"], 1)
+        # The first observation was captured inside claim_next_job(), before
+        # it returned an empty queue. All subsequent local reads are passive.
+        for _ in range(3):
+            finished = server.call_args.args[0]()["runtime"]
+            self.assertEqual(finished["product_claim_attempts"], 1)
+            self.assertEqual(finished["product_empty_claims"], 1)
+            self.assertEqual(finished["product_heartbeat_attempts"], 1)
         plane.claim_next_job.assert_called_once_with()
         self.assertEqual(plane.heartbeat.call_count, 2)  # online, offline
 
