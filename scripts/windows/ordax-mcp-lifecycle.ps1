@@ -200,7 +200,10 @@ function Register-CanonicalTask {
     $safeDirectory = & $xmlEscape $WorkingDirectory
     $startBoundary = [DateTimeOffset]::Now.AddMinutes(1).ToString('yyyy-MM-ddTHH:mm:sszzz')
     if ($isUpgrade) {
-        $trigger = "<TimeTrigger><StartBoundary>$startBoundary</StartBoundary></TimeTrigger>"
+        # Run precisely once through the verified on-demand /Run handoff.
+        # A scheduled trigger fires again after the journal is committed,
+        # falsely reporting failure for an already-successful upgrade.
+        $trigger = ''
         $limit = 'PT40M'
         $restart = ''
         $description = ''
@@ -224,6 +227,7 @@ function Register-CanonicalTask {
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <ExecutionTimeLimit>$limit</ExecutionTimeLimit>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
     $restart
     <StartWhenAvailable>true</StartWhenAvailable>
     <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
