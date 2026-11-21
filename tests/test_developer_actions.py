@@ -6,9 +6,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
+from ordax_dev_agent import process_runner
 
 
 class DeveloperActionsTests(unittest.TestCase):
@@ -136,6 +138,34 @@ class DeveloperActionsTests(unittest.TestCase):
         )
         self.assertFalse(refused.ok)
         self.assertIn("shell=true", refused.summary)
+
+    def test_terminal_executor_never_inherits_interactive_stdin(self) -> None:
+        """PowerShell/native subprocesses must see EOF, not the agent console."""
+        real_popen = process_runner.subprocess.Popen
+        calls: list[object] = []
+
+        def inspected_popen(*args, **kwargs):
+            calls.append(kwargs.get("stdin"))
+            return real_popen(*args, **kwargs)
+
+        with mock.patch.object(
+            process_runner.subprocess, "Popen", side_effect=inspected_popen
+        ):
+            result = self.registry.execute(
+                "terminal.exec",
+                {
+                    "project": "project",
+                    "argv": [
+                        sys.executable, "-c",
+                        "import sys; print('STDIN_EOF=' + str(sys.stdin.read() == ''))",
+                    ],
+                    "timeout_seconds": 15,
+                },
+            )
+        self.assertTrue(result.ok, result.summary)
+        self.assertIn("STDIN_EOF=True", result.data["stdout"])
+        self.assertEqual([subprocess.DEVNULL], calls)
+        self.assertFalse(result.data["timed_out"])
 
     def test_terminal_exec_rejects_non_boolean_shell_instead_of_coercing_it(self) -> None:
         for invalid_shell in ("false", "true", 1, [], None):
