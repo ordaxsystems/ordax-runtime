@@ -167,6 +167,65 @@ class DeveloperActionsTests(unittest.TestCase):
         self.assertEqual([subprocess.DEVNULL], calls)
         self.assertFalse(result.data["timed_out"])
 
+    def test_windows_exited_parent_pipe_timeout_does_not_taskkill_recycled_pid(self) -> None:
+        """An exited parent cannot safely be the root of taskkill /T."""
+        with (
+            mock.patch.object(process_runner.sys, "platform", "win32"),
+            mock.patch.object(process_runner, "external_process_environment", return_value={}),
+            mock.patch.object(process_runner.subprocess, "Popen") as popen,
+            mock.patch.object(process_runner.subprocess, "run") as taskkill,
+        ):
+            child = popen.return_value
+            child.pid = 12345
+            child.returncode = 0
+            child.poll.return_value = 0
+            child.communicate.side_effect = subprocess.TimeoutExpired(
+                cmd=["cmd.exe"], timeout=5, output=b"finished\\n", stderr=b"",
+            )
+            child.stdout = mock.Mock()
+            child.stderr = mock.Mock()
+            receipt = process_runner.run_command(["cmd.exe", "/d", "/c", "echo finished"], timeout=5)
+
+        self.assertFalse(receipt.ok)
+        self.assertTrue(receipt.data["timed_out"])
+        self.assertEqual("pipe_open_after_parent_exit", receipt.data["timeout_phase"])
+        self.assertTrue(receipt.data["cleanup_unverified"])
+        self.assertEqual("finished\\n", receipt.data["stdout"])
+        self.assertEqual(0, receipt.data["returncode"])
+        self.assertEqual(subprocess.DEVNULL, popen.call_args.kwargs["stdin"])
+        taskkill.assert_not_called()
+        child.kill.assert_not_called()
+        child.stdout.close.assert_called_once_with()
+        child.stderr.close.assert_called_once_with()
+
+    def test_windows_live_parent_timeout_only_terminates_its_own_tree(self) -> None:
+        with (
+            mock.patch.object(process_runner.sys, "platform", "win32"),
+            mock.patch.object(process_runner, "external_process_environment", return_value={}),
+            mock.patch.object(process_runner.subprocess, "Popen") as popen,
+            mock.patch.object(process_runner.subprocess, "run") as taskkill,
+        ):
+            child = popen.return_value
+            child.pid = 12346
+            child.returncode = -9
+            child.poll.return_value = None
+            child.communicate.side_effect = [
+                subprocess.TimeoutExpired(cmd=["cmd.exe"], timeout=5),
+                (b"", b""),
+            ]
+            taskkill.return_value.returncode = 0
+            receipt = process_runner.run_command(["cmd.exe"], timeout=5)
+
+        self.assertFalse(receipt.ok)
+        self.assertTrue(receipt.data["timed_out"])
+        self.assertEqual("process_wait", receipt.data["timeout_phase"])
+        self.assertNotIn("cleanup_unverified", receipt.data)
+        taskkill.assert_called_once()
+        self.assertEqual(
+            ["taskkill", "/PID", "12346", "/T", "/F"],
+            taskkill.call_args.args[0],
+        )
+
     def test_terminal_exec_rejects_non_boolean_shell_instead_of_coercing_it(self) -> None:
         for invalid_shell in ("false", "true", 1, [], None):
             with self.subTest(shell=invalid_shell):
