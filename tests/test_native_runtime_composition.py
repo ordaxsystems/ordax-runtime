@@ -61,6 +61,32 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         command = popen.call_args.args[0]
         self.assertEqual(command[command.index("-HealthPort") + 1], "43127")
 
+    def test_packaged_watchdog_does_not_lock_atomic_upgrade_directory(self):
+        install = self.root / "OrdaX MCP installation"
+        install.mkdir()
+        (install / "ordax-agent-watchdog.ps1").write_text("# fixture", encoding="utf-8")
+        with (
+            patch("ordax_dev_agent.main.sys.platform", "win32"),
+            patch.dict(os.environ, {"ORDAX_PACKAGED_ROOT": str(install)}),
+            patch("ordax_dev_agent.main.subprocess.Popen") as popen,
+        ):
+            _start_local_watchdog(self.config, health_port=8765)
+        self.assertEqual(popen.call_args.kwargs["cwd"], str(self.state.resolve()))
+        self.assertNotEqual(popen.call_args.kwargs["cwd"], str(install))
+        command = popen.call_args.args[0]
+        self.assertIn("-RestartTaskName", command)
+        self.assertIn("OrdaX MCP", command)
+
+        inside = replace(self.config, state_dir=install / "state")
+        with (
+            patch("ordax_dev_agent.main.sys.platform", "win32"),
+            patch.dict(os.environ, {"ORDAX_PACKAGED_ROOT": str(install)}),
+            patch("ordax_dev_agent.main.subprocess.Popen") as popen,
+        ):
+            with self.assertRaisesRegex(ValueError, "inside Runtime installation"):
+                _start_local_watchdog(inside)
+        popen.assert_not_called()
+
     def test_factory_uses_native_identity_without_creating_token_file(self):
         plane = build_control_plane(self.config, device_credential_provider=self.provider)
         self.addCleanup(plane.http.close)
