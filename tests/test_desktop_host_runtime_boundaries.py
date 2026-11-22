@@ -13,7 +13,7 @@ from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.desktop_host_main import (
     DESKTOP_DEV_ACTIONS, DESKTOP_OS_ACTIONS, _desktop_status_handoff, main,
 )
-from ordax_dev_agent.product_action_scope import DEVICE_BLENDER_ACTIONS, NATIVE_SURFACE_DEVICE_ACTIONS
+from ordax_dev_agent.product_action_scope import DEVICE_BLENDER_ACTIONS, NATIVE_SURFACE_DEVICE_ACTIONS, PROJECT_MCP_ACTIONS
 
 
 class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
@@ -135,6 +135,13 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         self.assertIn("computer.text_write", DESKTOP_DEV_ACTIONS)
         self.assertTrue(DEVICE_BLENDER_ACTIONS.issubset(DESKTOP_DEV_ACTIONS))
         self.assertTrue(DEVICE_BLENDER_ACTIONS.isdisjoint(DESKTOP_OS_ACTIONS))
+        self.assertTrue(PROJECT_MCP_ACTIONS.issubset(DESKTOP_DEV_ACTIONS))
+        self.assertTrue(PROJECT_MCP_ACTIONS.isdisjoint(DESKTOP_OS_ACTIONS))
+        self.assertIn("terminal.exec", DESKTOP_DEV_ACTIONS)
+        self.assertIn("process.start", DESKTOP_DEV_ACTIONS)
+        self.assertIn("browser.navigate", DESKTOP_DEV_ACTIONS)
+        self.assertIn("artifacts.list", DESKTOP_DEV_ACTIONS)
+        self.assertIn("continuity.get", DESKTOP_DEV_ACTIONS)
         self.assertIn("ordax.surface.status", DESKTOP_DEV_ACTIONS)
         # The same shared registry implements the tools; no Desktop copy.
         with patch.dict(os.environ, {
@@ -145,6 +152,12 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
             registry = ActionRegistry(config, computer_adapter=None,
                                       allowed_action_names=DESKTOP_DEV_ACTIONS)
             self.assertEqual(set(registry.names), DESKTOP_DEV_ACTIONS)
+            from ordax_dev_agent.capability_snapshot import device_capability_snapshot
+            device_actions = [a for a in registry.names if a not in PROJECT_MCP_ACTIONS]
+            snapshot = device_capability_snapshot(device_actions)
+            self.assertEqual(snapshot["state"], "ready",
+                "Project capabilities must not overflow the bounded Device Agent view")
+            self.assertLessEqual(len(snapshot["capabilities"]), 64)
             status = registry.execute("computer.access_status", {})
             self.assertTrue(status.ok)
             self.assertTrue(status.data["enabled"])

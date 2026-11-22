@@ -20,7 +20,7 @@ from .models import ActionResult, AgentJob
 from .product_central_session import ProductCentralSessionClient
 from .desktop_project_binding import resolve_desktop_project_workspace
 from .projects import Project, canonical_github_repository_full_name
-from .product_action_scope import DEVICE_BLENDER_ACTIONS
+from .product_action_scope import DEVICE_BLENDER_ACTIONS, PROJECT_MCP_ACTIONS
 from .remote_protocol import (
     DeviceAuthorizationError,
     TransientDeliveryError,
@@ -38,49 +38,7 @@ from .product_http_response import (
 )
 
 
-_PROJECT_SCOPE_ACTIONS = frozenset({
-    "agent.project_briefing",
-    "continuity.get",
-    "continuity.update",
-    "handoff.create",
-    "handoff.get",
-    # Project terminal/process actions are never authorized by a model-supplied
-    # local slug. The canonical repository binding must be verified first.
-    "terminal.exec",
-    "process.start",
-    "process.status",
-    "process.list",
-    "process.logs",
-    "process.write_stdin",
-    "process.stop",
-    # Blender actions share the attested native Project Catalog binding.
-    "blender.live_status",
-    "blender.live_scene_snapshot",
-    "blender.live_object_inspect",
-    "blender.live_modeling_schema",
-    "blender.live_start",
-    "blender.live_object_transform",
-    "blender.live_create_primitive",
-    "blender.live_rig_create",
-    "blender.live_material_apply",
-    "blender.live_save",
-    # Match the Platform's explicit project-scoped Browser/Artifact catalog.
-    # Previously these actions failed at this runtime boundary even after
-    # the correct Owner binding and grant were installed.
-    "browser.click",
-    "browser.list",
-    "browser.navigate",
-    "browser.screenshot",
-    "browser.snapshot",
-    "browser.start",
-    "browser.tab_open",
-    "browser.tabs",
-    "browser.status",
-    "browser.stop",
-    "browser.type",
-    "artifacts.list",
-    "artifact.preview",
-})
+
 
 _PROJECT_BINDING_CONFIRM_ERRORS = frozenset({
     "project_device_binding_confirmation_invalid",
@@ -642,7 +600,7 @@ class ProductDeviceControlPlane:
             if raw_scope is not None or row.get("project_id") is not None or row.get("space_id") is not None or "project" in payload:
                 raise RuntimeError("device Blender cannot carry a project or Space binding")
             return payload, None
-        if capability not in _PROJECT_SCOPE_ACTIONS:
+        if capability not in PROJECT_MCP_ACTIONS:
             if raw_scope is not None:
                 raise RuntimeError("canonical Product project scope attestation is unexpected")
             return payload, None
