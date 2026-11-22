@@ -106,6 +106,101 @@ class ComputerProcessActionsTests(unittest.TestCase):
             self.assertNotIn("secret-token", repr(listed.data))
             self.assertNotIn("sensitive command", repr(listed.data))
 
+    def test_mission_checkpoint_is_visible_without_id_and_advisory(self):
+        registry = self._device_registry()
+        with patch(
+            "ordax_dev_agent.computer_filesystem_actions.load_computer_access_policy",
+            return_value=SimpleNamespace(enabled=True, full_access=True),
+        ):
+            scope = registry._device_process_scope()
+            registry._process_root(scope).mkdir(parents=True)
+            process_id = "88888888-8888-4888-8888-888888888888"
+            state = {
+                "process_id": process_id, "scope_kind": "device",
+                "device_id": scope.device_id, "state": "exited", "returncode": 0,
+                "started_at_unix": 500,
+                "argv": ["python", "-c", "hidden-command"],
+                "token": "secret-token",
+                "mission": {"id": "runtime-qa", "project_label": "ordax-runtime"},
+            }
+            registry._process_state_path(scope, process_id).write_text(json.dumps(state), encoding="utf-8")
+            marker = "ORDAX_MISSION_CHECKPOINT|"
+            log = "\n".join([
+                "prefix " + marker + '{"step":20,"total":20,"stage":"fake","status":"completed"}',
+                marker + json.dumps({"step": 1, "total": 3, "stage": "setup", "status": "running",
+                                     "summary": "started", "resume_ref": "commit:abc"}),
+                marker + '{"step":999,"total":3,"stage":"invalid","status":"completed"}',
+                marker + json.dumps({"step": 2, "total": 3, "stage": "tests", "status": "blocked",
+                                     "summary": "needs review", "resume_ref": "commit:def"}),
+                marker + "not-json",
+            ]) + "\n"
+            registry._process_log_path(scope, process_id).write_text(log, encoding="utf-8")
+            detail = registry.execute("computer.process_status", {"process_id": process_id})
+            listed = registry.execute("computer.process_list", {})
+        self.assertTrue(detail.ok)
+        self.assertEqual(detail.data["returncode"], 0)
+        checkpoint = detail.data["latest_checkpoint"]
+        self.assertEqual((checkpoint["step"], checkpoint["total"]), (2, 3))
+        self.assertEqual(checkpoint["status"], "blocked")
+        self.assertEqual(checkpoint["source"], "unverified_child_stdout")
+        item = listed.data["processes"][0]
+        self.assertEqual(item["mission"], {"id": "runtime-qa", "project_label": "ordax-runtime"})
+        self.assertEqual(item["latest_checkpoint"], checkpoint)
+        self.assertNotIn("secret-token", repr(listed.data))
+        self.assertNotIn("hidden-command", repr(listed.data))
+
+    def test_mission_checkpoint_only_reads_complete_bounded_log_tail(self):
+        registry = self._device_registry()
+        with patch(
+            "ordax_dev_agent.computer_filesystem_actions.load_computer_access_policy",
+            return_value=SimpleNamespace(enabled=True, full_access=True),
+        ):
+            scope = registry._device_process_scope()
+            registry._process_root(scope).mkdir(parents=True)
+            process_id = "99999999-9999-4999-8999-999999999999"
+            registry._process_state_path(scope, process_id).write_text(json.dumps({
+                "process_id": process_id, "scope_kind": "device",
+                "device_id": scope.device_id, "state": "exited",
+                "started_at_unix": 123, "mission": {"id": "big-log", "project_label": "runtime"},
+            }), encoding="utf-8")
+            checkpoint = 'ORDAX_MISSION_CHECKPOINT|{"step":1,"total":2,"stage":"first","status":"running"}\\n'
+            path = registry._process_log_path(scope, process_id)
+            path.write_text(checkpoint.replace("\\n", "\n") + ("noise\\n".replace("\\n", "\n") * 6000),
+                            encoding="utf-8")
+            detail = registry.execute("computer.process_status", {"process_id": process_id})
+            self.assertNotIn("latest_checkpoint", detail.data)
+            # Incomplete final JSON must not be reported as a checkpoint.
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write('ORDAX_MISSION_CHECKPOINT|{"step":2,"total":2,"stage":"done","status":"completed"}')
+            self.assertNotIn("latest_checkpoint", registry.execute(
+                "computer.process_status", {"process_id": process_id},
+            ).data)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("\n")
+            self.assertEqual(registry.execute(
+                "computer.process_status", {"process_id": process_id},
+            ).data["latest_checkpoint"]["step"], 2)
+
+    def test_mission_metadata_requires_safe_labels_and_id(self):
+        registry = self._device_registry()
+        with patch(
+            "ordax_dev_agent.computer_filesystem_actions.load_computer_access_policy",
+            return_value=SimpleNamespace(enabled=True, full_access=True),
+        ), patch("ordax_dev_agent.persistent_process_actions.subprocess.Popen") as spawn:
+            for env in (
+                {"ORDAX_MISSION_ID": "../escape"},
+                {"ORDAX_MISSION_PROJECT": "ordax-runtime"},
+                {"ORDAX_MISSION_ID": "safe", "ORDAX_MISSION_PROJECT": "bad name"},
+                {"ORDAX_MISSION_ID": "x" * 81},
+            ):
+                with self.subTest(env=env):
+                    result = registry.execute("computer.process_start", {
+                        "argv": ["cmd.exe", "/d", "/c", "echo never"],
+                        "cwd": self.temp.name, "env": env,
+                    })
+                    self.assertFalse(result.ok)
+            spawn.assert_not_called()
+
     def test_device_process_requires_full_access_and_valid_device_identity(self):
         registry = self._device_registry()
         for policy in (SimpleNamespace(enabled=False, full_access=True),
@@ -129,9 +224,11 @@ class ComputerProcessActionsTests(unittest.TestCase):
                     "argv": [sys.executable, "-u", "-c",
                              "import time; print('ORDAX_DEVICE_READY', flush=True); time.sleep(25)"],
                     "wait_seconds": 1.0,
+                    "env": {"ORDAX_MISSION_ID": "dev-smoke", "ORDAX_MISSION_PROJECT": "ordax-runtime"},
                 })
                 self.assertTrue(started.ok, started.summary)
                 process_id = started.data["process_id"]
+                self.assertEqual(started.data["mission"]["id"], "dev-smoke")
                 self.assertEqual(started.data["device_id"], registry.config.device_id)
                 self.assertNotIn("project", started.data)
                 status = registry.execute("computer.process_status", {"process_id": process_id})

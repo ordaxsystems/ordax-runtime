@@ -20,3 +20,48 @@ Este guia documenta as ferramentas **existentes** do Runtime: `computer_process_
 ## Teste DEV de 22/11/2026
 
 No Device `DESKTOP-4UFL03B`, a ferramenta real `computer_process_start` gerou o processo `455eb144-5ded-482a-be48-14a00029444f` (smoke de 36 passos de 10 segundos). Status posterior confirmou `running=true` com ownership e logs em sequência. O histórico local possuía 371 recibos; a consulta anterior `computer_process_list` excedia o limite de resposta ao devolver o histórico inteiro. O ajuste nesta revisão torna **a listagem** compacta e prioriza os ativos. Não reivindicar instalação da revisão no Device antes da prova física pós-atualização.
+
+
+## Missões rastreáveis sem novo orquestrador
+
+O mesmo recibo de processo pode conter metadados **descritivos** via `env` no
+`computer_process_start` / `process_start`:
+
+- `ORDAX_TASK_TITLE`: título legível (contrato existente).
+- `ORDAX_MISSION_ID`: rótulo estável para correlacionar chats, 1–80 caracteres
+  alfanuméricos, ponto, hífen ou `_`; **não é trava nem chave única**.
+- `ORDAX_MISSION_PROJECT`: rótulo de projeto com as mesmas regras, opcional e
+  somente permitido junto de `ORDAX_MISSION_ID`. **Não equivale a grant**.
+
+Para registrar progresso, o processo escreve linhas completas em stdout:
+
+```text
+ORDAX_MISSION_CHECKPOINT|{"step":2,"total":3,"stage":"tests","status":"running","summary":"29 passed","resume_ref":"commit:abc123"}
+```
+
+O campo `status` permite `running`, `blocked`, `failed` ou `completed`.
+`stage` é obrigatório (1–80 caracteres), `summary` e `resume_ref` são opcionais
+(até 160 caracteres, sem controles). `step` e `total` são inteiros de 0..100000,
+com `total` positivo e `step <= total`.
+
+`computer_process_status` e a listagem compacta retornam o último
+`latest_checkpoint` válido de **até 32 KiB finais do mesmo log**; as ferramentas
+equivalentes de projeto seguem a mesma regra. Nenhum poller adicional, banco
+Task, serviço de automação ou mudança nos grants é criado. A listagem continua
+limitada a 24 processos, com prioridade para os ativos. Logs históricos
+maiores podem exigir `process_logs` por ID; a ausência de `latest_checkpoint`
+não significa que uma etapa não aconteceu.
+
+Os marcadores são classificados `source=unverified_child_stdout`: **não provam**
+uma alteração externa, commit, aprovação, execução do GPT ou conclusão real.
+Para continuar uma missão, a nova conversa deve validar os efeitos com as
+ferramentas do respectivo owner, verificar processo e código de saída e só
+então decidir a próxima etapa. Não executar novamente ações de efeito incerto.
+Use referências opacas e não armazene segredos nos rótulos, logs ou resumos.
+
+## Evidência física anterior à evolução de missões
+
+No DEV Windows, a revisão `c7731ce8` foi instalada via atualizador canônico,
+e o monitor de 60 checkpoints encerrou `60/60`, `nonhealthy=0`, exit `0`.
+Essas evidências são da revisão anterior; **não significam que este novo
+contrato de missões já foi implantado no dispositivo**.
