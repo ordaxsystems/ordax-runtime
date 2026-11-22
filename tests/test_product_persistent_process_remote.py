@@ -77,6 +77,76 @@ class ProductPersistentProcessRemoteTests(unittest.TestCase):
         )
         self.assertEqual(logs.data["tail"], "ready\n")
         self.assertNotIn("log_path", logs.data["process"])
+    def test_mission_receipt_crosses_product_status_list_and_logs_safely(self) -> None:
+        raw = self._raw_state()
+        raw.update(
+            task_title="Runtime DEV regression",
+            mission={"id": "runtime-multichat-proof-20261122", "project_label": "ordax-runtime",
+                     "secret": "not-for-product"},
+            latest_checkpoint={
+                "step": 3, "total": 3, "stage": "handoff", "status": "completed",
+                "summary": "verified", "resume_ref": "commit:56dbd194",
+                "source": "unverified_child_stdout", "extra": "never-expose",
+            },
+        )
+        result = _sanitize_product_result("computer.process_status", ActionResult(True, "ok", raw))
+        self.assertEqual(result.data["title"], "Runtime DEV regression")
+        self.assertEqual(result.data["mission"], {
+            "id": "runtime-multichat-proof-20261122", "project_label": "ordax-runtime",
+        })
+        cp = result.data["latest_checkpoint"]
+        self.assertEqual((cp["step"], cp["total"], cp["status"]), (3, 3, "completed"))
+        self.assertEqual(cp["source"], "unverified_child_stdout")
+        self.assertNotIn("extra", cp)
+        listed = _sanitize_product_result("computer.process_list", ActionResult(True, "ok", {
+            "device_id": "device-123", "processes": [raw],
+            "total_registered": 378, "returned": 24, "truncated": True,
+            "secret": "remove", "token": "secret",
+        }))
+        self.assertEqual((listed.data["total_registered"], listed.data["returned"],
+                          listed.data["truncated"]), (378, 24, True))
+        self.assertEqual(listed.data["processes"][0]["latest_checkpoint"], cp)
+        self.assertNotIn("secret", listed.data)
+        self.assertNotIn("argv", listed.data["processes"][0])
+        logs = _sanitize_product_result("computer.process_logs", ActionResult(True, "ok", {
+            "process": raw, "tail": "ready\n", "size_bytes": 6, "truncated": False,
+        }))
+        self.assertEqual(logs.data["process"]["mission"], result.data["mission"])
+        self.assertEqual(logs.data["process"]["latest_checkpoint"], cp)
+        self.assertNotIn("log_path", logs.data["process"])
+
+    def test_mission_metadata_is_not_accepted_from_arbitrary_nested_data(self) -> None:
+        raw = self._raw_state()
+        checkpoint = {
+            "step": 1, "total": 3, "stage": "setup", "status": "running",
+            "summary": "ready", "resume_ref": "commit:abc", "source": "unverified_child_stdout",
+        }
+        for bad in (
+            {"id": "../outside", "project_label": "runtime"},
+            {"id": "x", "project_label": "bad label"},
+            {"id": "", "project_label": ""},
+        ):
+            with self.subTest(mission=bad):
+                data = _sanitize_product_result("process.status", ActionResult(True, "ok", {
+                    **raw, "mission": bad, "latest_checkpoint": checkpoint,
+                })).data
+                self.assertNotIn("mission", data)
+                self.assertNotIn("latest_checkpoint", data)
+        for bad in (
+            {**checkpoint, "source": "verified"},
+            {**checkpoint, "step": True},
+            {**checkpoint, "step": 9},
+            {**checkpoint, "summary": "control\n"},
+            {**checkpoint, "resume_ref": "x" * 161},
+        ):
+            with self.subTest(checkpoint=bad):
+                data = _sanitize_product_result("process.status", ActionResult(True, "ok", {
+                    **raw, "mission": {"id": "safe", "project_label": "runtime"},
+                    "latest_checkpoint": bad,
+                })).data
+                self.assertIn("mission", data)
+                self.assertNotIn("latest_checkpoint", data)
+
     def test_stdin_result_exposes_only_receipt_metadata(self) -> None:
         result = _sanitize_product_result(
             "process.write_stdin",
