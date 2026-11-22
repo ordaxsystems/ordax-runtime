@@ -89,6 +89,10 @@ observações; somente o **protocolo de verificação** é compartilhado.
   autoridades e decidir; **nunca repetir a escrita cegamente**.
   O SQLite existente aplica a comparação atomicamente por projeto e mantém
   revisões crescentes. Bancos antigos são migrados **sem apagar dados**.
+  A leitura `continuity.get` não deve registrar ou renomear projetos; uma
+  atualização recusada por revisão antiga também não pode alterar nome ou
+  cadastro do projeto. A criação/renomeação e a gravação do estado acontecem
+  na **mesma transação**, somente após a verificação da revisão.
 - Revisão CAS impede **perda de atualização entre conversas no mesmo banco**,
   mas não descobre automaticamente alterações em GitHub, outras máquinas
   ou aplicativos. CAS não equivale a grant, lock de execução,

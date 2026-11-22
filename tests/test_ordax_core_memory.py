@@ -156,6 +156,39 @@ class OrdaxCoreMemoryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "expected_revision_required"):
                 second.update_project_state("demo", project, "bad bool", expected_revision=True)
 
+    def test_continuity_read_and_stale_write_do_not_register_or_rename_project(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            project.mkdir()
+            store = MemoryStore(root / "state.db")
+
+            def rows():
+                conn = sqlite3.connect(store.db_path)
+                try:
+                    return conn.execute("SELECT name, path FROM projects ORDER BY id").fetchall()
+                finally:
+                    conn.close()
+
+            self.assertIsNone(store.project_state("unknown", project))
+            self.assertEqual(rows(), [], "read of an unknown project must not create it")
+            with self.assertRaisesRegex(ValueError, "continuity_revision_conflict"):
+                store.update_project_state("stale-creator", project, "old", expected_revision=1)
+            self.assertEqual(rows(), [], "rejected initial CAS must not create a project")
+
+            first = store.update_project_state("real-owner", project, "verified", expected_revision=0)
+            self.assertEqual(first["revision"], 1)
+            self.assertEqual(rows()[0][0], "real-owner")
+            self.assertIsNotNone(store.project_state("stale-reader", project))
+            self.assertEqual(rows()[0][0], "real-owner", "continuity read must not rename a project")
+            with self.assertRaisesRegex(ValueError, "continuity_revision_conflict"):
+                store.update_project_state("stale-writer", project, "wrong", expected_revision=0)
+            self.assertEqual(rows()[0][0], "real-owner", "stale update must not rename project")
+            self.assertEqual(store.project_state("real-owner", project)["summary"], "verified")
+            result = store.update_project_state("real-owner", project, "new", expected_revision=1)
+            self.assertEqual(result["revision"], 2)
+
     def test_handoff_does_not_replace_newer_state_or_advance_revision(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -97,18 +97,23 @@ class MemoryStore:
                     "ALTER TABLE project_state ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
                 )
 
+    @staticmethod
+    def _project_id_in_txn(connection: sqlite3.Connection, slug: str, resolved: str) -> int:
+        """Create/rename a project using the caller's SQLite transaction."""
+        row = connection.execute("SELECT id FROM projects WHERE path=?", (resolved,)).fetchone()
+        if row:
+            connection.execute("UPDATE projects SET name=? WHERE id=?", (slug, row["id"]))
+            return int(row["id"])
+        cursor = connection.execute(
+            "INSERT INTO projects(name,path,active,created_at) VALUES(?,?,0,?)",
+            (slug, resolved, now()),
+        )
+        return int(cursor.lastrowid)
+
     def _project_id(self, slug: str, path: str | Path) -> int:
         resolved = str(Path(path).expanduser().resolve())
         with self._connect() as connection:
-            row = connection.execute("SELECT id FROM projects WHERE path=?", (resolved,)).fetchone()
-            if row:
-                connection.execute("UPDATE projects SET name=? WHERE id=?", (slug, row["id"]))
-                return int(row["id"])
-            cursor = connection.execute(
-                "INSERT INTO projects(name,path,active,created_at) VALUES(?,?,0,?)",
-                (slug, resolved, now()),
-            )
-            return int(cursor.lastrowid)
+            return self._project_id_in_txn(connection, slug, resolved)
 
     def set_active_project(self, slug: str, path: str | Path) -> dict[str, Any]:
         project_id = self._project_id(slug, path)
@@ -313,16 +318,20 @@ class MemoryStore:
         # An absent row has revision 0. bool is not a valid revision.
         if type(expected_revision) is not int or not 0 <= expected_revision <= 2**63 - 1:
             raise ValueError("expected_revision_required")
-        project_id = self._project_id(slug, path)
+        resolved = str(Path(path).expanduser().resolve())
         git_state = self.git_state(path)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             old = connection.execute(
-                "SELECT revision FROM project_state WHERE project_id=?", (project_id,)
+                "SELECT state.revision FROM project_state AS state "
+                "JOIN projects AS project ON project.id=state.project_id "
+                "WHERE project.path=?", (resolved,)
             ).fetchone()
             current_revision = int(old["revision"]) if old is not None else 0
             if current_revision != expected_revision:
                 raise ValueError("continuity_revision_conflict")
+            # Reject stale writes without changing project rows, labels or state.
+            project_id = self._project_id_in_txn(connection, slug, resolved)
             self._upsert_project_state(
                 connection,
                 project_id,
@@ -343,11 +352,14 @@ class MemoryStore:
         return self._project_state_from_row(slug, row) or {}
 
     def project_state(self, slug: str, path: str | Path) -> dict[str, Any] | None:
-        project_id = self._project_id(slug, path)
+        # Continuity reads must not register or rename projects.
+        resolved = str(Path(path).expanduser().resolve())
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM project_state WHERE project_id=?",
-                (project_id,),
+                "SELECT state.* FROM project_state AS state "
+                "JOIN projects AS project ON project.id=state.project_id "
+                "WHERE project.path=?",
+                (resolved,),
             ).fetchone()
         return self._project_state_from_row(slug, row)
 
