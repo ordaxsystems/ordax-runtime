@@ -13,6 +13,8 @@ APP_INTELLIGENCE_DEVICE_ACTIONS = frozenset({
     "intelligence.app_detail",
 })
 
+NATIVE_INTELLIGENCE_DEVICE_ACTIONS = frozenset({"ordax.intelligence.respond"})
+
 NATIVE_SURFACE_DEVICE_ACTIONS = frozenset({
     "ordax.surface.status",
     "ordax.surface.open",
@@ -110,6 +112,7 @@ DEVICE_SCOPED_ACTIONS = frozenset({
     *COMPUTER_DEVICE_ACTIONS,
     *APP_INTELLIGENCE_DEVICE_ACTIONS,
     *NATIVE_SURFACE_DEVICE_ACTIONS,
+    *NATIVE_INTELLIGENCE_DEVICE_ACTIONS,
 })
 
 
