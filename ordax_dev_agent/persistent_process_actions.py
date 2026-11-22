@@ -327,6 +327,12 @@ class PersistentProcessActions:
                     return ActionResult(False, "env contains an invalid key or value")
                 env[key] = value
 
+        # Optional human-readable label in the existing process receipt.
+        # Metadata does not grant permission or impersonate a GPT instance.
+        task_title = env.get("ORDAX_TASK_TITLE", "").strip()
+        if len(task_title) > 160 or any(ord(char) < 32 for char in task_title):
+            return ActionResult(False, "ORDAX_TASK_TITLE must be a single line of at most 160 characters")
+
         command = list(argv)
         resolved = shutil.which(command[0])
         if resolved:
@@ -382,6 +388,7 @@ class PersistentProcessActions:
                 else cwd.relative_to(project.root.resolve()).as_posix() if cwd != project.root.resolve() else "."
             ),
             "argv": argv,
+            **({"task_title": task_title} if task_title else {}),
             "log_path": str(log_path),
             "started_at_unix": time.time(),
         }
@@ -542,18 +549,81 @@ class PersistentProcessActions:
         return self._process_list_scoped(payload, self._device_process_scope())
 
     def _process_list_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
+        # Historical receipts are kept for cross-chat continuity, not returned
+        # wholesale: hundreds of full argv records exceed the MCP gateway limit.
+        limit = 24
         root = self._process_root(project)
-        items: list[dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
         if root.is_dir():
-            for path in sorted(root.glob("*.json")):
+            for path in root.glob("*.json"):
                 try:
-                    raw = json.loads(path.read_text(encoding="utf-8"))
-                    process_id = str(raw.get("process_id") or "")
-                    if process_id:
-                        items.append(self._public_process_state(self._load_process_state(project, process_id)))
-                except Exception:
+                    state = json.loads(path.read_text(encoding="utf-8"))
+                    if not isinstance(state, dict):
+                        continue
+                    process_id = str(state.get("process_id") or "")
+                    started = float(state.get("started_at_unix") or 0)
+                    if not 0 <= started < 1e12:
+                        continue
+                    if path.stem == process_id and self._scope_identity_matches(project, state):
+                        uuid.UUID(process_id)
+                        candidates.append(state)
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
                     continue
-        return ActionResult(True, "persistent process list ready", {**({"device_id": project.device_id} if isinstance(project, _DeviceProcessScope) else {"project": project.slug}), "processes": items})
+        candidates.sort(key=lambda value: float(value.get("started_at_unix") or 0), reverse=True)
+
+        def brief(state: dict[str, Any]) -> dict[str, Any]:
+            argv = state.get("argv") or []
+            command = Path(argv[0]).name if isinstance(argv, list) and argv and isinstance(argv[0], str) else "Process"
+            return {
+                "process_id": state["process_id"],
+                "title": state.get("task_title") or command,
+                "state": state["state"],
+                "running": state.get("running", False),
+                "started_at_unix": state.get("started_at_unix"),
+                "ended_at_unix": state.get("ended_at_unix"),
+                "ownership_valid": state.get("ownership_valid", False),
+            }
+
+        active: list[dict[str, Any]] = []
+        active_ids: set[str] = set()
+        for raw in candidates:
+            if raw.get("state") not in {"starting", "running", "stopping"}:
+                continue
+            try:
+                pid = int(raw.get("manager_pid") or 0)
+            except (ValueError, TypeError):
+                continue
+            if pid and not self._pid_running(pid):
+                continue
+            if not pid and time.time() - float(raw.get("started_at_unix") or 0) > 10:
+                continue
+            try:
+                state = self._public_process_state(self._load_process_state(project, raw["process_id"]))
+                if state["running"]:
+                    active.append(brief(state))
+                    active_ids.add(raw["process_id"])
+            except (OSError, ValueError, KeyError):
+                continue
+            if len(active) >= limit:
+                break
+        recent: list[dict[str, Any]] = []
+        for raw in candidates:
+            if len(active) + len(recent) >= limit:
+                break
+            if raw["process_id"] in active_ids:
+                continue
+            try:
+                recent.append(brief(self._public_process_state(self._load_process_state(project, raw["process_id"]))))
+            except (OSError, ValueError, KeyError):
+                continue
+        items = active + recent
+        return ActionResult(True, "persistent process list ready", {
+            **({"device_id": project.device_id} if isinstance(project, _DeviceProcessScope) else {"project": project.slug}),
+            "processes": items,
+            "total_registered": len(candidates),
+            "returned": len(items),
+            "truncated": len(candidates) > len(items),
+        })
 
     def process_logs(self, payload: dict[str, Any]) -> ActionResult:
         return self._process_logs_scoped(payload, self._project(payload))

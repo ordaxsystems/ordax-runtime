@@ -68,6 +68,44 @@ class ComputerProcessActionsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "identity mismatch"):
                 registry._load_process_state(scope, state["process_id"])
 
+    def test_listing_preserves_old_live_process_and_bounds_history(self):
+        registry = self._device_registry()
+        with patch(
+            "ordax_dev_agent.computer_filesystem_actions.load_computer_access_policy",
+            return_value=SimpleNamespace(enabled=True, full_access=True),
+        ):
+            scope = registry._device_process_scope()
+            registry._process_root(scope).mkdir(parents=True)
+            for index in range(42):
+                process_id = f"00000000-0000-4000-8000-{index + 1:012x}"
+                live = index == 0
+                state = {
+                    "process_id": process_id,
+                    "scope_kind": "device",
+                    "device_id": scope.device_id,
+                    "state": "running" if live else "exited",
+                    "manager_pid": 1337 if live else 0,
+                    "started_at_unix": index + 1,
+                    "task_title": "Old active task" if live else f"Done {index}",
+                    "argv": ["python", "-c", "sensitive command"],
+                    "token": "secret-token",
+                }
+                registry._process_state_path(scope, process_id).write_text(
+                    json.dumps(state), encoding="utf-8"
+                )
+            with patch.object(registry, "_pid_running", side_effect=lambda pid: pid == 1337), patch.object(
+                registry, "_owned", side_effect=lambda state: state.get("manager_pid") == 1337
+            ):
+                listed = registry.execute("computer.process_list", {})
+            self.assertTrue(listed.ok, listed.summary)
+            self.assertEqual(listed.data["total_registered"], 42)
+            self.assertEqual(len(listed.data["processes"]), 24)
+            self.assertTrue(listed.data["truncated"])
+            self.assertEqual(listed.data["processes"][0]["title"], "Old active task")
+            self.assertTrue(listed.data["processes"][0]["running"])
+            self.assertNotIn("secret-token", repr(listed.data))
+            self.assertNotIn("sensitive command", repr(listed.data))
+
     def test_device_process_requires_full_access_and_valid_device_identity(self):
         registry = self._device_registry()
         for policy in (SimpleNamespace(enabled=False, full_access=True),
