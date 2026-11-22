@@ -19,9 +19,9 @@ NATIVE_FILE_TRANSFER_ACTION_IDS = frozenset(
 
 
 DEVICE_AGENT_CAPABILITIES_SCHEMA = "ordax.device-agent-capabilities/1"
-# Bounded for local clients; all approved Product actions and native file
-# transfers must fit. Growth beyond this contract needs explicit review.
-MAX_DEVICE_CAPABILITIES = 128
+# Bounded by the OS v1 Device Agent reader, not by the execution catalog.
+# More locally available actions remain executable under their existing grants.
+MAX_DEVICE_CAPABILITIES = 64
 
 
 def device_capability_snapshot(action_names: Iterable[str]) -> dict[str, Any]:
@@ -57,11 +57,19 @@ def device_capability_snapshot(action_names: Iterable[str]) -> dict[str, Any]:
             })
 
     capabilities.sort(key=lambda item: item["id"])
-    if len(capabilities) > MAX_DEVICE_CAPABILITIES:
-        raise RuntimeError("Device Agent capability snapshot exceeds contract bound")
+    overflow = len(capabilities) > MAX_DEVICE_CAPABILITIES
+    if overflow:
+        # The OS v1 reader accepts at most 64 descriptors. Keep Computer
+        # Control and implemented file-transfer operations first. This only
+        # selects read-only metadata; execution/grants remain independent.
+        capabilities = sorted(
+            capabilities,
+            key=lambda item: (not item["id"].startswith("computer."), item["id"]),
+        )[:MAX_DEVICE_CAPABILITIES]
+        capabilities.sort(key=lambda item: item["id"])
 
     return {
         "schema": DEVICE_AGENT_CAPABILITIES_SCHEMA,
-        "state": "ready" if capabilities else "degraded",
+        "state": "degraded" if overflow or not capabilities else "ready",
         "capabilities": capabilities,
     }
