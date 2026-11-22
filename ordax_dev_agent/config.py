@@ -53,7 +53,7 @@ class AgentConfig:
     # remains the sole queue/lease authority and polling remains the fallback.
     product_wake_enabled: bool = True
     # Trusted host-only authority selection; never loaded from settings or environment.
-    computer_access_source: Literal["windows-local", "native-unbound"] = "windows-local"
+    computer_access_source: Literal["windows-local", "native-unbound", "native-windows-dev"] = "windows-local"
 
     @classmethod
     def from_env(cls) -> "AgentConfig":

@@ -528,6 +528,12 @@ class ActionRegistry(
             # generic Computer Control registry or its adapter grants.
             self._actions["ordax.surface.status"] = desktop_surface_status
             self._actions["ordax.surface.open"] = desktop_surface_open
+        elif config.computer_access_source == "native-windows-dev":
+            # The Owner/Development Windows host has working computer adapters
+            # in THIS canonical registry. Add only the OS-native Surface actions
+            # without replacing or shadowing any Windows handler.
+            self._actions["ordax.surface.status"] = desktop_surface_status
+            self._actions["ordax.surface.open"] = desktop_surface_open
         # The Desktop-hosted OrdaX OS is a distinct Product Device context,
         # not an implicit Windows host administrator. A trusted host passes
         # the exact allowed actions, never an allowlist from remote requests.
