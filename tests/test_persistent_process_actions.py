@@ -13,6 +13,7 @@ from unittest.mock import patch
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.persistent_process_runtime import atomic_json
+from ordax_dev_agent.process_environment import native_private_worker_command
 
 
 class PersistentProcessActionsTests(unittest.TestCase):
@@ -45,6 +46,48 @@ class PersistentProcessActionsTests(unittest.TestCase):
                 )
             except Exception:
                 pass
+
+
+    def test_native_private_worker_reuses_exact_bundled_loader(self):
+        from ordax_dev_agent import process_environment
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "ordax-product-agent"
+            binary.write_bytes(b"test-executable")
+            sidecar = root / "portable-lib"
+            sidecar.mkdir()
+            for name in ("ld-musl-x86_64.so.1", "libc.musl-x86_64.so.1",
+                         "libz.so.1"):
+                (sidecar / name).write_bytes(b"test-library")
+            loader = sidecar / "ld-musl-x86_64.so.1"
+            loader.chmod(0o755)
+            argv = ["--persistent-process-worker", "--state", "/tmp/process.json"]
+            with (patch.object(process_environment.sys, "platform", "linux"),
+                  patch.object(process_environment.sys, "frozen", True, create=True),
+                  patch.object(process_environment.sys, "_ordax_native_runtime", True, create=True)):
+                self.assertEqual(native_private_worker_command(str(binary), argv), [
+                    str(loader), "--library-path", str(sidecar), str(binary), *argv,
+                ])
+                # The native worker never silently falls back from a partially
+                # staged sidecar to the OS /lib or another host interpreter.
+                (sidecar / "libz.so.1").unlink()
+                with self.assertRaisesRegex(RuntimeError, "loader_unavailable"):
+                    native_private_worker_command(str(binary), argv)
+
+    def test_private_worker_command_preserves_unmodified_non_native_execution(self):
+        from ordax_dev_agent import process_environment
+        executable = "/usr/bin/python3"
+        argv = ["--persistent-process-worker"]
+        with (patch.object(process_environment.sys, "platform", "linux"),
+              patch.object(process_environment.sys, "frozen", False, create=True),
+              patch.object(process_environment.sys, "_ordax_native_runtime", True, create=True)):
+            self.assertEqual(native_private_worker_command(executable, argv),
+                             [executable, *argv])
+        with (patch.object(process_environment.sys, "platform", "win32"),
+              patch.object(process_environment.sys, "frozen", True, create=True),
+              patch.object(process_environment.sys, "_ordax_native_runtime", True, create=True)):
+            self.assertEqual(native_private_worker_command(executable, argv),
+                             [executable, *argv])
 
     def test_windows_supervisor_grace_covers_child_shutdown_contract(self):
         from ordax_dev_agent.persistent_process_runtime import (
