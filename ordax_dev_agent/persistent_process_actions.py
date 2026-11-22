@@ -262,7 +262,10 @@ class PersistentProcessActions:
         if not pid or not self._pid_running(pid):
             return False
         commandline = self._commandline(pid)
-        return "persistent_process_runtime.py" in commandline and token in commandline
+        return token in commandline and (
+            "persistent_process_runtime.py" in commandline
+            or "--persistent-process-worker" in commandline
+        )
 
     def _public_process_state(self, state: dict[str, Any]) -> dict[str, Any]:
         manager_pid = int(state.get("manager_pid") or 0)
@@ -359,9 +362,18 @@ class PersistentProcessActions:
         stdin_path = self._process_stdin_path(project, process_id)
         stdin_path.touch(exist_ok=True)
         runtime = Path(__file__).with_name("persistent_process_runtime.py").resolve()
+        # A frozen Desktop Product component is not a Python interpreter.
+        # Re-enter the same verified executable through its private manager
+        # entrypoint, just as the Linux Native Product component already does.
+        native_frozen = bool(getattr(sys, "_ordax_native_runtime", False)
+                             and getattr(sys, "frozen", False))
+        desktop_frozen = bool(getattr(sys, "frozen", False)
+                              and sys.platform == "win32"
+                              and self.config.computer_access_source == "native-windows-dev"
+                              and os.environ.get("ORDAX_RUNTIME_HOST_PROFILE") == "ordax-desktop")
         manager_command = native_private_worker_command(sys.executable, [
-            *(["--persistent-process-worker"] if getattr(sys, "_ordax_native_runtime", False)
-              and getattr(sys, "frozen", False) else [str(runtime)]),
+            *(["--persistent-process-worker"] if native_frozen or desktop_frozen
+              else [str(runtime)]),
             "--state", str(state_path),
             "--log", str(log_path),
             "--stdin-file", str(stdin_path),
@@ -411,7 +423,7 @@ class PersistentProcessActions:
 
         try:
             manager_environment = None
-            if getattr(sys, "_ordax_native_runtime", False) and getattr(sys, "frozen", False):
+            if native_frozen or desktop_frozen:
                 manager_environment = {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"}
             # The detached manager must report failures occurring *before* it
             # writes manager_ready_at_unix. Discarding stderr produced silent
