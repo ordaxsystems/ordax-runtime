@@ -20,7 +20,7 @@ RUN python -m pip install --no-deps --no-build-isolation . && \
 RUN mkdir -p /output/portable-lib && \
     cp -L /lib/ld-musl-x86_64.so.1 /output/portable-lib/ld-musl-x86_64.so.1 && \
     cp -L /lib/ld-musl-x86_64.so.1 /output/portable-lib/libc.musl-x86_64.so.1 && \
-    cp -L /lib/libz.so.1 /output/portable-lib/libz.so.1 && \
+    cp -L /usr/lib/libz.so.1 /output/portable-lib/libz.so.1 && \
     chmod 755 /output/portable-lib/ld-musl-x86_64.so.1
 
 # Kernel-only boot probe: no Alpine, no libc, no /bin, no external
