@@ -870,6 +870,21 @@ def ordax_surface_open(
     return _invoke(device_id=device_id, action="ordax.surface.open",
                    space_id=space_id, arguments={"appId": app_id})
 
+def usb_list(device_id: str, space_id: str | None = None) -> dict[str, Any]:
+    """Discover verified Owner DEV USB media; no Creator GUI or physical write."""
+    return _invoke(device_id=device_id, action="usb.list", space_id=space_id, arguments={})
+
+
+def usb_inspect(
+    device_id: str, disk_number: int, serial: str, space_id: str | None = None,
+) -> dict[str, Any]:
+    """Inspect one exact USB disk and serial through the OS-owned read-only adapter."""
+    return _invoke(
+        device_id=device_id, action="usb.inspect", space_id=space_id,
+        arguments={"disk_number": disk_number, "serial": serial},
+    )
+
+
 def computer_access_status(device_id: str, space_id: str | None = None) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.access_status", space_id=space_id, arguments={})
 

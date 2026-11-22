@@ -43,6 +43,22 @@ class MCPUSBMediaTests(TestCase):
             }).ok)
             invoke.assert_not_called()
 
+    def test_minimum_product_mcp_handlers_delegate_only_typed_usb_reads(self):
+        from ordax_dev_agent import product_mcp_handlers as handlers
+        result = {"ok": True, "status": "succeeded"}
+        with mock.patch.object(handlers, "_invoke", return_value=result) as invoke:
+            self.assertIs(handlers.usb_list("device-a"), result)
+            self.assertEqual(invoke.call_args.kwargs, {
+                "device_id": "device-a", "action": "usb.list",
+                "space_id": None, "arguments": {},
+            })
+            self.assertIs(handlers.usb_inspect("device-a", 1, "6699E36B"), result)
+            self.assertEqual(invoke.call_args.kwargs, {
+                "device_id": "device-a", "action": "usb.inspect",
+                "space_id": None,
+                "arguments": {"disk_number": 1, "serial": "6699E36B"},
+            })
+
     def test_missing_trusted_os_source_denies_execution(self):
         with mock.patch("ordax_dev_agent.usb_media_actions.subprocess.run") as run:
             receipt = self.agent.usb_list({})
