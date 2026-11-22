@@ -15,6 +15,7 @@ from typing import Any
 
 from .models import ActionResult
 from .persistent_process_runtime import WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS
+from .process_environment import native_private_worker_command
 
 
 @dataclass(frozen=True)
@@ -340,8 +341,7 @@ class PersistentProcessActions:
         stdin_path = self._process_stdin_path(project, process_id)
         stdin_path.touch(exist_ok=True)
         runtime = Path(__file__).with_name("persistent_process_runtime.py").resolve()
-        manager_command = [
-            sys.executable,
+        manager_command = native_private_worker_command(sys.executable, [
             *(["--persistent-process-worker"] if getattr(sys, "_ordax_native_runtime", False)
               and getattr(sys, "frozen", False) else [str(runtime)]),
             "--state", str(state_path),
@@ -352,7 +352,7 @@ class PersistentProcessActions:
             "--token", token,
             "--",
             *command,
-        ]
+        ])
 
         creationflags = 0
         start_new_session = False
