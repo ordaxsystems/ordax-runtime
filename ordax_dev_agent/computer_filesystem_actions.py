@@ -232,7 +232,12 @@ def load_computer_access_policy(config) -> ComputerAccessPolicy:
             allowed_roots=(), allowed_applications=(),
             protected_roots=protected_roots, relative_paths_base="",
         )
-    if source != "windows-local":
+    # DEV Desktop uses the same typed Windows executor and local access
+    # policy implementation as the independent Windows device. Its state,
+    # local policy and remote grants stay under its OWN Product device ID.
+    # The verified OS Supervisor is the only authority that may select this
+    # source; it is never parsed from incoming MCP requests or settings.
+    if source not in {"windows-local", "native-windows-dev"}:
         raise ValueError("Unknown computer access policy authority")
     settings_path = config.state_dir / "agent-settings.json"
     settings = _load_agent_settings(settings_path)

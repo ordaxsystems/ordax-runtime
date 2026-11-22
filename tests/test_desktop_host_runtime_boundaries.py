@@ -10,7 +10,9 @@ from unittest.mock import patch
 
 from ordax_dev_agent.actions import ActionRegistry
 from ordax_dev_agent.config import AgentConfig
-from ordax_dev_agent.desktop_host_main import DESKTOP_OS_ACTIONS, _desktop_status_handoff, main
+from ordax_dev_agent.desktop_host_main import (
+    DESKTOP_DEV_ACTIONS, DESKTOP_OS_ACTIONS, _desktop_status_handoff, main,
+)
 from ordax_dev_agent.product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS
 
 
@@ -113,6 +115,48 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         self.assertTrue(callable(kwargs["status_server_ready"]))
         from ordax_dev_agent.desktop_project_binding import read_desktop_project_links
         self.assertIs(kwargs["project_binding_provider"], read_desktop_project_links)
+
+    def test_owner_dev_desktop_reuses_real_windows_actions_with_own_identity(self):
+        result, dispatch = self.run_host(env={"ORDAX_DESKTOP_DEV_MCP": "1"})
+        self.assertEqual(result, 0)
+        config = dispatch.call_args.args[0]
+        launch = dispatch.call_args.kwargs
+        self.assertEqual(config.computer_access_source, "native-windows-dev")
+        self.assertEqual(config.device_id, self.config.device_id)
+        self.assertEqual(config.state_dir, self.state)
+        self.assertEqual(config.workspace_root, self.root / "Files")
+        self.assertIn(self.root / "native-state", config.protected_roots)
+        self.assertIsNone(launch["computer_adapter"])
+        self.assertEqual(launch["allowed_action_names"], DESKTOP_DEV_ACTIONS)
+        self.assertIn("computer.terminal_exec", DESKTOP_DEV_ACTIONS)
+        self.assertIn("computer.processes", DESKTOP_DEV_ACTIONS)
+        self.assertIn("computer.windows", DESKTOP_DEV_ACTIONS)
+        self.assertIn("computer.screenshot", DESKTOP_DEV_ACTIONS)
+        self.assertIn("computer.text_write", DESKTOP_DEV_ACTIONS)
+        self.assertIn("ordax.surface.status", DESKTOP_DEV_ACTIONS)
+        # The same shared registry implements the tools; no Desktop copy.
+        with patch.dict(os.environ, {
+            "ORDAX_COMPUTER_ACCESS_ENABLED": "1",
+            "ORDAX_COMPUTER_FULL_ACCESS": "1",
+            "ORDAX_COMPUTER_FULL_FILESYSTEM": "1",
+        }, clear=False):
+            registry = ActionRegistry(config, computer_adapter=None,
+                                      allowed_action_names=DESKTOP_DEV_ACTIONS)
+            self.assertEqual(set(registry.names), DESKTOP_DEV_ACTIONS)
+            status = registry.execute("computer.access_status", {})
+            self.assertTrue(status.ok)
+            self.assertTrue(status.data["enabled"])
+            self.assertTrue(status.data["full_access"])
+            self.assertTrue(status.data["full_filesystem"])
+        self.assertFalse((self.state / "agent-settings.json").is_symlink())
+
+    def test_desktop_dev_profile_is_not_implicitly_enabled(self):
+        _, restricted = self.run_host()
+        self.assertEqual(restricted.call_args.args[0].computer_access_source, "native-unbound")
+        self.assertEqual(restricted.call_args.kwargs["allowed_action_names"], DESKTOP_OS_ACTIONS)
+        self.assertEqual(restricted.call_args.kwargs["computer_adapter"], {})
+        with self.assertRaisesRegex(RuntimeError, "Invalid Desktop DEV"):
+            self.run_host(env={"ORDAX_DESKTOP_DEV_MCP": "true"})
 
     def test_status_handoff_is_launch_bound_and_contains_no_authority(self):
         import json

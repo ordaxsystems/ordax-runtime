@@ -17,7 +17,7 @@ from uuid import UUID
 from .config import AgentConfig
 from .desktop_project_binding import read_desktop_project_links
 from .main import run
-from .product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS
+from .product_action_scope import COMPUTER_DEVICE_ACTIONS, NATIVE_SURFACE_DEVICE_ACTIONS
 
 # Minimal Native Product authority: observation is read-only; app opening
 # requires an independent Platform Owner grant and a real Surface receipt.
@@ -25,6 +25,16 @@ from .product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS
 # Additional OS actions require verified Native adapters; no unscoped Windows
 # filesystem, terminal, GUI control or host adapter is delegated.
 DESKTOP_OS_ACTIONS = frozenset({"agent.status", "computer.access_status"}) | NATIVE_SURFACE_DEVICE_ACTIONS
+# One ActionRegistry/Computer Control implementation for Windows and Desktop.
+# Product's canonical device-action catalog supplies all normal computer
+# operations; the transfer/owner-observation methods already belong to that
+# registry and are admitted by the same executor. No copied adapter or MCP.
+DESKTOP_DEV_ACTIONS = (frozenset({
+    "agent.status", "computer.activity_status",
+    "computer.transfer_abort", "computer.transfer_begin",
+    "computer.transfer_chunk", "computer.transfer_commit",
+    "computer.transfer_status",
+}) | COMPUTER_DEVICE_ACTIONS | NATIVE_SURFACE_DEVICE_ACTIONS)
 _STATUS_HANDOFF_SCHEMA = "ordax.desktop-runtime-status-handoff/1"
 
 
@@ -105,21 +115,30 @@ def main() -> int:
         raise RuntimeError("OrdaX Desktop Product identity is invalid") from None
     if config.adapters or config.projects:
         raise RuntimeError("OrdaX Desktop Runtime cannot load host-side adapters")
-    # Never inherit Windows Documents/github or HORDAX workspace defaults;
-    # the only valid Product context is the OS-owned userData/Files boundary.
+    # Only the verified OS Supervisor's DEV launch opts this SEPARATE Device
+    # into the same computer actions already implemented by Windows. Its
+    # identity, state, Files space and Platform grants are never borrowed.
+    # The Supervisor strips inherited ORDAX_* environment before setting
+    # this marker from its independently verified DEV candidate.
+    mode = os.environ.get("ORDAX_DESKTOP_DEV_MCP", "")
+    if mode not in {"", "1"}:
+        raise RuntimeError("Invalid Desktop DEV Product launch profile")
+    dev_computer = mode == "1"
     scoped = replace(config, agent_name="OrdaX Desktop",
                      workspace_root=user_data / "Files",
                      hordax_path=user_data / "Files",
                      bridge_path=user_data / "native-state" / "product-runtime",
-                     computer_access_source="native-unbound")
+                     protected_roots=tuple(config.protected_roots) + (user_data / "native-state",),
+                     computer_access_source="native-windows-dev" if dev_computer
+                         else "native-unbound")
     # This is intentionally NOT native_main: its Linux/USB identity and
     # connector policy belong to the OS's native-disk/USB Supervisor.
     handoff_path, publish_status = _desktop_status_handoff(canonical)
     try:
         return run(
             scoped,
-            computer_adapter={},
-            allowed_action_names=DESKTOP_OS_ACTIONS,
+            computer_adapter=None if dev_computer else {},
+            allowed_action_names=DESKTOP_DEV_ACTIONS if dev_computer else DESKTOP_OS_ACTIONS,
             status_port=0,
             project_binding_provider=read_desktop_project_links,
             status_server_ready=publish_status,
