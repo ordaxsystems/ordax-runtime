@@ -1,4 +1,4 @@
-"""Keep a frozen native Runtime's private loader paths out of system tools."""
+"""One external-process environment boundary for all canonical Runtime actions."""
 from __future__ import annotations
 
 import os
@@ -6,7 +6,14 @@ import sys
 
 
 def external_process_environment(overrides: dict[str, str] | None = None) -> dict[str, str]:
-    environment = os.environ.copy()
+    # External terminal commands, project browsers and owned child processes
+    # are not the OrdaX Native host. Never inherit its per-launch bridge grants,
+    # device configuration or PyInstaller boot state. Explicit caller-provided
+    # environment remains usable under the existing action/Owner grants.
+    environment = {
+        key: value for key, value in os.environ.items()
+        if not key.upper().startswith(("ORDAX_", "_PYI_", "PYINSTALLER_"))
+    }
     if getattr(sys, "frozen", False) and sys.platform == "linux":
         original = environment.get("LD_LIBRARY_PATH_ORIG")
         if original is None:

@@ -187,11 +187,11 @@ class ProcessRuntime:
             creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
             start_new_session = True
-        child_env = os.environ.copy()
-        child_env.update(self.env)
-        if getattr(sys, "frozen", False) and sys.platform == "linux":
-            from ordax_dev_agent.process_environment import external_process_environment
-            child_env = external_process_environment(self.env)
+        # The private manager may require host-only ORDAX_* grants to boot,
+        # but its supervised external child must NEVER inherit those grants.
+        # Task-supplied environment is still applied by the one shared helper.
+        from ordax_dev_agent.process_environment import external_process_environment
+        child_env = external_process_environment(self.env)
         with self.log_path.open("a", encoding="utf-8", errors="replace", buffering=1) as log:
             log.write(f"\n[ORDAX] starting: {self.command!r}\n")
             try:

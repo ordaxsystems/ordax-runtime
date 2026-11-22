@@ -7,6 +7,7 @@ from typing import Any
 
 from .computer_filesystem_actions import load_computer_access_policy
 from .models import ActionResult
+from .process_environment import external_process_environment
 
 _CF_UNICODETEXT = 13
 _GMEM_MOVEABLE = 0x0002
@@ -382,6 +383,7 @@ class ComputerParityActions:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 close_fds=True,
+                env=external_process_environment(),
             )
         except OSError as error:
             return ActionResult(False, f"application launch failed: {error}")
