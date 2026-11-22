@@ -17,6 +17,7 @@ from collections.abc import Mapping
 
 from . import __version__
 from .config import AgentConfig, product_execution_capacity
+from .product_action_scope import PROJECT_MCP_ACTIONS
 from .product_central_session import ProductCentralSessionStatus
 from .status_server import start_status_server
 from ordax_connector.capabilities import capability_digest
@@ -1201,10 +1202,20 @@ def run(
             },
         }
 
+    def local_device_capabilities() -> list[str]:
+        if registry is None:
+            return []
+        names = registry.names
+        # The bounded OS Device Agent v1 reader is device-only. Project-scoped
+        # tools stay in the SAME ActionRegistry and Product heartbeat, with
+        # their independent Project binding/Owner grants, not a second catalog.
+        return ([name for name in names if name not in PROJECT_MCP_ACTIONS]
+                if allowed_action_names is not None else names)
+
     status_server = start_status_server(
         status_payload, port=status_port, health_provider=health_payload,
         readiness_provider=readiness_payload,
-        capabilities_provider=lambda: registry.names if registry is not None else [],
+        capabilities_provider=local_device_capabilities,
     )
     status_server_closed = False
 

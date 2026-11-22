@@ -17,12 +17,12 @@ from uuid import UUID
 from .config import AgentConfig
 from .desktop_project_binding import read_desktop_project_links
 from .main import run
-from .product_action_scope import COMPUTER_DEVICE_ACTIONS, DEVICE_BLENDER_ACTIONS, NATIVE_SURFACE_DEVICE_ACTIONS
+from .product_action_scope import COMPUTER_DEVICE_ACTIONS, DEVICE_BLENDER_ACTIONS, NATIVE_SURFACE_DEVICE_ACTIONS, PROJECT_MCP_ACTIONS
 
 # Minimal Native Product authority: observation is read-only; app opening
 # requires an independent Platform Owner grant and a real Surface receipt.
 # computer.access_status reads the local policy only; it does NOT enable it.
-# Additional OS actions require verified Native adapters; no unscoped Windows
+# Project actions require verified native Catalog links and Platform grants; no unscoped Windows
 # filesystem, terminal, GUI control or host adapter is delegated.
 DESKTOP_OS_ACTIONS = frozenset({"agent.status", "computer.access_status"}) | NATIVE_SURFACE_DEVICE_ACTIONS
 # One ActionRegistry/Computer Control implementation for Windows and Desktop.
@@ -34,7 +34,7 @@ DESKTOP_DEV_ACTIONS = (frozenset({
     "computer.transfer_abort", "computer.transfer_begin",
     "computer.transfer_chunk", "computer.transfer_commit",
     "computer.transfer_status",
-}) | COMPUTER_DEVICE_ACTIONS | DEVICE_BLENDER_ACTIONS | NATIVE_SURFACE_DEVICE_ACTIONS)
+}) | COMPUTER_DEVICE_ACTIONS | DEVICE_BLENDER_ACTIONS | NATIVE_SURFACE_DEVICE_ACTIONS | PROJECT_MCP_ACTIONS)
 _STATUS_HANDOFF_SCHEMA = "ordax.desktop-runtime-status-handoff/1"
 
 

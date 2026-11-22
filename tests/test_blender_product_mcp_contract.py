@@ -1,7 +1,7 @@
 """Product MCP Blender action must reuse the attested Project binding."""
 import unittest
 
-from ordax_dev_agent.product_device_control_plane import _PROJECT_SCOPE_ACTIONS
+from ordax_dev_agent.product_action_scope import PROJECT_MCP_ACTIONS
 from ordax_dev_agent.product_gateway import PRODUCT_ACTIONS, product_action_catalog
 from ordax_dev_agent.product_mcp import PRODUCT_MCP_TOOLS
 
@@ -24,7 +24,7 @@ class BlenderProductMcpContractTests(unittest.TestCase):
     def test_project_binding_required_for_every_remote_blender_action(self):
         for action in BLENDER_TOOLS:
             with self.subTest(action=action):
-                self.assertIn(action, _PROJECT_SCOPE_ACTIONS)
+                self.assertIn(action, PROJECT_MCP_ACTIONS)
                 self.assertTrue(PRODUCT_ACTIONS[action].project_required)
                 self.assertIn("project", PRODUCT_ACTIONS[action].allowed_fields)
 
