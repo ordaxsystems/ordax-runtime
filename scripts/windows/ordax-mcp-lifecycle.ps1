@@ -829,8 +829,44 @@ switch ($Operation) {
             Save-Journal $journalPath $journal
             # DEV contains no user data under the package root; the identity
             # and grants remain in the existing persistent Owner state.
-            try { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
-            catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            # PowerShell Remove-Item can take longer than the 40-minute task
+            # deadline when enumerating the private Windows Python tree.
+            # Native directory removal is bounded and touches only the old
+            # verified package, after successful activation and commit.
+            try {
+                if (Test-Path -LiteralPath $previous -PathType Container) {
+                    if ([IO.Path]::GetFullPath($previous) -ine ($installRoot + '.previous-dev')) {
+                        throw 'Committed DEV cleanup path escaped previous root'
+                    }
+                    if (((Get-Item -LiteralPath $previous -Force).Attributes -band
+                          [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                        throw 'Committed DEV previous root is a reparse point'
+                    }
+                    $oldManifest = Read-OwnerJsonDocument -Path (Join-Path $previous 'product-manifest.json')
+                    if ($oldManifest.product -cne 'OrdaX MCP' -or
+                        $oldManifest.runtime_source_commit -ceq $journal.targetCommit) {
+                        throw 'Committed DEV previous root provenance mismatch'
+                    }
+                    $cleanupStart = [Diagnostics.ProcessStartInfo]::new()
+                    $cleanupStart.FileName = Join-Path $env:SystemRoot 'System32\cmd.exe'
+                    $cleanupStart.Arguments = '/d /c rmdir /s /q "' + $previous + '"'
+                    $cleanupStart.UseShellExecute = $false
+                    $cleanupStart.CreateNoWindow = $true
+                    $cleanupProcess = [Diagnostics.Process]::Start($cleanupStart)
+                    if ($null -eq $cleanupProcess) { throw 'Committed DEV cleanup process unavailable' }
+                    try {
+                        if (!$cleanupProcess.WaitForExit(120000)) {
+                            $cleanupProcess.Kill()
+                            [void]$cleanupProcess.WaitForExit(5000)
+                            throw 'Committed DEV cleanup exceeded 120-second bound'
+                        }
+                        if ($cleanupProcess.ExitCode -ne 0 -or
+                            (Test-Path -LiteralPath $previous)) {
+                            throw 'Committed DEV previous root could not be fully removed'
+                        }
+                    } finally { $cleanupProcess.Dispose() }
+                }
+            } catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
             Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
         } catch {
             $failure = $_.Exception.Message
