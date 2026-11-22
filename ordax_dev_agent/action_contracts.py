@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .product_action_scope import DEVICE_SCOPED_ACTIONS
+
 
 DEVICE_ACTION_PREFIXES = (
     "blender.",
@@ -37,7 +39,15 @@ class DispatchedAction:
 
 def is_device_owned_capability(capability: str) -> bool:
     """Return whether a capability belongs to the Device Agent action surface."""
-    return capability == "forge.app_read" or capability.startswith(DEVICE_ACTION_PREFIXES)
+    # Device capabilities are declared once in the canonical Product scope.
+    # The previous prefix-only filter rejected valid Native Surface and App
+    # Intelligence actions AFTER lease acquisition, leaving those jobs leased
+    # until expiry. Reuse that exact catalog, never a broad "ordax." prefix.
+    return (
+        capability == "forge.app_read"
+        or capability in DEVICE_SCOPED_ACTIONS
+        or capability.startswith(DEVICE_ACTION_PREFIXES)
+    )
 
 
 def dispatch_device_capability(
