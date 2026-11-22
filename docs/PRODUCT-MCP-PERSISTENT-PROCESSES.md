@@ -123,8 +123,40 @@ legado ainda requer **auditoria física e migração sem perda de dados** antes
 de eventual substituição. Não remover dados reais só para cumprir uma meta
 abstrata de limpeza.
 
-**Prova física anterior:** em 22/11/2026, o DEV Windows instalou Runtime
-`2585f6f1` e recuperou missões `4/4` com código `0`; monitor `60/60`, zero
-verificações não saudáveis. Essa prova cobre a versão anterior:
-**o novo contrato de revisão e handoffs só estará instalado após integrar
-e aplicar a nova revisão canônica**.
+### Evidência de implantação — 22/11/2026 (não é estado futuro presumido)
+
+- **Código:** Runtime PR #458 integrada em `b9740bc0`. A `ordax-runtime/main`
+  avançou depois para `e88882d7` (Aura/Desktop), descendente do contrato CAS.
+- **Windows físico:** `DESKTOP-4UFL03B` atualizado pelo lifecycle canônico
+  para `e88882d7777278399a8d88a7564d7e8b73e5cc81`, pacote SHA-256
+  `048A56C53C0A42B2791326E120B92D5E585481AF728AFBE4F8AAB348A5602EF0`.
+  Journal `46c7ae18d4ad4200bc948d3b2f430995` confirmou `phase=committed`;
+  manifesto físico conferido; readiness local verdadeiro e Product conectado.
+- **Prova física de comportamento:** Python do *Runtime instalado*, com
+  SQLite temporário isolado, confirmou `expected_revision=1` recusado após
+  revisão `2` com `continuity_revision_conflict`, sem sobrescrever o estado;
+  `handoff.create` preservou a proposta antiga sem alterar o estado corrente.
+  Isso **não** modificou memória de projeto real.
+- **Worker remoto:** Platform PR #440 integrada em
+  `fbb7fa50dc834c4db94ca606b59f94f859ef0adc`. Workflow canônico
+  de produção `45079651689` concluiu `validate-candidate` e
+  `deploy-production` com sucesso. Cloudflare registrou deployment
+  `60db1267-278f-43e1-ac5b-5b73c533de18` às `2026-11-22T22:48:37Z`,
+  100% da versão nova do Worker `ordax-mcp`.
+- **Limite ainda não comprovado:** a rota Product MCP desta conversa
+  respondeu `product_grant_not_resolved` para `repository_catalog`. Além
+  disso, a definição da ferramenta `continuity_update` que esta conversa
+  recebeu ainda não expunha `expected_revision`. Não foi executada escrita
+  E2E autenticada pelo Worker após o deploy. É necessário **grant válido**
+  e metadados de ferramentas atualizados no cliente antes do teste E2E.
+  Não contornar autorização, inferir sucesso nem chamar `continuity_update`
+  sem `expected_revision`.
+- **Bancos antigos:** `%LOCALAPPDATA%/OrdaX/Studio/state.db` ainda existia
+  fisicamente na auditoria. Sem prova de migração e ausência de consumidores,
+  **não apagar**. A migração de esquema CAS é aditiva e testada, mas não
+  equivale a migrar/descartar definitivamente esse arquivo.
+
+**Ao retomar em outra conversa:** tratar este bloco como prova histórica
+datada, nunca como status live. Reconsultar `main`, manifesto, Runtime,
+Worker/CI, grants e schema da ferramenta antes de continuar; se a
+execução/gravação estiver incerta, recuperar recibos em vez de repetir.
