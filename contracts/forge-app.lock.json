@@ -1,10 +1,10 @@
 {
   "schema": "ordax.forge-contract-pin/1",
   "repository": "ordaxsystems/ordax-apps",
-  "sourceCommit": "8f60435b59c76a096f1391efb0f15e26cc3d3955",
+  "sourceCommit": "80e272d5164d9ffe1f9ac8689f3027711e65a68c",
   "sourcePath": "forge/product/src/forge-contract.mjs",
-  "sourceBlob": "1e991aa6839ec57b055db8f518d8338b2bd0c00b",
-  "projectionSha256": "27d515fb47ff98614645b703866f7dedfce847792518be8069d928467d270d4c",
+  "sourceBlob": "c5a1be3608ef6108f04dd496fcf243eec1432b3d",
+  "projectionSha256": "f6e0888e5ce0e3ccdfaabc6a3dda9deedea734ddeee313d2e2b5cf33591cd617",
   "contract": "ordax.forge/1",
   "authority": "none"
 }

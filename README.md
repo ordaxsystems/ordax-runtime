@@ -195,3 +195,44 @@ The [native executable recipe](native/ordax-product-agent/README.md) builds an
 unsigned Owner USB candidate with pinned build inputs and an offline executable
 probe. It bundles the Python executor; no device-side Python or Bash installation
 is required. Candidate creation does not install or activate the OS Runtime.
+
+
+## Local application hosts: semantic capability negotiation
+
+`ordax_dev_agent.local_host_client` is a generic loopback-only consumer of
+a local application's `GET /api/capabilities` manifest. It does not copy
+application-specific business rules into the Runtime and does not install
+another MCP, host, HTTP server or OAuth grant. The existing authorized
+`computer.terminal_exec` transport may invoke the client.
+
+The owner can add new operations to the application's manifest without adding
+another Product MCP tool for each new button. Each operation declares an ID,
+method, safe route and read/write effect. The caller supplies the exact
+expected versioned host contract; mismatched contracts, unlisted routes,
+redirects and unsafe paths are rejected.
+
+Example for a local host on port 8769 (the application remains the authority):
+
+```python
+from ordax_dev_agent.local_host_client import LocalAppHost
+
+host = LocalAppHost(port=8769, expected_contract="tonart.curadoria.host/2")
+print(host.capabilities()["operations"])
+print(host.invoke("models.list", params={"page": 1, "limit": 2}))
+
+# Write calls additionally require a user-authorized local token file:
+# host = LocalAppHost(port=8769, expected_contract="...",
+#                     token_file="C:/path/to/private/token.txt")
+# host.invoke("gallery.append", body={"group_key": "...",
+#                                     "revision": 3, "message_ids": [100]})
+```
+
+CLI: `python -m ordax_dev_agent.local_host_client --port 8769
+--contract tonart.curadoria.host/2`. Use `--operation` with
+`--params` (JSON) for reads; `--body` (JSON) and `--token-file`
+for explicit writes. Images use `--output-file` (create-only), never
+unbounded binary output on stdout. Page and batch limits bound individual
+requests, not the total number of models or images a host can manage.
+
+This bridge does not authorize publication, editorial approval, grants,
+or unauthorized access; host-side checks remain authoritative.

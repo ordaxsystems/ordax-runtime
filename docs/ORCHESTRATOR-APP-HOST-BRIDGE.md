@@ -49,6 +49,26 @@ projection of the App's `orchestrator-contract.mjs`, pinned by
 this metadata instead of owning a second tool catalog or service. The App
 continues to validate every operation with its own canonical schema.
 
+### Atualização de contrato somente leitura — 2026-11-21
+
+A projeção foi regenerada diretamente de `ordax-apps/main`
+(`forge/product/scripts/export-forge-contract.mjs --runtime-readonly`).
+O contrato preserva **somente sete operações de leitura**: `status`,
+`projects_list`, `orchestrators_list`, `work_list`, `work_get`,
+`work_messages` e `command_get`. Nenhuma operação de escrita é mais
+transportada como metadado histórico nesse bridge. As travas de blob, commit e
+SHA-256 ficam em `contracts/forge-app.lock.json` e na trava de
+compatibilidade do próprio App. Isso é metadado de interoperabilidade,
+**não um grant e não uma ativação da ponte Product MCP**. O teste do Runtime
+recusa ferramentas com `readOnly` diferente de `true`; a validação do
+Forge compara o schema de cada operação com o catálogo App canônico.
+
+O App da instalação DEV dedicada continua passivo; Forge MCP é a autoridade
+de Tasks, claims e recibos; o OrdaX MCP só executa ações de dispositivo por
+meio de sua sessão e grants atestados próprios. O cliente de leitura legado
+do Runtime **não deve ser promovido a executor** nem receber uma credencial,
+comando ou permissão implícita pela mera sincronização desta projeção.
+
 ## Validation and remaining integration
 
 Tests cover exact identity, Unicode signatures, scope, expiry, changed caller,

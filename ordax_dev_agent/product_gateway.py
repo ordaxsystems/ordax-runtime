@@ -191,6 +191,7 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
                 "project",
                 "artifact_name",
                 "project_artifact_path",
+                "project_artifact_paths",
                 "max_bytes",
                 "thumbnail",
                 "max_width",
@@ -222,7 +223,7 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
     "browser.screenshot": ProductActionSpec(
         name="browser.screenshot",
         local_action="browser.screenshot",
-        allowed_fields=frozenset({"project", "session_id", "tab_id", "width", "height"}),
+        allowed_fields=frozenset({"project", "session_id", "tab_id", "width", "height", "include_preview"}),
     ),
     "computer.windows": ProductActionSpec(
         name="computer.windows",
@@ -239,7 +240,7 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
     "computer.screenshot": ProductActionSpec(
         name="computer.screenshot",
         local_action="computer.screenshot",
-        allowed_fields=frozenset({"mode"}),
+        allowed_fields=frozenset({"mode", "include_preview"}),
         project_required=False,
     ),
     "computer.screen_info": ProductActionSpec(

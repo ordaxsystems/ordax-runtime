@@ -840,6 +840,17 @@ def _start_local_watchdog(
         print(f"local watchdog script missing: {script}", file=sys.stderr)
         return None
 
+    # The watchdog may outlive the packaged agent during an atomic upgrade.
+    # Its process working directory must NEVER hold an open directory handle
+    # inside the package root that the canonical updater needs to rename.
+    watchdog_cwd = repo_root
+    if packaged_root:
+        watchdog_cwd = config.state_dir.resolve()
+        package_path = repo_root.resolve()
+        if watchdog_cwd == package_path or package_path in watchdog_cwd.parents:
+            raise ValueError("Packaged watchdog state directory cannot be inside Runtime installation")
+        watchdog_cwd.mkdir(parents=True, exist_ok=True)
+
     command = [
         "powershell.exe",
         "-NoProfile",
@@ -860,7 +871,7 @@ def _start_local_watchdog(
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         process = subprocess.Popen(
             command,
-            cwd=str(repo_root),
+            cwd=str(watchdog_cwd),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -940,7 +951,23 @@ def main() -> int:
         from .desktop_host_main import main as desktop_main
         return desktop_main()
     _startup_log(None, f"MAIN_ENTER pid={os.getpid()} version={__version__}")
-    return run(AgentConfig.from_env())
+    config = AgentConfig.from_env()
+    if sys.platform == "win32":
+        from .windows_project_binding import (
+            windows_project_links, resolve_windows_project_workspace,
+        )
+
+        # The existing agent-settings.json projects allowlist is the Windows
+        # local Project Catalog. Cloud scope IDs must be explicit and already
+        # registered; no Git basename -> project binding inference.
+        return run(
+            config,
+            project_binding_provider=lambda: windows_project_links(config),
+            project_binding_resolver=lambda link, repo: resolve_windows_project_workspace(
+                config, link, repo,
+            ),
+        )
+    return run(config)
 
 
 def _native_local_access_granted(provider: Callable[[], bool] | None) -> bool:
@@ -1025,6 +1052,7 @@ def run(
     orchestrator_installation_provider: Callable | None = None,
     native_access_enabled: Callable[[], bool] | None = None,
     project_binding_provider: Callable[[], dict[str, Any] | None] | None = None,
+    project_binding_resolver: Callable[[dict[str, str], str], Any] | None = None,
     status_server_ready: Callable[[int], None] | None = None,
 ) -> int:
     """Run the canonical lifecycle with host-owned configuration and identity.
@@ -1073,6 +1101,15 @@ def run(
         "started_at": time.time(),
         "job_phase": "idle",
         "jobs_completed": 0,
+        # In-memory transport attempt counters for local /status only.
+        # These are NOT SQL query counts and never make remote requests.
+        "product_claim_attempts": 0,
+        "product_empty_claims": 0,
+        "product_jobs_claimed": 0,
+        "product_heartbeat_attempts": 0,
+        "product_heartbeat_successes": 0,
+        "product_catalog_reconcile_submissions": 0,
+        "product_wake_reconciliations": 0,
         "active_jobs": {},
         "active_job_count": 0,
         "max_concurrent_jobs": _MAX_CONCURRENT_PRODUCT_JOBS,
@@ -1265,6 +1302,8 @@ def run(
         }
         if project_binding_provider is not None:
             control_kwargs["project_binding_provider"] = project_binding_provider
+        if project_binding_resolver is not None:
+            control_kwargs["project_binding_resolver"] = project_binding_resolver
         control = build_control_plane(config, **control_kwargs)
     except Exception:
         close_status_server()
@@ -1392,6 +1431,7 @@ def run(
                     )
 
                 if now >= next_heartbeat:
+                    runtime["product_heartbeat_attempts"] += 1
                     with runtime_lock:
                         has_active_jobs = bool(runtime.get("active_jobs"))
                     heartbeat_healthy = _product_heartbeat_tick(
@@ -1407,6 +1447,8 @@ def run(
                     # Use the existing canonical reconciler on one independent
                     # thread; never start another while it is still running.
                     # Failed presence must not schedule fresh onboarding I/O.
+                    if heartbeat_healthy:
+                        runtime["product_heartbeat_successes"] += 1
                     if heartbeat_healthy and project_binding_future is None:
                         reconcile_project_bindings = getattr(
                             control, "reconcile_project_bindings", None,
@@ -1415,6 +1457,7 @@ def run(
                             project_binding_future = control_maintenance_executor.submit(
                                 reconcile_project_bindings,
                             )
+                            runtime["product_catalog_reconcile_submissions"] += 1
                     with runtime_lock:
                         if runtime.get("active_jobs") and runtime.get("state") == "ready":
                             runtime["state"] = "busy"
@@ -1426,6 +1469,7 @@ def run(
                     )
 
                 if _consume_product_wake(control, wake_listener):
+                    runtime["product_wake_reconciliations"] += 1
                     next_claim_due = 0.0
 
                 if len(job_futures) >= _MAX_CONCURRENT_PRODUCT_JOBS:
@@ -1447,10 +1491,12 @@ def run(
                     )
                     continue
 
+                runtime["product_claim_attempts"] += 1
                 job = control.claim_next_job()
                 transport_failures = 0
                 runtime.pop("transport_retry_seconds", None)
                 if job is None:
+                    runtime["product_empty_claims"] += 1
                     idle_claim_misses += 1
                     # Stay very responsive during interactive work, then ease
                     # toward the configured ceiling while the agent is idle.
@@ -1480,6 +1526,7 @@ def run(
                     )
                     continue
 
+                runtime["product_jobs_claimed"] += 1
                 idle_claim_misses = 0
                 next_claim_due = 0.0
                 job_runtime = {

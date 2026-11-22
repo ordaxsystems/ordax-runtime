@@ -456,6 +456,9 @@ class ComputerControlActions:
         mode = str(payload.get("mode") or "desktop").strip().lower()
         if mode not in {"desktop", "active_window"}:
             return ActionResult(False, "mode must be desktop or active_window")
+        include_preview = payload.get("include_preview", False)
+        if type(include_preview) is not bool:
+            return ActionResult(False, "include_preview must be boolean")
         target = self._computer_artifact_path()
         try:
             # Windows-only capture dependency. The OrdaX OS Native Product
@@ -473,13 +476,9 @@ class ComputerControlActions:
             else:
                 image = ImageGrab.grab(all_screens=True)
             image.save(target, "PNG")
-        except Exception as error:
-            return ActionResult(False, f"desktop screenshot failed: {type(error).__name__}: {error}")
-        width, height = image.size
-        return ActionResult(
-            True,
-            "desktop screenshot captured",
-            {
+            width, height = image.size
+            original_size = int(target.stat().st_size)
+            result = {
                 "scope": "device",
                 "mode": mode,
                 "coordinate_space": "physical_pixels",
@@ -487,9 +486,21 @@ class ComputerControlActions:
                 "image_path": str(target),
                 "width": int(width),
                 "height": int(height),
-                "size_bytes": int(target.stat().st_size),
-            },
-        )
+                "size_bytes": original_size,
+            }
+            if include_preview:
+                # Reuse the same captured pixels as Chromium; no extra grab.
+                from .image_preview import bounded_jpeg_preview
+
+                try:
+                    result.update({"source_size_bytes": original_size,
+                                   **bounded_jpeg_preview(image)})
+                except ValueError:
+                    return ActionResult(False, "screenshot preview byte budget exceeded",
+                                        {"error_code": "screenshot_preview_too_large"})
+        except Exception as error:
+            return ActionResult(False, f"desktop screenshot failed: {type(error).__name__}: {error}")
+        return ActionResult(True, "desktop screenshot captured", result)
 
     @staticmethod
     def _current_thread_id() -> int:
