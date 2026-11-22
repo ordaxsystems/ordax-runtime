@@ -12,6 +12,10 @@ from ordax_dev_agent.action_contracts import (
     is_device_owned_capability,
 )
 from ordax_dev_agent.models import ActionResult
+from ordax_dev_agent.product_action_scope import (
+    NATIVE_SURFACE_DEVICE_ACTIONS, APP_INTELLIGENCE_DEVICE_ACTIONS,
+    DEVICE_SCOPED_ACTIONS,
+)
 from ordax_dev_agent.remote_protocol import (
     canonical_result,
     decode_job_payload,
@@ -118,6 +122,32 @@ class ProviderNeutralRemoteProtocolTests(unittest.TestCase):
         self.assertTrue(is_device_owned_capability("browser.screenshot"))
         self.assertTrue(is_device_owned_capability("computer.processes"))
         self.assertFalse(is_device_owned_capability("shell.exec"))
+
+    def test_owner_native_surface_and_intelligence_use_single_device_scope_catalog(self) -> None:
+        # Physical bug regression: the Native host advertised these as real
+        # actions, but the prefix-only wire dispatcher rejected their names
+        # after the Platform had already leased the work.
+        for action in (*sorted(NATIVE_SURFACE_DEVICE_ACTIONS),
+                       *sorted(APP_INTELLIGENCE_DEVICE_ACTIONS)):
+            with self.subTest(action=action):
+                self.assertIn(action, DEVICE_SCOPED_ACTIONS)
+                self.assertTrue(is_device_owned_capability(action))
+                payload = {"appId": "settings"} if action == "ordax.surface.open" else {}
+                dispatched = dispatch_device_capability(action, payload)
+                self.assertEqual(dispatched.action, action)
+                self.assertIs(dispatched.payload, payload)
+                self.assertIsNone(dispatched.project)
+                row = {"capability": action}
+                self.assertEqual(dispatch_job(row, payload),
+                                 (action, payload, None))
+        # Do not admit any arbitrary OS-prefixed command or fabricate a
+        # project binding or additional authority on the wire.
+        for action in ("ordax.shutdown", "ordax.surface.delete",
+                       "intelligence.exec", "native.root_shell"):
+            with self.subTest(rejected=action):
+                self.assertFalse(is_device_owned_capability(action))
+                with self.assertRaisesRegex(RuntimeError, "not owned"):
+                    dispatch_device_capability(action, {})
 
     def test_contract_dispatches_direct_capability_without_rewriting_payload(self) -> None:
         payload = {"project": "scene", "frames": 2}
