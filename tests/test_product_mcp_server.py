@@ -266,7 +266,8 @@ class ProductMcpServerTests(unittest.TestCase):
         state = server.continuity_state("dev-1", "demo", "space-1")
         self.assertEqual(state["status"], "succeeded")
         updated = server.continuity_update(
-            "dev-1", "demo", "Ready", "Ship", ["foundation"], [], ["src/app.py"], "space-1"
+            "dev-1", "demo", "Ready", "Ship", ["foundation"], [], ["src/app.py"], "space-1",
+            expected_revision=0,
         )
         self.assertEqual(updated["status"], "succeeded")
 
@@ -279,6 +280,7 @@ class ProductMcpServerTests(unittest.TestCase):
         self.assertEqual(update[2]["project"], "demo")
         self.assertEqual(update[2]["arguments"]["summary"], "Ready")
         self.assertEqual(update[2]["arguments"]["next_action"], "Ship")
+        self.assertEqual(update[2]["arguments"]["expected_revision"], 0)
 
     def test_app_intelligence_routes_without_project_scope(self):
         catalog = server.app_intelligence_catalog("dev-1", "space-1")

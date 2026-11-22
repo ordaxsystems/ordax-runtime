@@ -86,9 +86,16 @@ class MemoryStore:
               completed_json TEXT NOT NULL, blockers_json TEXT NOT NULL,
               changed_paths_json TEXT NOT NULL, git_state TEXT NOT NULL,
               source TEXT NOT NULL, source_ref TEXT, updated_at TEXT NOT NULL,
+              revision INTEGER NOT NULL DEFAULT 1,
               FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE);
 
             """)
+            # In-place additive migration. Preserve all existing project data.
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(project_state)")}
+            if "revision" not in columns:
+                connection.execute(
+                    "ALTER TABLE project_state ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
+                )
 
     def _project_id(self, slug: str, path: str | Path) -> int:
         resolved = str(Path(path).expanduser().resolve())
@@ -214,6 +221,10 @@ class MemoryStore:
             "source": str(row["source"]),
             "source_ref": str(row["source_ref"]) if row["source_ref"] else None,
             "updated_at": str(row["updated_at"]),
+            "revision": int(row["revision"]),
+            "next_action_status": (
+                "proposal_revalidation_required" if row["next_action"] else "none"
+            ),
         }
 
     def _upsert_project_state(
@@ -268,7 +279,8 @@ class MemoryStore:
               git_state=excluded.git_state,
               source=excluded.source,
               source_ref=excluded.source_ref,
-              updated_at=excluded.updated_at
+              updated_at=excluded.updated_at,
+              revision=project_state.revision + 1
             """,
             (
                 project_id,
@@ -296,10 +308,21 @@ class MemoryStore:
         changed_paths: list[str] | None = None,
         source: str = "manual",
         source_ref: str | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
+        # An absent row has revision 0. bool is not a valid revision.
+        if type(expected_revision) is not int or not 0 <= expected_revision <= 2**63 - 1:
+            raise ValueError("expected_revision_required")
         project_id = self._project_id(slug, path)
         git_state = self.git_state(path)
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            old = connection.execute(
+                "SELECT revision FROM project_state WHERE project_id=?", (project_id,)
+            ).fetchone()
+            current_revision = int(old["revision"]) if old is not None else 0
+            if current_revision != expected_revision:
+                raise ValueError("continuity_revision_conflict")
             self._upsert_project_state(
                 connection,
                 project_id,
@@ -437,19 +460,8 @@ class MemoryStore:
                 "DELETE FROM handoffs WHERE expires_at < ?",
                 (created_dt.isoformat(timespec="seconds"),),
             )
-            self._upsert_project_state(
-                connection,
-                project_id,
-                summary=text,
-                next_action=next_action,
-                completed=payloads["completed"],
-                blockers=payloads["blockers"],
-                changed_paths=payloads["changed_paths"],
-                git_state=git_state,
-                source="handoff",
-                source_ref=handoff_id,
-            )
-        self.write_context(slug, path)
+            # Expiring handoffs are independent, unverified proposals.
+            # They must never overwrite the non-expiring project state.
         return {
             "handoff_id": handoff_id,
             "project": slug,
@@ -457,6 +469,7 @@ class MemoryStore:
             "summary": text,
             "next_action": next_action.strip()[:5000],
             "git": git_state,
+            "next_action_status": "proposal_revalidation_required",
         }
 
     def get_handoff(self, slug: str, path: str | Path, handoff_id: str) -> dict[str, Any]:
@@ -492,6 +505,7 @@ class MemoryStore:
             "git": git_state if isinstance(git_state, dict) else {},
             "created_at": str(row["created_at"]),
             "expires_at": str(row["expires_at"]),
+            "next_action_status": "proposal_revalidation_required",
         }
 
     def search(

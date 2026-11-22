@@ -173,7 +173,7 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
         name="continuity_update",
         action="continuity.update",
         effect="write",
-        description="Persist non-expiring project progress for future conversations.",
+        description="Write reconciled project continuity using expected_revision from continuity_state (0 if absent); reject stale writes. Next actions remain unverified proposals.",
     ),
     ProductMcpToolSpec(
         name="project_search",

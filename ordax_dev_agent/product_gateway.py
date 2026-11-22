@@ -313,7 +313,7 @@ PRODUCT_TYPED_ACTIONS: dict[str, ProductActionSpec] = {
     "continuity.update": ProductActionSpec(
         "continuity.update",
         "continuity.update",
-        frozenset({"project", "summary", "next_action", "completed", "blockers", "changed_paths"}),
+        frozenset({"project", "summary", "next_action", "completed", "blockers", "changed_paths", "expected_revision"}),
         effect="write",
     ),
     "workspace.project_create": ProductActionSpec(

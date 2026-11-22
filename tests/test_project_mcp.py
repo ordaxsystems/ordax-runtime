@@ -144,6 +144,7 @@ class ProjectMCPTests(unittest.IsolatedAsyncioTestCase):
                         'summary': 'durable stdio state',
                         'next_action': 'continue tests',
                         'completed': ['memory'],
+                        'expected_revision': 0,
                     })
                     self.assertFalse(response.isError)
                     durable = await session.call_tool('continuity_state', {'project': 'test'})

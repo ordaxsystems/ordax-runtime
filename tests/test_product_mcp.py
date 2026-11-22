@@ -265,14 +265,14 @@ class ProductMcpFacadeTests(unittest.TestCase):
 
         updated = self.facade.call(
             "continuity_update",
-            {"project": "demo", "summary": "Ready", "next_action": "Ship"},
+            {"project": "demo", "summary": "Ready", "next_action": "Ship", "expected_revision": 0},
             context=self.context,
             grant=self.grant("continuity.update"),
         )
         self.assertTrue(updated.ok)
         self.assertEqual(
             self.executor.calls[-1],
-            ("continuity.update", {"project": "demo", "summary": "Ready", "next_action": "Ship"}),
+            ("continuity.update", {"project": "demo", "summary": "Ready", "next_action": "Ship", "expected_revision": 0}),
         )
 
     def test_project_create_is_global_but_requires_its_explicit_grant(self):

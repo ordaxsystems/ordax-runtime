@@ -401,8 +401,9 @@ def continuity_update(
     blockers: list[str] | None = None,
     changed_paths: list[str] | None = None,
     space_id: str | None = None,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
-    """Persist non-expiring project progress for future conversations."""
+    """CAS update requiring the revision returned by continuity_state."""
     return _invoke(
         device_id=device_id,
         action="continuity.update",
@@ -415,6 +416,7 @@ def continuity_update(
             "completed": list(completed or []),
             "blockers": list(blockers or []),
             "changed_paths": list(changed_paths or []),
+            **({"expected_revision": expected_revision} if expected_revision is not None else {}),
         },
     )
 
