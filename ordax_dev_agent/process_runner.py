@@ -54,18 +54,18 @@ def run_command(
     else:
         start_new_session = True
 
-    process_env = None
-    if env is not None or sys.platform == "win32" or (getattr(sys, "frozen", False) and sys.platform == "linux"):
-        process_env = external_process_environment(
-            {str(key): str(value) for key, value in env.items()} if env else None,
-        )
-        if sys.platform == "win32":
-            # Python otherwise inherits the Windows ANSI code page for redirected
-            # stdio. These are defaults, not overrides: an explicit caller choice
-            # remains visible and strict UTF-8 decoding will fail closed if it
-            # violates the terminal output contract.
-            process_env.setdefault("PYTHONUTF8", "1")
-            process_env.setdefault("PYTHONIOENCODING", "utf-8")
+    # All external tools share the same inherited-environment boundary,
+    # including Linux source runs without any task-specific overrides.
+    process_env = external_process_environment(
+        {str(key): str(value) for key, value in env.items()} if env else None,
+    )
+    if sys.platform == "win32":
+        # Python otherwise inherits the Windows ANSI code page for redirected
+        # stdio. These are defaults, not overrides: an explicit caller choice
+        # remains visible and strict UTF-8 decoding will fail closed if it
+        # violates the terminal output contract.
+        process_env.setdefault("PYTHONUTF8", "1")
+        process_env.setdefault("PYTHONIOENCODING", "utf-8")
 
     launch_command = _windows_utf8_launch_command(command)
 

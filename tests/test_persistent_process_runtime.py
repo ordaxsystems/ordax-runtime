@@ -20,6 +20,46 @@ class PersistentProcessRuntimeTests(unittest.TestCase):
         runtime._stopping = False
         return runtime
 
+    def test_supervised_child_uses_same_private_environment_boundary(self):
+        import os
+        import sys
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state.json"
+            log = root / "child.log"
+            stdin = root / "stdin.jsonl"
+            stdin.touch()
+            state.write_text(json.dumps({"state": "starting", "process_id": "test"}), encoding="utf-8")
+            script = (
+                "import json,os;print(json.dumps({"
+                "'grant':os.getenv('ORDAX_DESKTOP_SURFACE_BRIDGE_TOKEN'),"
+                "'profile':os.getenv('ORDAX_RUNTIME_HOST_PROFILE'),"
+                "'task':os.getenv('ORDAX_TASK_TITLE'),"
+                "'system':os.getenv('SYSTEMROOT') is not None}))"
+            )
+            runtime = ProcessRuntime(
+                state_path=state, log_path=log, stdin_path=stdin, cwd=root,
+                command=[sys.executable, "-c", script],
+                env={"ORDAX_TASK_TITLE": "explicit-task"},
+            )
+            with patch.dict(os.environ, {
+                "ORDAX_DESKTOP_SURFACE_BRIDGE_TOKEN": "private-canary",
+                "ORDAX_RUNTIME_HOST_PROFILE": "ordax-desktop",
+            }):
+                self.assertEqual(runtime.run(), 0)
+            final = json.loads(state.read_text(encoding="utf-8"))
+            self.assertEqual(final["state"], "exited")
+            self.assertEqual(final["returncode"], 0)
+            emitted = [
+                json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()
+                if line.startswith("{")
+            ]
+            self.assertEqual(len(emitted), 1)
+            self.assertIsNone(emitted[0]["grant"])
+            self.assertIsNone(emitted[0]["profile"])
+            self.assertEqual(emitted[0]["task"], "explicit-task")
+
     def test_stdin_pump_backs_off_when_journal_is_idle(self):
         with tempfile.TemporaryDirectory() as root:
             stdin_path = Path(root) / "stdin.jsonl"

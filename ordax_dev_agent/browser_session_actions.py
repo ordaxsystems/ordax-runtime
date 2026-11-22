@@ -19,6 +19,7 @@ from typing import Any
 
 from .browser_capture import BrowserCaptureError, _cdp_call, find_chromium
 from .models import ActionResult
+from .process_environment import external_process_environment
 
 
 def _free_port() -> int:
@@ -398,6 +399,7 @@ class BrowserSessionActions:
                     shell=False,
                     creationflags=creationflags,
                     start_new_session=start_new_session,
+                    env=external_process_environment(),
                 )
             except OSError as error:
                 return ActionResult(False, f"cannot start browser session: {error}")
