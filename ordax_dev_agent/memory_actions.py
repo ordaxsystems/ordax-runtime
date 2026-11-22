@@ -76,17 +76,27 @@ class MemoryActions:
             value = payload.get(field)
             if value is not None and not isinstance(value, list):
                 return ActionResult(False, f"{field} must be a list", {"field": field})
+        revision = payload.get("expected_revision")
+        if type(revision) is not int or revision < 0:
+            return ActionResult(False, "expected_revision_required", {"error_code": "expected_revision_required"})
         store = self._memory_store_instance()
-        state = store.update_project_state(
-            project.slug,
-            project.root,
-            str(payload.get("summary") or ""),
-            next_action=str(payload.get("next_action") or ""),
-            completed=payload.get("completed") or [],
-            blockers=payload.get("blockers") or [],
-            changed_paths=payload.get("changed_paths") or [],
-            source="manual",
-        )
+        try:
+            state = store.update_project_state(
+                project.slug,
+                project.root,
+                str(payload.get("summary") or ""),
+                next_action=str(payload.get("next_action") or ""),
+                completed=payload.get("completed") or [],
+                blockers=payload.get("blockers") or [],
+                changed_paths=payload.get("changed_paths") or [],
+                source="manual",
+                expected_revision=revision,
+            )
+        except ValueError as exc:
+            if str(exc) == "continuity_revision_conflict":
+                return ActionResult(False, "continuity_revision_conflict",
+                                    {"error_code": "continuity_revision_conflict"})
+            raise
         return ActionResult(
             True,
             f"Durable continuity updated for {project.slug}",

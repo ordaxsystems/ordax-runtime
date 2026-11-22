@@ -877,7 +877,7 @@ class ProductGatewayTests(unittest.TestCase):
 
         write = self.gateway.execute(
             "continuity.update",
-            {"project": "scene", "summary": "Ready", "next_action": "Ship"},
+            {"project": "scene", "summary": "Ready", "next_action": "Ship", "expected_revision": 0},
             context=self.context,
             grant=self.grant("continuity.update"),
         )

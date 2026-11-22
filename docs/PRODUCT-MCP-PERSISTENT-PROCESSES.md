@@ -59,20 +59,72 @@ ferramentas do respectivo owner, verificar processo e código de saída e só
 então decidir a próxima etapa. Não executar novamente ações de efeito incerto.
 Use referências opacas e não armazene segredos nos rótulos, logs ou resumos.
 
-## Evidência física anterior à evolução de missões
+## Continuidade canônica e próximos passos — regra operacional
 
-No DEV Windows, a revisão `c7731ce8` foi instalada via atualizador canônico,
-e o monitor de 60 checkpoints encerrou `60/60`, `nonhealthy=0`, exit `0`.
-Essas evidências são da revisão anterior; **não significam que este novo
-contrato de missões já foi implantado no dispositivo**.
+**Não criar outro banco de Task, agente autônomo, agenda periódica ou memória
+de missões paralela.** A memória de projetos (`ordax_core.MemoryStore`), os
+handoffs existentes e os recibos do supervisor já são os mecanismos
+do Runtime. O Forge tem seu próprio owner/SQLite de Tasks, claims e
+observações; somente o **protocolo de verificação** é compartilhado.
 
-## Product MCP (Desktop) — paridade dos recibos
+### Propostas não são realidade
 
-O sanitizador do Product MCP deve conservar `title`, `mission`,
-`latest_checkpoint` (origem `unverified_child_stdout`) e os indicadores
-`total_registered`, `returned`, `truncated`, preservando os mesmos limites
-já estabelecidos pelo supervisor. As rotas `process.status`, `process.list`,
-`process.logs` e suas equivalentes `computer.*` não divulgam `argv`, token,
-credenciais, paths de logs nem o JSON completo de ownership. Os metadados
-continuam **descritivos e não atestados**; estado/exit code seguem separados.
-Uma lista truncada não pode ser interpretada como inventário completo.
+- `handoff.create` registra **uma proposta que expira em 1–168 horas**, com
+  `next_action`, `git` observado, `completed` e `blockers` informados pelo
+  cliente. **Não atualiza mais `project_state`** (remoção da promoção automática
+  legada). `handoff.get` devolve `next_action_status=proposal_revalidation_required`.
+- `orchestrator.session_checkpoint` e `orchestrator.session_rotate` registram
+  seus dados de agente, mas **não substituem o estado corrente do projeto**.
+  Apresentam `continuity_proposal` com referência ao checkpoint,
+  sempre exigindo revalidação; a antiga promoção implícita foi removida.
+- `continuity.get` devolve `state.revision` (ou `state=null`, que significa
+  revisão `0`). O texto `state.next_action`, quando existir, sempre retorna
+  `next_action_status=proposal_revalidation_required`. Nem checkpoint, nem
+  nota, nem handoff são prova de conclusão de efeitos externos.
+- **Somente após reconciliar efeitos reais** a conversa chama
+  `continuity.update` com `expected_revision` igual à revisão que leu.
+  Sem esse inteiro o comando é recusado (`expected_revision_required`).
+  Se outra conversa ou checkpoint alterou o estado, a gravação
+  é recusada (`continuity_revision_conflict`). Ler novamente, verificar
+  autoridades e decidir; **nunca repetir a escrita cegamente**.
+  O SQLite existente aplica a comparação atomicamente por projeto e mantém
+  revisões crescentes. Bancos antigos são migrados **sem apagar dados**.
+- Revisão CAS impede **perda de atualização entre conversas no mesmo banco**,
+  mas não descobre automaticamente alterações em GitHub, outras máquinas
+  ou aplicativos. CAS não equivale a grant, lock de execução,
+  identidade de conversa verificada ou atestação de commit.
+
+### Fluxo seguro de retomada
+
+1. Descobrir missão/handoff; conferir projeto, dispositivo, `process_status`,
+   código de saída, logs e `resume_ref`. Lista truncada não prova ausência:
+   recuperar pelo ID conhecido ou referência persistente.
+2. Consultar `continuity.get` e guardar `state.revision`. Tratar cada
+   `next_action` como **proposta**; identificar origem e idade.
+3. Consultar os owners do efeito: Git remoto e local (branch/HEAD/PR/checks),
+   manifesto instalado, processos, recibos e grants, conforme a tarefa.
+   Se houver execução ativa/incerta, não repetir a ação.
+4. Classificar a proposta como `proposed`, `needs_revalidation`, `ready`,
+   `in_progress`, `completed_verified`, `blocked_uncertain` ou `superseded`.
+   Esses são **rótulos de avaliação**, não outro banco de estados.
+5. Só publicar novo resumo/próximos passos via `continuity.update` após
+   verificação, usando a revisão observada. Conflito exige reconciliação;
+   handoffs antigos e logs permanecem históricos.
+6. Revalidar imediatamente **antes** das operações com efeito. Não criar
+   polling periódico para inferir mudanças fora do MCP; atualizar sob demanda
+   e pelos eventos já disponíveis, quando confiáveis.
+
+### Fronteiras e código legado
+
+A promoção automática de `handoff.create` e do antigo Agent Orchestrator
+para o `project_state` foi **removida**. Mantêm-se recibos, memória e
+tabelas atuais; não se apagou nenhum dado histórico. O caminho de banco
+legado ainda requer **auditoria física e migração sem perda de dados** antes
+de eventual substituição. Não remover dados reais só para cumprir uma meta
+abstrata de limpeza.
+
+**Prova física anterior:** em 22/11/2026, o DEV Windows instalou Runtime
+`2585f6f1` e recuperou missões `4/4` com código `0`; monitor `60/60`, zero
+verificações não saudáveis. Essa prova cobre a versão anterior:
+**o novo contrato de revisão e handoffs só estará instalado após integrar
+e aplicar a nova revisão canônica**.
