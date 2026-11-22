@@ -617,7 +617,9 @@ def _sanitize_product_result(
         }
 
     def public_process(item: dict[str, Any]) -> dict[str, Any]:
-        return {
+        # Preserve bounded mission metadata across the Product MCP boundary.
+        # This is a description, never a grant or a verified outcome.
+        public = {
             key: item[key]
             for key in (
                 "process_id", "project", "device_id", "scope_kind", "state", "cwd", "started_at_unix",
@@ -626,6 +628,42 @@ def _sanitize_product_result(
             )
             if key in item
         }
+        title = item.get("title") or item.get("task_title")
+        if isinstance(title, str) and 1 <= len(title) <= 160 and all(ord(c) >= 32 for c in title):
+            public["title"] = title
+        mission = item.get("mission")
+        mission_label = r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}"
+        if isinstance(mission, dict):
+            mission_id = mission.get("id")
+            project_label = mission.get("project_label", "")
+            if (
+                isinstance(mission_id, str) and re.fullmatch(mission_label, mission_id)
+                and isinstance(project_label, str)
+                and (not project_label or re.fullmatch(mission_label, project_label))
+            ):
+                public["mission"] = {"id": mission_id, "project_label": project_label}
+        checkpoint = item.get("latest_checkpoint")
+        if "mission" in public and isinstance(checkpoint, dict):
+            step, total = checkpoint.get("step"), checkpoint.get("total")
+            stage, status = checkpoint.get("stage"), checkpoint.get("status")
+            summary, resume_ref = checkpoint.get("summary", ""), checkpoint.get("resume_ref", "")
+            if (
+                type(step) is int and type(total) is int and 0 <= step <= total <= 100000
+                and total > 0 and isinstance(stage, str) and 1 <= len(stage) <= 80
+                and all(ord(c) >= 32 for c in stage)
+                and status in ("running", "blocked", "failed", "completed")
+                and checkpoint.get("source") == "unverified_child_stdout"
+                and isinstance(summary, str) and len(summary) <= 160
+                and all(ord(c) >= 32 for c in summary)
+                and isinstance(resume_ref, str) and len(resume_ref) <= 160
+                and all(ord(c) >= 32 for c in resume_ref)
+            ):
+                public["latest_checkpoint"] = {
+                    "step": step, "total": total, "stage": stage, "status": status,
+                    "summary": summary, "resume_ref": resume_ref,
+                    "source": "unverified_child_stdout",
+                }
+        return public
 
     if action in {
         "workspace.project_create",
@@ -770,7 +808,13 @@ def _sanitize_product_result(
         data = public_process(data)
     elif action in {"process.list", "computer.process_list"}:
         items = data.get("processes")
-        data = {**({"device_id": data.get("device_id")} if action == "computer.process_list" else {"project": data.get("project")}), "processes": [public_process(item) for item in items if isinstance(item, dict)] if isinstance(items, list) else []}
+        data = {
+            **({"device_id": data.get("device_id")} if action == "computer.process_list" else {"project": data.get("project")}),
+            "processes": [public_process(item) for item in items if isinstance(item, dict)] if isinstance(items, list) else [],
+            **{key: data[key] for key in ("total_registered", "returned", "truncated")
+               if (key in ("total_registered", "returned") and type(data.get(key)) is int and 0 <= data[key] <= 1000000)
+               or (key == "truncated" and type(data.get(key)) is bool)},
+        }
     elif action in {"process.logs", "computer.process_logs"}:
         process = data.get("process")
         data = {"process": public_process(process) if isinstance(process, dict) else {}, "tail": str(data.get("tail") or ""), "size_bytes": int(data.get("size_bytes") or 0), "truncated": bool(data.get("truncated"))}

@@ -65,3 +65,14 @@ No DEV Windows, a revisão `c7731ce8` foi instalada via atualizador canônico,
 e o monitor de 60 checkpoints encerrou `60/60`, `nonhealthy=0`, exit `0`.
 Essas evidências são da revisão anterior; **não significam que este novo
 contrato de missões já foi implantado no dispositivo**.
+
+## Product MCP (Desktop) — paridade dos recibos
+
+O sanitizador do Product MCP deve conservar `title`, `mission`,
+`latest_checkpoint` (origem `unverified_child_stdout`) e os indicadores
+`total_registered`, `returned`, `truncated`, preservando os mesmos limites
+já estabelecidos pelo supervisor. As rotas `process.status`, `process.list`,
+`process.logs` e suas equivalentes `computer.*` não divulgam `argv`, token,
+credenciais, paths de logs nem o JSON completo de ownership. Os metadados
+continuam **descritivos e não atestados**; estado/exit code seguem separados.
+Uma lista truncada não pode ser interpretada como inventário completo.
