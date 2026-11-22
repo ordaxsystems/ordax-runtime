@@ -17,7 +17,7 @@ from uuid import UUID
 from .config import AgentConfig
 from .desktop_project_binding import read_desktop_project_links
 from .main import run
-from .product_action_scope import COMPUTER_DEVICE_ACTIONS, NATIVE_SURFACE_DEVICE_ACTIONS
+from .product_action_scope import COMPUTER_DEVICE_ACTIONS, DEVICE_BLENDER_ACTIONS, NATIVE_SURFACE_DEVICE_ACTIONS
 
 # Minimal Native Product authority: observation is read-only; app opening
 # requires an independent Platform Owner grant and a real Surface receipt.
@@ -34,7 +34,7 @@ DESKTOP_DEV_ACTIONS = (frozenset({
     "computer.transfer_abort", "computer.transfer_begin",
     "computer.transfer_chunk", "computer.transfer_commit",
     "computer.transfer_status",
-}) | COMPUTER_DEVICE_ACTIONS | NATIVE_SURFACE_DEVICE_ACTIONS)
+}) | COMPUTER_DEVICE_ACTIONS | DEVICE_BLENDER_ACTIONS | NATIVE_SURFACE_DEVICE_ACTIONS)
 _STATUS_HANDOFF_SCHEMA = "ordax.desktop-runtime-status-handoff/1"
 
 

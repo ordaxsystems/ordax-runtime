@@ -13,7 +13,7 @@ from ordax_dev_agent.config import AgentConfig
 from ordax_dev_agent.desktop_host_main import (
     DESKTOP_DEV_ACTIONS, DESKTOP_OS_ACTIONS, _desktop_status_handoff, main,
 )
-from ordax_dev_agent.product_action_scope import NATIVE_SURFACE_DEVICE_ACTIONS
+from ordax_dev_agent.product_action_scope import DEVICE_BLENDER_ACTIONS, NATIVE_SURFACE_DEVICE_ACTIONS
 
 
 class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
@@ -133,6 +133,8 @@ class DesktopOsRuntimeBoundaryTests(unittest.TestCase):
         self.assertIn("computer.windows", DESKTOP_DEV_ACTIONS)
         self.assertIn("computer.screenshot", DESKTOP_DEV_ACTIONS)
         self.assertIn("computer.text_write", DESKTOP_DEV_ACTIONS)
+        self.assertTrue(DEVICE_BLENDER_ACTIONS.issubset(DESKTOP_DEV_ACTIONS))
+        self.assertTrue(DEVICE_BLENDER_ACTIONS.isdisjoint(DESKTOP_OS_ACTIONS))
         self.assertIn("ordax.surface.status", DESKTOP_DEV_ACTIONS)
         # The same shared registry implements the tools; no Desktop copy.
         with patch.dict(os.environ, {
