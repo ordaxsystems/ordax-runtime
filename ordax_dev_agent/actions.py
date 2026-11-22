@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from .config import AgentConfig
 from .models import ActionResult
 from .desktop_surface_actions import desktop_surface_status, desktop_surface_open
+from .desktop_intelligence_actions import desktop_intelligence_respond
 from .projects import load_projects, Project
 from .observations import ObservationActions
 from .references import ReferenceActions
@@ -106,6 +107,7 @@ _NONBLOCKING_OBSERVATION_ACTIONS = frozenset({
     "computer.screenshot",
     "intelligence.app_catalog",
     "intelligence.app_detail",
+    "ordax.intelligence.respond",
 })
 
 
@@ -534,6 +536,7 @@ class ActionRegistry(
             # without replacing or shadowing any Windows handler.
             self._actions["ordax.surface.status"] = desktop_surface_status
             self._actions["ordax.surface.open"] = desktop_surface_open
+            self._actions["ordax.intelligence.respond"] = desktop_intelligence_respond
         # The Desktop-hosted OrdaX OS is a distinct Product Device context,
         # not an implicit Windows host administrator. A trusted host passes
         # the exact allowed actions, never an allowlist from remote requests.
