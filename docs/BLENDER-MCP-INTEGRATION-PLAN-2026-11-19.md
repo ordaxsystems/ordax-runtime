@@ -294,3 +294,23 @@ Essa melhoria de Runtime não cria outro servidor, nem altera projeto,
 grants, drivers, companion, GPU ou o arquivo .blend físico já homologado.
 O gate das ferramentas Blender diretamente invocáveis pelo Product MCP
 permanece separado.
+
+## Correção de arquitetura — escopo local sem GitHub (2026-11-21)
+
+O GitHub é identidade do modo **projeto vinculado**, não pré-requisito para abrir
+Blender e modelar localmente em um dispositivo autorizado. O MCP Product mantém
+os dez nomes tipados Blender. A ausência deliberada de project seleciona
+computer.blender_* com Space/Project nulos e grant próprio
+device-blender-control. Um project explícito continua usando blender.live_*
+e o vínculo atestado anterior. Identificadores inválidos nunca caem no modo de
+dispositivo.
+
+O Runtime reutiliza BlenderLiveBridge e as operações existentes. O workspace
+local de Blender fica em state_dir/blender-workspace; seu identificador de
+bridge reservado _device_blender não é um registro no catálogo de projetos
+nem um repositório. O Runtime exige a política Computer local ativa, os
+caminhos de .blend permanecem dentro desse workspace, e o mesmo mecanismo de
+adoção recusa sessões vinculadas a outro projeto. Não há novo daemon, novo
+protocolo ou execução arbitrária de scripts na superfície Product.
+A autorização de dispositivo e o grant de projeto são independentes;
+nenhuma permissão previamente concedida é expandida automaticamente.

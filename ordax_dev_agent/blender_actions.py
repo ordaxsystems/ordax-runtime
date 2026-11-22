@@ -545,9 +545,15 @@ class BlenderActions:
             fingerprint = blender_companion_bundle_fingerprint(assets_root)
         except (OSError, ValueError, json.JSONDecodeError):
             fingerprint = None
+        scoped = getattr(getattr(self, "_project_execution_local", None), "project", None)
+        projects = self.projects
+        if scoped is not None and scoped.slug == "_device_blender":
+            # Reuse the same adoption checks and keep the device workspace
+            # distinct from all registered project sessions.
+            projects = {**projects, scoped.slug: scoped}
         return BlenderAdoptionManager(
             self.config,
-            self.projects,
+            projects,
             assets_root=assets_root,
             companion_fingerprint=fingerprint,
         )

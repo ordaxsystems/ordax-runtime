@@ -56,7 +56,11 @@ COMPUTER_DEVICE_ACTIONS = frozenset(
     }
 )
 
+DEVICE_BLENDER_OPERATIONS = ('status', 'scene_snapshot', 'object_inspect', 'modeling_schema', 'start', 'object_transform', 'create_primitive', 'rig_create', 'material_apply', 'save')
+DEVICE_BLENDER_ACTIONS = frozenset("computer.blender_" + name for name in DEVICE_BLENDER_OPERATIONS)
+
 DEVICE_SCOPED_ACTIONS = frozenset({
+    *DEVICE_BLENDER_ACTIONS,
     "forge.app_read",
     *COMPUTER_DEVICE_ACTIONS,
     *APP_INTELLIGENCE_DEVICE_ACTIONS,

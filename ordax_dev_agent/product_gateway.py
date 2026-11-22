@@ -7,6 +7,7 @@ from typing import Any, Callable, Protocol
 
 from .models import ActionResult
 from .computer_activity import bind_product_execution_provenance
+from .product_action_scope import DEVICE_BLENDER_OPERATIONS
 
 
 class ActionExecutor(Protocol):
@@ -555,7 +556,22 @@ PRODUCT_TYPED_ACTIONS: dict[str, ProductActionSpec] = {
     "blender.live_material_apply": ProductActionSpec("blender.live_material_apply", "blender.live_material_apply", frozenset({"project", "object_name", "ordax_object_id", "material_name", "base_color", "roughness", "metallic", "transmission", "alpha", "ior", "surface_render_method", "transparency_overlap", "timeout_seconds"}), effect="write"),
     "blender.live_save": ProductActionSpec("blender.live_save", "blender.live_save", frozenset({"project", "target_path", "timeout_seconds"}), effect="write"),
 }
-PRODUCT_ACTIONS: dict[str, ProductActionSpec] = {**PRODUCT_READ_ONLY_ACTIONS, **PRODUCT_TYPED_ACTIONS}
+# Derive the local device capabilities from the existing typed Blender contracts.
+# Their identities and grants are separate, while the arguments stay identical
+# except that the device surface forbids the project field.
+DEVICE_BLENDER_SPECS = {
+    "computer.blender_" + operation: ProductActionSpec(
+        "computer.blender_" + operation,
+        "computer.blender_" + operation,
+        PRODUCT_TYPED_ACTIONS["blender.live_" + operation].allowed_fields - {"project"},
+        project_required=False,
+        effect=PRODUCT_TYPED_ACTIONS["blender.live_" + operation].effect,
+    )
+    for operation in DEVICE_BLENDER_OPERATIONS
+}
+PRODUCT_ACTIONS: dict[str, ProductActionSpec] = {
+    **PRODUCT_READ_ONLY_ACTIONS, **PRODUCT_TYPED_ACTIONS, **DEVICE_BLENDER_SPECS,
+}
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$")
 
