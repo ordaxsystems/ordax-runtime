@@ -323,6 +323,9 @@ class ProductDeviceControlPlane:
         self.agent_version = str(DEVICE_AGENT_VERSION)
         self._heartbeat_capabilities: tuple[str, ...] | None = None
         self._heartbeat_capability_digest: str | None = None
+        # A live Runtime publishes its exact ActionRegistry set once per digest.
+        # Subsequent heartbeats remain digest-only and do not repeat metadata.
+        self._heartbeat_manifest_published: str | None = None
         self._remote_heartbeat_recorded = False
         self._jobs: dict[str, AgentJob] = {}
         self._terminal_outbox = TerminalOutbox(
@@ -516,11 +519,18 @@ class ProductDeviceControlPlane:
                   metadata: dict[str, Any] | None = None, status: str = "online",
                   last_error: str | None = None) -> None:
         del last_error
+        digest = self._capabilities_digest(actions)
         payload = {
             "status": status,
             "agent_version": agent_version,
-            "capabilities_digest": self._capabilities_digest(actions),
+            "capabilities_digest": digest,
         }
+        # The canonical registry is the ONLY source of executable actions;
+        # a one-time availability proof is not an Owner grant. Attach it to
+        # the existing authenticated atomic heartbeat, not another SQL call.
+        publish_manifest = status != "offline" and digest != self._heartbeat_manifest_published
+        if publish_manifest:
+            payload["capabilities"] = list(self._heartbeat_capabilities or ())
         capacity = (metadata or {}).get("max_concurrent_jobs")
         if capacity is not None:
             if type(capacity) is not int or not 1 <= capacity <= 32:
@@ -530,6 +540,12 @@ class ProductDeviceControlPlane:
             # Existing Windows and legacy heartbeat payloads remain unchanged.
             payload["runtime_kind"] = self.runtime_kind
         self._post("heartbeat", payload, timeout=10.0)
+        if publish_manifest:
+            self._heartbeat_manifest_published = digest
+        elif status == "offline":
+            # The next authenticated online transition is a new availability
+            # epoch. Republish the same registry without claiming new grants.
+            self._heartbeat_manifest_published = None
         self._remote_heartbeat_recorded = status != "offline"
         if status != "offline":
             try:
