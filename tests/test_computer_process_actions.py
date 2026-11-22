@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import os
 import unittest
 import sys
 import json
@@ -331,6 +332,48 @@ class ComputerProcessActionsTests(unittest.TestCase):
         self.assertNotIn("token", result.data)
         self.assertIn("stderr", launcher.call_args.kwargs)
         self.assertNotEqual(launcher.call_args.kwargs["stderr"], __import__("subprocess").DEVNULL)
+
+    def test_frozen_desktop_device_process_reuses_product_executable(self):
+        # A frozen Desktop component cannot interpret an unpacked Python path.
+        # The current OS-owned Product executable must re-enter its private
+        # worker mode, with a clean PyInstaller process environment.
+        class ExitedManager:
+            pid = 4242
+            def poll(self):
+                return 3
+
+        registry = ActionRegistry(replace(
+            self._device_registry().config,
+            computer_access_source="native-windows-dev",
+        ))
+        with (
+            patch(
+                "ordax_dev_agent.computer_filesystem_actions.load_computer_access_policy",
+                return_value=SimpleNamespace(enabled=True, full_access=True),
+            ),
+            patch.dict(os.environ, {"ORDAX_RUNTIME_HOST_PROFILE": "ordax-desktop"}),
+            patch.object(sys, "frozen", True, create=True),
+            patch.object(sys, "platform", "win32"),
+            patch(
+                "ordax_dev_agent.persistent_process_actions.subprocess.Popen",
+                return_value=ExitedManager(),
+            ) as launched,
+            patch.object(registry, "_pid_running", return_value=False),
+        ):
+            result = registry.computer_process_start({
+                "argv": ["powershell.exe", "-NoProfile", "-Command", "exit 3"],
+                "cwd": self.temp.name,
+                "wait_seconds": 0.1,
+            })
+        self.assertFalse(result.ok, "Fake manager must not claim a started process")
+        launched.assert_called_once()
+        command = launched.call_args.args[0]
+        self.assertEqual(command[0], sys.executable)
+        self.assertEqual(command[1], "--persistent-process-worker")
+        self.assertNotIn("persistent_process_runtime.py", " ".join(command))
+        self.assertEqual(
+            launched.call_args.kwargs["env"]["PYINSTALLER_RESET_ENVIRONMENT"], "1",
+        )
 
     def test_delayed_manager_is_not_killed_before_actual_windows_handshake(self):
         # A delayed Windows supervisor cannot be accepted without journal

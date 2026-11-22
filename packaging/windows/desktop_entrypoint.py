@@ -70,6 +70,17 @@ def self_test() -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["--persistent-process-worker"]:
+        # The OS Supervisor owns this frozen Desktop profile. A private
+        # process manager must reuse the canonical Runtime executor rather
+        # than attempting to treat the bundled EXE as Python.
+        if sys.platform != "win32":
+            raise RuntimeError("Desktop component requires Windows")
+        if os.environ.get("ORDAX_RUNTIME_HOST_PROFILE") != "ordax-desktop":
+            raise RuntimeError("Desktop component requires the Supervisor host profile")
+        from ordax_dev_agent.persistent_process_runtime import main as worker_main
+        return worker_main(argv[1:])
     parser = argparse.ArgumentParser(description="OrdaX Desktop Product Runtime component")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)

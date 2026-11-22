@@ -77,6 +77,32 @@ class DesktopComponentPackageTests(unittest.TestCase):
                 component.main(["--run-windows-agent"])
             dispatch.assert_not_called()
 
+    def test_frozen_worker_reenters_canonical_process_manager(self):
+        arguments = ["--state", "private-state", "--log", "private-log"]
+        with (
+            patch.dict(os.environ, {"ORDAX_RUNTIME_HOST_PROFILE": "ordax-desktop"}, clear=True),
+            patch.object(component.sys, "platform", "win32"),
+            patch("ordax_dev_agent.persistent_process_runtime.main", return_value=0) as worker,
+            patch.object(component, "desktop_main") as desktop,
+        ):
+            self.assertEqual(component.main(["--persistent-process-worker", *arguments]), 0)
+            worker.assert_called_once_with(arguments)
+            desktop.assert_not_called()
+
+    def test_private_worker_rejects_unverified_desktop_profile(self):
+        for profile in (None, "", "windows-agent"):
+            with (
+                self.subTest(profile=profile),
+                patch.dict(os.environ, {}, clear=True),
+                patch.object(component.sys, "platform", "win32"),
+                patch("ordax_dev_agent.persistent_process_runtime.main") as worker,
+            ):
+                if profile is not None:
+                    os.environ["ORDAX_RUNTIME_HOST_PROFILE"] = profile
+                with self.assertRaisesRegex(RuntimeError, "Supervisor host profile"):
+                    component.main(["--persistent-process-worker", "--state", "unsafe"])
+                worker.assert_not_called()
+
     def test_other_hosts_cannot_use_desktop_component(self):
         with patch.object(component.sys, "platform", "linux"):
             with self.assertRaisesRegex(RuntimeError, "requires Windows"):
