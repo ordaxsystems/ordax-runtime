@@ -691,8 +691,9 @@ def continuity_update(
     completed: list[str] | None = None,
     blockers: list[str] | None = None,
     changed_paths: list[str] | None = None,
+    expected_revision: int | None = None,
 ) -> dict:
-    """Persist non-expiring project progress for future sessions and chats."""
+    """CAS update: first read continuity_state, then supply its revision (0 if absent)."""
     result = registry().execute(
         "continuity.update",
         {
@@ -702,6 +703,7 @@ def continuity_update(
             "completed": list(completed or []),
             "blockers": list(blockers or []),
             "changed_paths": list(changed_paths or []),
+            "expected_revision": expected_revision,
         },
     )
     return {"ok": result.ok, "summary": result.summary, "data": result.data}

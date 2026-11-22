@@ -66,7 +66,7 @@ class OrdaxProjectHealthTests(unittest.TestCase):
                 registry = ActionRegistry(config)
                 first = registry.execute(
                     "continuity.update",
-                    {"project": "demo", "summary": "Stable", "completed": ["foundation"]},
+                    {"project": "demo", "summary": "Stable", "completed": ["foundation"], "expected_revision": 0},
                 )
                 bad = registry.execute(
                     "continuity.update",
@@ -79,6 +79,42 @@ class OrdaxProjectHealthTests(unittest.TestCase):
             self.assertEqual("completed", bad.data["field"])
             self.assertEqual("Stable", state.data["state"]["summary"])
             self.assertEqual(["foundation"], state.data["state"]["completed"])
+
+    def test_continuity_rejects_missing_or_stale_revision_without_mutation(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            project = root / "project"
+            project.mkdir()
+            config = AgentConfig(
+                agent_name="test", poll_seconds=1, state_dir=root / "state",
+                agent_repo_path=root / "agent", hordax_path=root / "hordax",
+                bridge_path=root / "bridge",
+                projects={"demo": {"path": str(project), "apps": []}},
+                default_project="demo",
+            )
+            with patch.dict(os.environ, {"ORDAX_MEMORY_DB": str(root / "memory.db")}):
+                registry = ActionRegistry(config)
+                initial = registry.execute("continuity.update", {
+                    "project": "demo", "summary": "Verified", "next_action": "Inspect PR",
+                    "expected_revision": 0,
+                })
+                missing = registry.execute("continuity.update", {
+                    "project": "demo", "summary": "Overwrite without revision",
+                })
+                stale = registry.execute("continuity.update", {
+                    "project": "demo", "summary": "Old step", "next_action": "Merge PR",
+                    "expected_revision": 0,
+                })
+                state = registry.execute("continuity.get", {"project": "demo"}).data["state"]
+            self.assertTrue(initial.ok)
+            self.assertFalse(missing.ok)
+            self.assertEqual(missing.data["error_code"], "expected_revision_required")
+            self.assertFalse(stale.ok)
+            self.assertEqual(stale.data["error_code"], "continuity_revision_conflict")
+            self.assertEqual(state["summary"], "Verified")
+            self.assertEqual(state["next_action"], "Inspect PR")
+            self.assertEqual(state["revision"], 1)
+            self.assertEqual(state["next_action_status"], "proposal_revalidation_required")
 
     def test_project_briefing_combines_continuity_workspace_and_capabilities(self):
         with tempfile.TemporaryDirectory() as raw:

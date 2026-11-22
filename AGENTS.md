@@ -37,3 +37,17 @@ vigente; promover sucesso só com executor e recibo reais.
 ## Execução DEV — Evolução Rápida
 
 Seguir a [política transversal canônica](https://github.com/ordaxsystems/ordax-os/blob/main/docs/DEVELOPMENT-WORKFLOW.md#regra-operacional-transversal--evolucao-rapida-dev-2026-11-04): modificar diretamente o owner necessário, integrar a correção, e validar proporcionalmente ao impacto, sem auditorias repetidas ou workflows extras. Respeitar os contratos e proteção de `main`; identidade, grants, trust, autorização, segurança e integridade são gates não dispensáveis.
+
+## Retomada multichat e próximos passos — fonte canônica
+
+Antes de editar um projeto com base em memória anterior, consultar
+`docs/PRODUCT-MCP-PERSISTENT-PROCESSES.md`, `continuity.get` e os recibos
+`process.status/list/logs`; conferir efeitos nas autoridades externas.
+`next_action` em handoff, checkpoint ou estado é proposta não atestada.
+`continuity.update` exige `expected_revision` da leitura corrente; conflito
+impede substituição silenciosa e requer nova verificação. Handoffs e
+checkpoints do Agent Orchestrator não promovem automaticamente sugestões
+para o estado do projeto. Não criar outro Task Store, scheduler, polling
+agressivo nem integração direta com SQLite do Forge.
+Para Forge, a SSOT de Tasks/claims/observações é o próprio Forge App/SQLite
+sob coordenação do Forge MCP; OrdaX MCP é ferramenta auxiliar de DEV.

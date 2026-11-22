@@ -97,6 +97,7 @@ class OrdaxCoreMemoryTests(unittest.TestCase):
                 completed=["project bootstrap"],
                 blockers=["waiting for asset"],
                 changed_paths=["src/app.py"],
+                expected_revision=0,
             )
             self.assertEqual(state["next_action"], "Implement navigation")
             self.assertEqual(state["source"], "manual")
@@ -119,6 +120,85 @@ class OrdaxCoreMemoryTests(unittest.TestCase):
             self.assertIn("Estado durável", text)
             self.assertIn("Implement navigation", text)
 
+    def test_revision_cas_rejects_stale_conversations_and_checkpoint_increments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            project.mkdir()
+            db = root / "state.db"
+            first = MemoryStore(db)
+            second = MemoryStore(db)
+            self.assertIsNone(first.project_state("demo", project))
+            initial = first.update_project_state(
+                "demo", project, "Foundation", next_action="Review PR",
+                expected_revision=0,
+            )
+            self.assertEqual(initial["revision"], 1)
+            self.assertEqual(initial["next_action_status"], "proposal_revalidation_required")
+            newer = second.update_project_state(
+                "demo", project, "PR merged externally", next_action="Verify installed runtime",
+                expected_revision=1,
+            )
+            self.assertEqual(newer["revision"], 2)
+            with self.assertRaisesRegex(ValueError, "continuity_revision_conflict"):
+                first.update_project_state(
+                    "demo", project, "outdated next action", next_action="Merge PR",
+                    expected_revision=1,
+                )
+            self.assertEqual(first.project_state("demo", project)["next_action"],
+                             "Verify installed runtime")
+            first.checkpoint("demo", project, "Updated from external evidence")
+            self.assertEqual(first.project_state("demo", project)["revision"], 3)
+            with self.assertRaisesRegex(ValueError, "continuity_revision_conflict"):
+                second.update_project_state("demo", project, "old", expected_revision=2)
+            with self.assertRaisesRegex(ValueError, "expected_revision_required"):
+                second.update_project_state("demo", project, "bad no revision")
+            with self.assertRaisesRegex(ValueError, "expected_revision_required"):
+                second.update_project_state("demo", project, "bad bool", expected_revision=True)
+
+    def test_handoff_does_not_replace_newer_state_or_advance_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            project.mkdir()
+            store = MemoryStore(root / "state.db")
+            current = store.update_project_state(
+                "demo", project, "Work already merged", next_action="Verify physical install",
+                expected_revision=0,
+            )
+            older = store.create_handoff(
+                "demo", project, "Old chat planned merge", next_action="Merge old PR",
+            )
+            state = store.project_state("demo", project)
+            self.assertEqual(state["summary"], current["summary"])
+            self.assertEqual(state["revision"], current["revision"])
+            self.assertEqual(state["next_action"], "Verify physical install")
+            self.assertEqual(store.get_handoff("demo", project, older["handoff_id"])["next_action"],
+                             "Merge old PR")
+
+    def test_existing_database_receives_revision_without_losing_state(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            project.mkdir()
+            store = MemoryStore(root / "state.db")
+            current = store.update_project_state("demo", project, "Keep me", expected_revision=0)
+            conn = sqlite3.connect(store.db_path)
+            try:
+                # Recreate just the old schema shape to exercise migration.
+                conn.execute("ALTER TABLE project_state DROP COLUMN revision")
+                conn.commit()
+            finally:
+                conn.close()
+            migrated = MemoryStore(store.db_path)
+            state = migrated.project_state("demo", project)
+            self.assertEqual(state["summary"], "Keep me")
+            self.assertEqual(state["revision"], 1)
+            self.assertEqual(migrated.update_project_state(
+                "demo", project, "New", expected_revision=1,
+            )["revision"], 2)
+
     def test_search_returns_bounded_project_scoped_recall(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -135,6 +215,7 @@ class OrdaxCoreMemoryTests(unittest.TestCase):
                 "first", first, "Aquatic gameplay foundation",
                 next_action="Tune diving physics",
                 changed_paths=["src/water.py"],
+                expected_revision=1,
             )
             store.remember("second", second, "Diving belongs to another project")
 
@@ -166,12 +247,11 @@ class OrdaxCoreMemoryTests(unittest.TestCase):
                 ttl_hours=1,
             )
             state = store.project_state("demo", project)
-            self.assertIsNotNone(state)
-            self.assertEqual(state["summary"], "Renderer stabilized")
-            self.assertEqual(state["next_action"], "Profile frame time")
-            self.assertEqual(state["source"], "handoff")
-            self.assertEqual(state["source_ref"], handoff["handoff_id"])
-            self.assertNotIn("expires_at", state)
+            self.assertIsNone(state, "a handoff is an unverified proposal, not current state")
+            self.assertEqual(handoff["next_action_status"], "proposal_revalidation_required")
+            loaded = store.get_handoff("demo", project, handoff["handoff_id"])
+            self.assertEqual(loaded["next_action"], "Profile frame time")
+            self.assertEqual(loaded["next_action_status"], "proposal_revalidation_required")
 
     def test_expiring_handoff_round_trip_is_project_scoped(self):
         with tempfile.TemporaryDirectory() as directory:

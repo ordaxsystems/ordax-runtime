@@ -90,14 +90,10 @@ class OrchestratorActionsTests(unittest.TestCase):
         self.assertTrue(checkpoint.ok)
         continuity = self.registry.execute("continuity.get", {"project": "demo"})
         self.assertTrue(continuity.ok)
-        state = continuity.data["state"]
-        self.assertEqual("Mid-session checkpoint", state["summary"])
-        self.assertEqual("Continue implementation", state["next_action"])
-        self.assertEqual(["bootstrap"], state["completed"])
-        self.assertEqual(["review pending"], state["blockers"])
-        self.assertEqual(["src/bootstrap.py"], state["changed_paths"])
-        self.assertEqual("orchestrator", state["source"])
-        self.assertEqual(checkpoint.data["id"], state["source_ref"])
+        self.assertIsNone(continuity.data["state"], "agent checkpoint is not verified project state")
+        self.assertEqual(checkpoint.data["continuity_proposal"]["checkpoint_id"], checkpoint.data["id"])
+        self.assertEqual(checkpoint.data["continuity_proposal"]["status"], "proposal_revalidation_required")
+        self.assertEqual(checkpoint.data["continuity_proposal"]["next_action"], "Continue implementation")
 
         usage = self.registry.execute(
             "orchestrator.session_usage",
@@ -126,14 +122,10 @@ class OrchestratorActionsTests(unittest.TestCase):
             "Continue from tests",
         )
         continuity = self.registry.execute("continuity.get", {"project": "demo"})
-        state = continuity.data["state"]
-        self.assertEqual("Large context checkpoint", state["summary"])
-        self.assertEqual("Continue from tests", state["next_action"])
-        self.assertEqual(["initial implementation"], state["completed"])
-        self.assertEqual(["src/app.py"], state["changed_paths"])
-        self.assertEqual("orchestrator", state["source"])
-        self.assertEqual(rotated.data["checkpoint"]["id"], state["source_ref"])
-        self.assertEqual(state, rotated.data["project_continuity"])
+        self.assertIsNone(continuity.data["state"])
+        self.assertEqual(rotated.data["continuity_proposal"]["status"], "proposal_revalidation_required")
+        self.assertEqual(rotated.data["continuity_proposal"]["checkpoint_id"], rotated.data["checkpoint"]["id"])
+        self.assertEqual(rotated.data["continuity_proposal"]["next_action"], "Continue from tests")
 
         sent = self.registry.execute(
             "orchestrator.message_send",
