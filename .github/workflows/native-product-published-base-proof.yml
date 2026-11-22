@@ -1,0 +1,160 @@
+name: Native Product on published OrdaX Base (manual proof)
+
+on:
+  workflow_dispatch:
+    inputs:
+      runtime_run_id:
+        description: Successful Native main run; reuse artifact without recompilation
+        type: string
+        required: true
+      runtime_source_commit:
+        description: Exact Native main source SHA
+        type: string
+        required: true
+      os_base_commit:
+        description: Immutable published OrdaX Base source SHA
+        type: string
+        required: true
+      os_rootfs_sha256:
+        description: Exact SHA-256 for published rootfs.tar
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  base-offline-native-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.runtime_run_id }}
+      RUNTIME_SHA: ${{ inputs.runtime_source_commit }}
+      BASE_SHA: ${{ inputs.os_base_commit }}
+      ROOTFS_SHA256: ${{ inputs.os_rootfs_sha256 }}
+    steps:
+      - name: Check immutable identities and successful canonical Runtime build
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os,re
+          patterns={"RUN_ID":r"[1-9][0-9]{6,15}","RUNTIME_SHA":r"[0-9a-f]{40}",
+                    "BASE_SHA":r"[0-9a-f]{40}","ROOTFS_SHA256":r"[0-9a-f]{64}"}
+          for key,pattern in patterns.items():
+              if not re.fullmatch(pattern,os.environ.get(key,"")):
+                  raise SystemExit("invalid immutable input: "+key)
+          PY
+          gh api "repos/ordaxsystems/ordax-runtime/actions/runs/$RUN_ID" > "$RUNNER_TEMP/producer.json"
+          python3 - <<'PY'
+          import os,json
+          from pathlib import Path
+          r=json.loads((Path(os.environ["RUNNER_TEMP"])/"producer.json").read_text())
+          if (r.get("conclusion")!="success" or r.get("head_branch")!="main"
+                  or r.get("head_sha")!=os.environ["RUNTIME_SHA"]
+                  or r.get("repository",{}).get("full_name")!="ordaxsystems/ordax-runtime"
+                  or not r.get("path","").startswith(".github/workflows/native-product-agent.yml")):
+              raise SystemExit("not an exact successful Runtime main producer")
+          PY
+
+      - name: Acquire and verify existing Runtime + published OS Base
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/native" "$RUNNER_TEMP/base"
+          gh run download "$RUN_ID" --repo ordaxsystems/ordax-runtime \
+            --name "ordax-native-product-candidate-$RUNTIME_SHA" --dir "$RUNNER_TEMP/native"
+          gh release download "ordax-dev-base-$BASE_SHA" --repo ordaxsystems/ordax-os \
+            --pattern rootfs.tar --pattern dev-base.json --dir "$RUNNER_TEMP/base"
+          python3 - <<'PY'
+          import hashlib,os,json
+          from pathlib import Path
+          root=Path(os.environ["RUNNER_TEMP"]);n=root/"native";b=root/"base"
+          manifest=json.loads((n/"candidate.json").read_text())
+          closure=json.loads((n/"portable-closure.json").read_text())
+          base=json.loads((b/"dev-base.json").read_text())
+          def hash_file(path):
+              h=hashlib.sha256()
+              with path.open("rb") as f:
+                  for part in iter(lambda:f.read(1024*1024),b""):h.update(part)
+              return h.hexdigest()
+          if (base.get("source_commit")!=os.environ["BASE_SHA"]
+                  or base.get("rootfs",{}).get("sha256")!=os.environ["ROOTFS_SHA256"]
+                  or hash_file(b/"rootfs.tar")!=os.environ["ROOTFS_SHA256"]):
+              raise SystemExit("OS Base SHA mismatch")
+          if (manifest.get("schema")!="ordax.native-product-runtime-candidate/1"
+                  or manifest.get("source_commit")!=os.environ["RUNTIME_SHA"]
+                  or manifest.get("platform")!="linux-amd64-musl"
+                  or manifest.get("sha256")!=hash_file(n/"ordax-product-agent")
+                  or manifest.get("portable_bootstrap")!=closure
+                  or closure.get("schema")!="ordax.native-portable-bootstrap/1"
+                  or closure.get("bootstrap_elf_closure_verified") is not True
+                  or closure.get("device_install_authorized") is not False
+                  or manifest.get("installation_authorized_by_candidate") is not False):
+              raise SystemExit("Runtime portable candidate not source/denial bound")
+          names={"ld-musl-x86_64.so.1","libc.musl-x86_64.so.1","libz.so.1"}
+          if set(closure.get("libraries",{}))!=names:
+              raise SystemExit("Runtime private closure incomplete")
+          for name,claim in closure["libraries"].items():
+              if claim.get("sha256")!=hash_file(n/"portable-lib"/name):
+                  raise SystemExit("Runtime private library hash mismatch: "+name)
+          print("NATIVE_EXACT_PUBLISHED_ARTIFACTS=VERIFIED")
+          PY
+
+      - name: Prove full offline actions on the exact OrdaX rootfs; no rebuild, network or credentials
+        shell: bash
+        run: |
+          docker import "$RUNNER_TEMP/base/rootfs.tar" ordax-independent-base:verified
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --pids-limit 80 --memory 768m \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=192m \
+            --mount "type=bind,src=$RUNNER_TEMP/native,dst=/opt/ordax-native,readonly" \
+            -e LD_LIBRARY_PATH=/opt/ordax-native/portable-lib \
+            --entrypoint /opt/ordax-native/portable-lib/ld-musl-x86_64.so.1 \
+            ordax-independent-base:verified \
+            --library-path /opt/ordax-native/portable-lib \
+            /opt/ordax-native/ordax-product-agent --self-test \
+            > "$RUNNER_TEMP/base-native-self-test.json"
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          proof=json.loads((Path(os.environ["RUNNER_TEMP"])/"base-native-self-test.json").read_text())
+          if (proof.get("ok") is not True
+                  or proof.get("profile")!="owner-development-usb"
+                  or proof.get("device_credential_used") is not False
+                  or proof.get("network_used") is not False
+                  or proof.get("graphical_actions")!=[]
+                  or proof.get("probes")!=["filesystem","terminal","supervised-process"]
+                  or proof.get("registered_action_count",0)<100):
+              raise SystemExit("Native Product cannot run offline on published OS Base")
+          print("NATIVE_PRODUCT_PUBLISHED_BASE_FULL_SELFTEST=PASS")
+          PY
+
+      - name: Preserve bounded evidence without claiming device activation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ["RUNNER_TEMP"])
+          native=json.loads((root/"native/candidate.json").read_text())
+          proof=json.loads((root/"base-native-self-test.json").read_text())
+          report={"schema":"ordax.native-product-independent-base-offline-smoke/1",
+                  "runtime_source_commit":os.environ["RUNTIME_SHA"],
+                  "runtime_binary_sha256":native["sha256"],
+                  "os_base_source_commit":os.environ["BASE_SHA"],
+                  "os_base_rootfs_sha256":os.environ["ROOTFS_SHA256"],
+                  "full_offline_action_probe_in_exact_os_base":True,
+                  "offline_probe_actions":proof["probes"],
+                  "physical_usb_execution_proven":False,
+                  "device_credentials_used":False,
+                  "device_install_authorized":False,
+                  "stable_activation_authorized":False}
+          (root/"base-native-proof.json").write_text(json.dumps(report,sort_keys=True,indent=2)+"\n")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-product-published-base-offline-smoke-${{ inputs.runtime_source_commit }}
+          path: ${{ runner.temp }}/base-native-proof.json
+          if-no-files-found: error
+          retention-days: 14
