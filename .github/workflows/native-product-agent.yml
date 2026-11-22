@@ -12,6 +12,7 @@ on:
       - "tests/test_native_product_abi.py"
       - "tests/test_native_buildroot_lock.py"
       - "tests/test_native_private_python_proof.py"
+      - "tests/test_native_portable_bootstrap.py"
       - "tools/ci/audit_buildroot_lock.py"
       - "tools/ci/audit_independent_python_proof.py"
       - "pyproject.toml"
@@ -46,7 +47,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Audit Independent Base ELF and exact dependency locks
-        run: python3 -m unittest tests.test_native_product_abi tests.test_native_buildroot_lock tests.test_native_private_python_proof -v
+        run: python3 -m unittest tests.test_native_product_abi tests.test_native_buildroot_lock tests.test_native_private_python_proof tests.test_native_portable_bootstrap -v
       - name: Build the pinned native executable candidate
         run: docker build --platform linux/amd64 -f native/ordax-product-agent/Dockerfile -t ordax-native-product-candidate .
       - name: Prove private-loader bootstrap on the bare Linux kernel ABI
