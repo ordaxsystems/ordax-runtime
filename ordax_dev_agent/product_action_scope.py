@@ -104,7 +104,11 @@ PROJECT_MCP_ACTIONS = frozenset({
     "artifact.preview",
 })
 
+# Physical USB actions are device-scoped observations, not projects or writes.
+USB_MEDIA_DEVICE_ACTIONS = frozenset({"usb.list", "usb.inspect"})
+
 DEVICE_SCOPED_ACTIONS = frozenset({
+    *USB_MEDIA_DEVICE_ACTIONS,
     *DEVICE_BLENDER_ACTIONS,
     "forge.app_read",
     *COMPUTER_DEVICE_ACTIONS,

@@ -39,6 +39,8 @@ _GUI_EXCLUSIVE_ACTIONS = frozenset({
 # conservative global lock used for unknown action domains. They consume
 # bounded observation slots rather than competing with long-running jobs.
 _DEVICE_OBSERVATION_ACTIONS = frozenset({
+    "usb.list",
+    "usb.inspect",
     "computer.access_status",
     "computer.active_window",
     "computer.activity_status",

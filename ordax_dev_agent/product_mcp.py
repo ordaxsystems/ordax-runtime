@@ -23,6 +23,14 @@ class ProductMcpToolSpec:
 
 PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(
+        name="usb_list", action="usb.list",
+        description="Discover physically recognized Owner DEV OrdaX USB media on the authorized Windows device without Creator GUI. Read-only and does not prove the installed OS revision.",
+    ),
+    ProductMcpToolSpec(
+        name="usb_inspect", action="usb.inspect",
+        description="Inspect one Owner DEV USB by exact physical disk number and verified serial, including GPT and ext4 signature; no update, repair or physical write.",
+    ),
+    ProductMcpToolSpec(
         name="app_intelligence_catalog",
         action="intelligence.app_catalog",
         description="Read the compact, version-bound App Intelligence catalog from the connected ORDAX device. Use this when app capabilities are uncertain; it carries no execution authority.",
