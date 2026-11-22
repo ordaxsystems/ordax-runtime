@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import re
@@ -35,6 +36,7 @@ from .computer_parity_actions import ComputerParityActions
 from .computer_filesystem_actions import ComputerFilesystemActions, load_computer_access_policy
 from .computer_transfer_actions import ComputerTransferActions
 from .computer_activity import ComputerActivityTracker
+from .usb_media_actions import USBMediaActions
 from .memory_actions import MemoryActions
 from .application_intelligence_actions import ApplicationIntelligenceActions
 from .component_actions import ComponentActions
@@ -145,6 +147,7 @@ class ActionRegistry(
     ComputerParityActions,
     ComputerFilesystemActions,
     ComputerTransferActions,
+    USBMediaActions,
     MemoryActions,
     ApplicationIntelligenceActions,
     ComponentActions,
@@ -252,6 +255,8 @@ class ActionRegistry(
             "computer.processes": self.computer_processes,
             "computer.terminate_process": self.computer_terminate_process,
             "computer.access_status": self.computer_access_status,
+            "usb.list": self.usb_list,
+            "usb.inspect": self.usb_inspect,
             "computer.activity_status": self.computer_activity_status,
             "computer.file_stat": self.computer_file_stat,
             "computer.directory_list": self.computer_directory_list,
@@ -516,7 +521,14 @@ class ActionRegistry(
                 self._actions[f"{name}.{operation}"] = (
                     lambda payload, fn=handler: fn(self._project(payload), payload))
             self._adapter_contracts[name] = external_adapter_contract(name)
+        if os.name != "nt":
+            # Never advertise Windows USB actions on an OS without that host adapter.
+            self._actions.pop("usb.list", None)
+            self._actions.pop("usb.inspect", None)
         if config.computer_access_source == "native-unbound":
+            # Native OS does not inherit the Windows physical-media adapter.
+            self._actions.pop("usb.list", None)
+            self._actions.pop("usb.inspect", None)
             # Native Stable has no verified Settings/Permissions execution
             # port yet. The local Computer policy already denies execution,
             # but publishing every handler in Product heartbeat would falsely

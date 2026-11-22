@@ -92,3 +92,22 @@ Esses campos indicam **registro local de implementação**, não grants OAuth,
 consentimento, prontidão, autoridade de despacho, acesso remoto nem execução
 comprovada. A Platform continua sendo SSOT de grants Device/Space e o OS segue
 owner de políticas/handlers Native. Não habilitar ações em função da lista.
+
+## USB OrdaX Owner DEV — leitura fisica pelo MCP (2026-11-22)
+
+As acoes usb.list e usb.inspect sao Device, nao operacoes do Creator GUI
+nem comandos livres. O Runtime Windows usa um checkout ordax-os/main
+local verificado (origem Git, branch, arquivos rastreados/limpos), encontrado
+de maneira inequivoca no workspace do host ou configurado pelo owner em
+ORDAX_OS_SOURCE_ROOT / os_source_root. O caminho nao vem da requisicao MCP.
+O adaptador canonico creator/tools/owner_dev_usb_inventory.py reutiliza as
+verificacoes existentes de identidade fisica, layout das tres particoes
+e superbloco Linux. O retorno distingue identificacao da midia de revisao
+do OS realmente instalada (installed_revision_proven=false ate prova real).
+
+Nao disponibilizar usb.update nem usb.repair antes de integrar o executor
+fisico e readback canonicos do OS. Registro local, ferramenta Product,
+catalogo no Worker, autorizacao Platform e instalacao do Runtime sao gates
+diferentes. O source destas duas operacoes nao adiciona grant em producao,
+nao modifica o USB, nao atualiza a EFI e nao ativa o OS. O Creator grafico
+e opcional para inspecao, mas a instalacao fisica ainda nao foi entregue.

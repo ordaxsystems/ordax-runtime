@@ -74,6 +74,15 @@ class ProductAuditSink(Protocol):
 
 
 PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
+    "usb.list": ProductActionSpec(
+        name="usb.list", local_action="usb.list",
+        allowed_fields=frozenset(), project_required=False,
+    ),
+    "usb.inspect": ProductActionSpec(
+        name="usb.inspect", local_action="usb.inspect",
+        allowed_fields=frozenset({"disk_number", "serial"}),
+        project_required=False,
+    ),
     "forge.app_read": ProductActionSpec(
         name="forge.app_read", local_action="forge.app_read",
         allowed_fields=frozenset(), project_required=False,

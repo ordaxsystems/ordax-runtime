@@ -47,6 +47,8 @@ class AgentConfig:
     device_id: str | None = None
     product_mcp_url: str | None = DEFAULT_PRODUCT_MCP_URL
     workspace_root: Path | None = None
+    # Trusted host-only OS source checkout. Remote MCP callers cannot override it.
+    os_source_root: Path | None = None
     # Trusted host-owned authority paths; never loaded from remote payloads.
     protected_roots: tuple[Path, ...] = ()
     # Canonical advisory wake is the normal low-latency path. PostgreSQL
@@ -164,6 +166,13 @@ class AgentConfig:
                         str(Path(__file__).resolve().parents[1]),
                     ),
                 )
+            ),
+            os_source_root=(
+                Path(value).expanduser().resolve()
+                if (value := (
+                    os.environ.get("ORDAX_OS_SOURCE_ROOT")
+                    or settings.get("os_source_root")
+                )) else None
             ),
             workspace_root=Path(
                 os.environ.get("ORDAX_WORKSPACE_ROOT")

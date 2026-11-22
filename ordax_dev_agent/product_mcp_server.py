@@ -59,6 +59,30 @@ def _register_delegate(name: str, *, annotations: ToolAnnotations | None = None)
     mcp.tool(annotations=annotations)(function)
 
 
+# Media operations use exact device grant, not a GitHub project or shell.
+@mcp.tool()
+def usb_list(
+    device_id: str,
+    space_id: str | None = None,
+) -> dict[str, Any]:
+    return _invoke(
+        device_id=device_id, action="usb.list", space_id=space_id, arguments={},
+    )
+
+
+@mcp.tool()
+def usb_inspect(
+    device_id: str,
+    disk_number: int,
+    serial: str,
+    space_id: str | None = None,
+) -> dict[str, Any]:
+    return _invoke(
+        device_id=device_id, action="usb.inspect", space_id=space_id,
+        arguments={"disk_number": disk_number, "serial": serial},
+    )
+
+
 # Product/account discovery remains unchanged.
 _register_delegate("product_session")
 _register_delegate("product_targets")
