@@ -53,16 +53,24 @@ class DeviceCapabilitySnapshotTests(unittest.TestCase):
         self.assertEqual(modes["process.start"], ["write"])
         self.assertNotIn("computer.transfer_unauthorized", modes)
 
-    def test_complete_product_catalog_fits_bounded_local_snapshot(self):
-        # In production the runtime publishes only locally registered IDs.
-        # This synthetic ceiling check prevents the source catalog from
-        # growing beyond the local schema without an explicit contract review.
+    def test_large_product_catalog_is_bounded_for_os_v1_and_reports_degraded(self):
+        # OS v1 accepts <=64 entries, while Runtime may expose more local
+        # actions. Discovery must remain usable without pretending complete.
         local_names = [spec.local_action for spec in PRODUCT_ACTIONS.values()]
         self.assertGreater(len(local_names), 64)
-        self.assertLessEqual(len(local_names), MAX_DEVICE_CAPABILITIES)
-        self.assertLessEqual(MAX_DEVICE_CAPABILITIES, 128)
+        self.assertEqual(MAX_DEVICE_CAPABILITIES, 64)
         expected = device_capability_snapshot(local_names)
-        self.assertEqual(len(expected["capabilities"]), len(PRODUCT_ACTIONS))
+        self.assertEqual(len(expected["capabilities"]), 64)
+        self.assertEqual(expected["state"], "degraded")
+        self.assertEqual(
+            expected, device_capability_snapshot(reversed(local_names)),
+            "capability selection must be independent of executor registry order",
+        )
+        actual_ids = [entry["id"] for entry in expected["capabilities"]]
+        self.assertEqual(actual_ids, sorted(actual_ids))
+        computer_ids = {id for id in PRODUCT_ACTIONS if id.startswith("computer.")}
+        if len(computer_ids) <= MAX_DEVICE_CAPABILITIES:
+            self.assertTrue(computer_ids.issubset(actual_ids))
 
         def forbidden_full_status():
             raise AssertionError("capability read must not scan full status")
