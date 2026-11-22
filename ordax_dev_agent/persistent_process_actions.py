@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -333,6 +334,17 @@ class PersistentProcessActions:
         if len(task_title) > 160 or any(ord(char) < 32 for char in task_title):
             return ActionResult(False, "ORDAX_TASK_TITLE must be a single line of at most 160 characters")
 
+        # Labels for correlation only; never substitute for authenticated scope.
+        mission_id = env.get("ORDAX_MISSION_ID", "")
+        mission_project = env.get("ORDAX_MISSION_PROJECT", "")
+        label_pattern = r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}"
+        if mission_id and re.fullmatch(label_pattern, mission_id) is None:
+            return ActionResult(False, "ORDAX_MISSION_ID must be a safe label of 1..80 characters")
+        if mission_project and re.fullmatch(label_pattern, mission_project) is None:
+            return ActionResult(False, "ORDAX_MISSION_PROJECT must be a safe label of 1..80 characters")
+        if mission_project and not mission_id:
+            return ActionResult(False, "ORDAX_MISSION_PROJECT requires ORDAX_MISSION_ID")
+
         command = list(argv)
         resolved = shutil.which(command[0])
         if resolved:
@@ -389,6 +401,7 @@ class PersistentProcessActions:
             ),
             "argv": argv,
             **({"task_title": task_title} if task_title else {}),
+            **({"mission": {"id": mission_id, "project_label": mission_project}} if mission_id else {}),
             "log_path": str(log_path),
             "started_at_unix": time.time(),
         }
@@ -531,6 +544,56 @@ class PersistentProcessActions:
             current,
         )
 
+    def _latest_mission_checkpoint(self, project: Any, process_id: str) -> dict[str, Any] | None:
+        """Read bounded, *unverified* child stdout; do not create another state store."""
+        path = self._process_log_path(project, process_id)
+        try:
+            with path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                end = handle.tell()
+                start = max(0, end - 32768)
+                handle.seek(start)
+                data = handle.read(32768).decode("utf-8", "replace")
+        except OSError:
+            return None
+        if start:
+            data = data.partition("\n")[2]
+        # An unfinished line is not a durable checkpoint, even if it has valid JSON.
+        if not data.endswith("\n"):
+            data = data.rpartition("\n")[0]
+        prefix = "ORDAX_MISSION_CHECKPOINT|"
+        latest = None
+        for line in data.splitlines():
+            if not line.startswith(prefix) or len(line) > 1200:
+                continue
+            try:
+                item = json.loads(line[len(prefix):])
+                if not isinstance(item, dict):
+                    continue
+                step, total = item.get("step"), item.get("total")
+                stage, status = item.get("stage"), item.get("status")
+                summary, resume_ref = item.get("summary", ""), item.get("resume_ref", "")
+                if (
+                    type(step) is not int or type(total) is not int
+                    or not 0 <= step <= total <= 100000 or total == 0
+                    or status not in ("running", "blocked", "failed", "completed")
+                    or not isinstance(stage, str) or not 1 <= len(stage) <= 80
+                    or any(ord(ch) < 32 for ch in stage)
+                    or not isinstance(summary, str) or len(summary) > 160
+                    or any(ord(ch) < 32 for ch in summary)
+                    or not isinstance(resume_ref, str) or len(resume_ref) > 160
+                    or any(ord(ch) < 32 for ch in resume_ref)
+                ):
+                    continue
+            except (ValueError, TypeError):
+                continue
+            latest = {
+                "step": step, "total": total, "stage": stage, "status": status,
+                "summary": summary, "resume_ref": resume_ref,
+                "source": "unverified_child_stdout",
+            }
+        return latest
+
     def process_status(self, payload: dict[str, Any]) -> ActionResult:
         return self._process_status_scoped(payload, self._project(payload))
 
@@ -540,6 +603,10 @@ class PersistentProcessActions:
     def _process_status_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         process_id = str(payload.get("process_id") or "")
         state = self._public_process_state(self._load_process_state(project, process_id))
+        if isinstance(state.get("mission"), dict):
+            checkpoint = self._latest_mission_checkpoint(project, process_id)
+            if checkpoint is not None:
+                state["latest_checkpoint"] = checkpoint
         return ActionResult(True, "persistent process status ready", state)
 
     def process_list(self, payload: dict[str, Any]) -> ActionResult:
@@ -574,7 +641,7 @@ class PersistentProcessActions:
         def brief(state: dict[str, Any]) -> dict[str, Any]:
             argv = state.get("argv") or []
             command = Path(argv[0]).name if isinstance(argv, list) and argv and isinstance(argv[0], str) else "Process"
-            return {
+            result = {
                 "process_id": state["process_id"],
                 "title": state.get("task_title") or command,
                 "state": state["state"],
@@ -583,6 +650,16 @@ class PersistentProcessActions:
                 "ended_at_unix": state.get("ended_at_unix"),
                 "ownership_valid": state.get("ownership_valid", False),
             }
+            mission = state.get("mission")
+            if isinstance(mission, dict) and isinstance(mission.get("id"), str):
+                result["mission"] = {
+                    "id": mission["id"],
+                    "project_label": mission.get("project_label", ""),
+                }
+                checkpoint = self._latest_mission_checkpoint(project, state["process_id"])
+                if checkpoint is not None:
+                    result["latest_checkpoint"] = checkpoint
+            return result
 
         active: list[dict[str, Any]] = []
         active_ids: set[str] = set()
