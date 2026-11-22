@@ -90,6 +90,12 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
         allowed_fields=frozenset({"app_id"}),
         project_required=False,
     ),
+    "ordax.intelligence.respond": ProductActionSpec(
+        name="ordax.intelligence.respond",
+        local_action="ordax.intelligence.respond",
+        allowed_fields=frozenset({"prompt", "intent", "maxTokens"}),
+        project_required=False,
+    ),
     "ordax.surface.status": ProductActionSpec(
         name="ordax.surface.status",
         local_action="ordax.surface.status",
