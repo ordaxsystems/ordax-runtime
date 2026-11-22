@@ -280,7 +280,7 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             self.assertEqual(seen[0][1]["runtime_kind"], "ordax-os")
             self.assertEqual(seen[0][1]["capabilities_digest"],
                              hashlib.sha256(b'["agent.status"]').hexdigest())
-            self.assertNotIn("capabilities", seen[0][1])
+            self.assertEqual(seen[0][1]["capabilities"], ["agent.status"])
             self.assertEqual(plane._runtime_provenance()["runtime_kind"], "ordax-os")
             self.assertFalse(
                 (root / "state" / "device-token.cloudflare-v3.txt").exists()
@@ -451,7 +451,7 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             self.assertEqual(seen[0][0], "/v3/device/transport/heartbeat")
             expected = hashlib.sha256(b'["agent.status"]').hexdigest()
             self.assertEqual(seen[0][1]["capabilities_digest"], expected)
-            self.assertNotIn("capabilities", seen[0][1])
+            self.assertEqual(seen[0][1]["capabilities"], ["agent.status"])
             self.assertNotIn("runtime_kind", seen[0][1])
             self.assertEqual(plane.runtime_kind, "desktop-agent")
             self.assertEqual(plane.product_central_session.ticks, 1)
@@ -477,10 +477,20 @@ class ProductDeviceControlPlaneTests(unittest.TestCase):
             plane = self.plane(Path(raw), handler)
             plane.heartbeat(["b", "a", "a"], agent_version="1")
             first = seen[-1]["capabilities_digest"]
+            self.assertEqual(seen[-1]["capabilities"], ["a", "b"])
             plane.heartbeat(["a", "b"], agent_version="1")
+            self.assertNotIn("capabilities", seen[-1],
+                             "unchanged Runtime registry must not resend the manifest")
             self.assertEqual(seen[-1]["capabilities_digest"], first)
             self.assertEqual(first, hashlib.sha256(b'["a","b"]').hexdigest())
             self.assertEqual(plane._heartbeat_capabilities, ("a", "b"))
+            plane.heartbeat(["a", "b", "c"], agent_version="1")
+            self.assertEqual(seen[-1]["capabilities"], ["a", "b", "c"])
+            plane.heartbeat(["a", "b", "c"], agent_version="1", status="offline")
+            self.assertNotIn("capabilities", seen[-1])
+            plane.heartbeat(["a", "b", "c"], agent_version="1", status="online")
+            self.assertEqual(seen[-1]["capabilities"], ["a", "b", "c"],
+                             "a new online epoch republishes the existing registry")
             plane.http.close()
 
     def test_claim_is_independent_from_pending_report_recovery(self):
