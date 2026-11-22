@@ -12,6 +12,7 @@ on:
       - "tests/test_native_product_abi.py"
       - "tests/test_native_buildroot_lock.py"
       - "tests/test_native_private_python_proof.py"
+      - "tests/test_native_portable_bootstrap.py"
       - "tools/ci/audit_buildroot_lock.py"
       - "tools/ci/audit_independent_python_proof.py"
       - "pyproject.toml"
@@ -46,9 +47,15 @@ jobs:
         with:
           persist-credentials: false
       - name: Audit Independent Base ELF and exact dependency locks
-        run: python3 -m unittest tests.test_native_product_abi tests.test_native_buildroot_lock tests.test_native_private_python_proof -v
+        run: python3 -m unittest tests.test_native_product_abi tests.test_native_buildroot_lock tests.test_native_private_python_proof tests.test_native_portable_bootstrap -v
       - name: Build the pinned native executable candidate
         run: docker build --platform linux/amd64 -f native/ordax-product-agent/Dockerfile -t ordax-native-product-candidate .
+      - name: Prove private-loader bootstrap on the bare Linux kernel ABI
+        run: |
+          docker build --platform linux/amd64 --target kernel-only-smoke -f native/ordax-product-agent/Dockerfile -t ordax-native-kernel-only-smoke .
+          docker run --rm --network none --read-only --tmpfs /tmp:exec \
+            ordax-native-kernel-only-smoke --help > /tmp/ordax-native-kernel-only-help.txt
+          grep -F 'OrdaX OS Product Runtime' /tmp/ordax-native-kernel-only-help.txt
       - name: Exercise the executable without network or an installed Python
         run: |
           mkdir -p out
@@ -57,6 +64,8 @@ jobs:
           container=$(docker create ordax-native-product-candidate --self-test)
           trap 'docker rm "$container" >/dev/null' EXIT
           docker cp "$container:/output/ordax-product-agent" out/ordax-product-agent
+          docker cp "$container:/output/portable-lib" out/portable-lib
+          python3 native/ordax-product-agent/verify_portable_closure.py --binary out/ordax-product-agent --lib-root out/portable-lib --out out/portable-closure.json
           python3 native/ordax-product-agent/provenance.py --source-commit "$GITHUB_SHA" --output out
           # Prove the actual binary's ELF dependencies independently of its
           # successful container self-test. Do not confuse CI green with

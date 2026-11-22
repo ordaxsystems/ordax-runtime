@@ -35,6 +35,14 @@ def main() -> None:
     # The provenance is also the one authoritative ABI disclosure for this
     # candidate. Offline tests in Alpine cannot prove Independent Base support.
     abi = audit(binary, Path(__file__).with_name("Dockerfile"))
+    # This is a separately verified kernel-only bootstrap closure; it does
+    # NOT replace the signed OS component trust/health and deployment gates.
+    portable = json.loads((args.output / "portable-closure.json").read_text())
+    if (portable.get("schema") != "ordax.native-portable-bootstrap/1"
+            or portable.get("bootstrap_elf_closure_verified") is not True
+            or portable.get("device_install_authorized") is not False
+            or portable.get("device_execution_proven") is not False):
+        raise ValueError("native portable bootstrap verification is missing")
     manifest = {
         "schema": "ordax.native-product-runtime-candidate/1",
         "source_repository": "ordaxsystems/ordax-runtime",
@@ -50,6 +58,7 @@ def main() -> None:
         "elf_interpreter": abi["interpreter"],
         "elf_needed_libraries": abi["needed_libraries"],
         "embedded_elf_inventory": abi["embedded_elf_inventory"],
+        "portable_bootstrap": portable,
         "signature_present": False, "installation_authorized_by_candidate": False,
         "stable_activation_authorized": False,
     }
