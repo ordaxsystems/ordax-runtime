@@ -938,6 +938,8 @@ def computer_text_read(
     space_id: str | None = None,
     sheet: str | None = None,
     cell_range: str | None = None,
+    page_start: int | None = None,
+    page_end: int | None = None,
 ) -> dict[str, Any]:
     arguments: dict[str, Any] = {"path": path, "start_line": start_line}
     if end_line is not None:
@@ -946,6 +948,10 @@ def computer_text_read(
         arguments["sheet"] = sheet
     if cell_range is not None:
         arguments["cell_range"] = cell_range
+    if page_start is not None:
+        arguments["page_start"] = page_start
+    if page_end is not None:
+        arguments["page_end"] = page_end
     return _invoke(device_id=device_id, action="computer.text_read", space_id=space_id, arguments=arguments)
 
 def computer_search(
