@@ -797,7 +797,11 @@ class PersistentProcessActions:
         # a multibyte sequence. Revisit only the trailing 1..3 pending bytes.
         import codecs
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        text = decoder.decode(chunk, final=False)
+        # A completed log may end in malformed/incomplete UTF-8. Finalize at
+        # EOF only for non-running processes; a live writer may finish the
+        # codepoint in a later write and must keep the original byte cursor.
+        finalized = (start_offset + len(chunk) >= size and not state.get("running", False))
+        text = decoder.decode(chunk, final=finalized)
         pending_bytes = decoder.getstate()[0]
         next_offset = start_offset + len(chunk) - len(pending_bytes)
         return ActionResult(True, "persistent process logs ready", {
