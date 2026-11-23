@@ -284,6 +284,98 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
                 })
                 self.assertFalse(result.ok)
 
+    def test_office_docx_read_lazily_without_optional_packages(self):
+        from io import BytesIO
+        from zipfile import ZipFile
+        data = BytesIO()
+        document = (
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body><w:p><w:r><w:t>Olá OrdaX</w:t></w:r></w:p>'
+            '<w:p><w:r><w:t>Second</w:t></w:r><w:tab/><w:r><w:t>line</w:t></w:r></w:p>'
+            '</w:body></w:document>'
+        )
+        with ZipFile(data, "w") as archive:
+            archive.writestr("word/document.xml", document)
+        path = self.allowed / "sample.docx"
+        path.write_bytes(data.getvalue())
+        result = self.registry.execute("computer.text_read", {
+            "path": str(path), "start_line": 2, "end_line": 2,
+        })
+        self.assertTrue(result.ok, result.summary)
+        self.assertEqual("docx", result.data["format"])
+        self.assertEqual(2, result.data["paragraph_count"])
+        self.assertEqual("Second\tline", result.data["content"])
+        self.assertEqual(2, result.data["line_count"])
+        self.assertEqual(hashlib.sha256(data.getvalue()).hexdigest(), result.data["sha256"])
+
+        denied = self.registry.execute("computer.text_read", {
+            "path": str(path), "sheet": "Data",
+        })
+        self.assertFalse(denied.ok)
+        self.assertIn("Excel", denied.summary)
+
+    def test_office_xlsx_sheet_and_bounded_cell_range(self):
+        from io import BytesIO
+        from zipfile import ZipFile
+        data = BytesIO()
+        xls = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        with ZipFile(data, "w") as archive:
+            archive.writestr(
+                "xl/workbook.xml",
+                '<workbook xmlns="' + xls + '" '
+                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                '<sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+            )
+            archive.writestr(
+                "xl/_rels/workbook.xml.rels",
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" Target="worksheets/sheet1.xml" /></Relationships>',
+            )
+            archive.writestr(
+                "xl/sharedStrings.xml",
+                '<sst xmlns="' + xls + '"><si><t>Alpha</t></si>'
+                '<si><r><t>Be</t></r><r><t>ta</t></r></si></sst>',
+            )
+            archive.writestr(
+                "xl/worksheets/sheet1.xml",
+                '<worksheet xmlns="' + xls + '"><sheetData>'
+                '<row r="1"><c r="A1" t="s"><v>0</v></c></row>'
+                '<row r="2"><c r="B2" t="s"><v>1</v></c>'
+                '<c r="C2"><v>42</v></c><c r="D2"><f>1+1</f></c></row>'
+                '<row r="3"><c r="B3" t="inlineStr"><is><t>Gamma</t></is></c>'
+                '<c r="C3"><v>7</v></c></row></sheetData></worksheet>',
+            )
+        path = self.allowed / "book.xlsx"
+        path.write_bytes(data.getvalue())
+        result = self.registry.execute("computer.text_read", {
+            "path": str(path), "sheet": "Data", "cell_range": "B2:C3",
+        })
+        self.assertTrue(result.ok, result.summary)
+        self.assertEqual("xlsx", result.data["format"])
+        self.assertEqual(["Data"], result.data["sheet_names"])
+        self.assertEqual("2\tBeta\t42\n3\tGamma\t7", result.data["content"])
+        self.assertFalse(result.data["formula_evaluated"])
+        missing = self.registry.execute("computer.text_read", {
+            "path": str(path), "sheet": "NoSuchSheet",
+        })
+        self.assertFalse(missing.ok)
+        oversized = self.registry.execute("computer.text_read", {
+            "path": str(path), "cell_range": "A1:XFD999999",
+        })
+        self.assertFalse(oversized.ok)
+        formula = self.registry.execute("computer.text_read", {
+            "path": str(path), "cell_range": "D2:D2",
+        })
+        self.assertTrue(formula.ok)
+        self.assertIn("[formula without cached value]", formula.data["content"])
+
+    def test_invalid_office_zip_rejected_without_touching_other_files(self):
+        target = self.allowed / "corrupted.docx"
+        target.write_bytes(b"not a zip")
+        result = self.registry.execute("computer.text_read", {"path": str(target)})
+        self.assertFalse(result.ok)
+        self.assertEqual("office_text_unavailable", result.data["error_code"])
+
     def test_patch_preserves_crlf_when_fragment_uses_lf(self):
         target = self.allowed / "windows.py"
         before = b"def hello():\r\n    return 'old'\r\n"
