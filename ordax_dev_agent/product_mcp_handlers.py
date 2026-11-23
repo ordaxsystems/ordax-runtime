@@ -946,21 +946,26 @@ def computer_search(
     max_depth: int = 6,
     include_hidden: bool = False,
     space_id: str | None = None,
+    file_pattern: str | None = None,
+    case_sensitive: bool = False,
 ) -> dict[str, Any]:
+    arguments: dict[str, Any] = {
+        "root": root,
+        "query": query,
+        "mode": mode,
+        "max_results": max_results,
+        "max_depth": max_depth,
+        "include_hidden": include_hidden,
+        "case_sensitive": case_sensitive,
+    }
+    if file_pattern is not None:
+        arguments["file_pattern"] = file_pattern
     return _invoke(
         device_id=device_id,
         action="computer.search",
         space_id=space_id,
-        arguments={
-            "root": root,
-            "query": query,
-            "mode": mode,
-            "max_results": max_results,
-            "max_depth": max_depth,
-            "include_hidden": include_hidden,
-        },
+        arguments=arguments,
     )
-
 
 def computer_processes(
     device_id: str,
