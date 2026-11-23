@@ -70,7 +70,6 @@ def extract_pdf_text(
             page_tree_maximum_depth=30,
             page_tree_maximum_page_entries=5_000,
             xform_maximum_invocations_per_extraction=50,
-            annotations_maximum_per_page=1_000,
         ):
             with PdfReader(
                 io.BytesIO(raw), strict=True, root_object_recovery_limit=1000,
