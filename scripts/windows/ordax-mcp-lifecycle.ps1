@@ -492,7 +492,7 @@ except (OSError, ValueError) as error:
 }
 
 function Invoke-QuiesceRoot {
-    param([string]$Root)
+    param([string]$Root, [switch]$PreflightOnly)
     $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
     if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
         throw 'Installed Runtime quiesce controller missing'
@@ -507,6 +507,7 @@ function Invoke-QuiesceRoot {
     $start.FileName = $powershell
     $start.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
         $script + '" -InstallRoot "' + $Root + '" -TimeoutSeconds 25'
+    if ($PreflightOnly) { $start.Arguments += ' -PreflightOnly' }
     $start.WorkingDirectory = $updatesRoot
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
@@ -529,11 +530,12 @@ function Invoke-QuiesceRoot {
             throw 'ORDAX_MCP_QUIESCE_OUTPUT_TIMEOUT'
         }
         $receipt = $stdoutTask.Result
+        $expected = if ($PreflightOnly) { 'ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR' } else { 'ORDAX_UPGRADE_QUIESCED' }
         if ($child.ExitCode -ne 0 -or
-            $receipt -notmatch '(?m)^ORDAX_UPGRADE_QUIESCED\s*$') {
-            throw ("ORDAX_MCP_QUIESCE_FAILED: exit={0}" -f $child.ExitCode)
+            $receipt -notmatch ('(?m)^' + $expected + '\s*$')) {
+            throw ("ORDAX_MCP_QUIESCE_FAILED: exit={0} preflight={1}" -f $child.ExitCode, $PreflightOnly)
         }
-        Write-Output 'ORDAX_MCP_QUIESCE_VERIFIED'
+        Write-Output $(if ($PreflightOnly) { 'ORDAX_MCP_SUPERVISOR_PREFLIGHT_VERIFIED' } else { 'ORDAX_MCP_QUIESCE_VERIFIED' })
     } finally { $child.Dispose() }
 }
 
@@ -598,6 +600,8 @@ switch ($Operation) {
     }
     'Upgrade' {
         Assert-InstalledSource
+        # Refuse before staging when a persistent supervisor still owns a live child.
+        Invoke-QuiesceRoot -Root $installRoot -PreflightOnly
         if ($PackageSha256 -cnotmatch '^[0-9a-fA-F]{64}$' -or
             $ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
             throw 'Exact portable DEV package SHA-256 and Runtime commit are mandatory'
@@ -764,6 +768,9 @@ switch ($Operation) {
             if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
                 throw 'DEV Runtime atomic activation requires same volume'
             }
+            # Recheck after staging and before ending the owner task: no worker may
+            # be sacrificed to activate a newer package.
+            Invoke-QuiesceRoot -Root $installRoot -PreflightOnly
             $existing = Get-CanonicalScheduledTask -Name $taskName
             Assert-OurTask $existing $lifecycle 'Launch'
             if ($existing) {
