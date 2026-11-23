@@ -297,7 +297,7 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
     "computer.search": ProductActionSpec(
         name="computer.search",
         local_action="computer.search",
-        allowed_fields=frozenset({"root", "query", "mode", "max_results", "max_depth", "include_hidden"}),
+        allowed_fields=frozenset({"root", "query", "mode", "max_results", "max_depth", "include_hidden", "file_pattern", "case_sensitive"}),
         project_required=False,
     ),
     "computer.processes": ProductActionSpec(

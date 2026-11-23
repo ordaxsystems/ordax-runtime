@@ -241,6 +241,49 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
         self.assertTrue(remove.ok, remove.summary)
         self.assertFalse(moved.exists())
 
+    def test_computer_search_filters_case_and_extension_without_new_engine(self):
+        python_file = self.allowed / "notes.PY"
+        python_file.write_text("Alpha value\\n", encoding="utf-8")
+        text_file = self.allowed / "notes.txt"
+        text_file.write_text("alpha value\\n", encoding="utf-8")
+
+        filtered = self.registry.execute("computer.search", {
+            "root": str(self.allowed),
+            "query": "alpha",
+            "mode": "content",
+            "file_pattern": "*.py",
+        })
+        self.assertTrue(filtered.ok, filtered.summary)
+        self.assertEqual([python_file.name], [Path(item["path"]).name for item in filtered.data["results"]])
+        self.assertFalse(filtered.data["case_sensitive"])
+        self.assertEqual(filtered.data["file_pattern"], "*.py")
+
+        strict = self.registry.execute("computer.search", {
+            "root": str(self.allowed),
+            "query": "Alpha",
+            "mode": "content",
+            "file_pattern": "*.PY",
+            "case_sensitive": True,
+        })
+        self.assertTrue(strict.ok, strict.summary)
+        self.assertEqual(1, len(strict.data["results"]))
+        strict_miss = self.registry.execute("computer.search", {
+            "root": str(self.allowed),
+            "query": "alpha",
+            "mode": "content",
+            "file_pattern": "*.PY",
+            "case_sensitive": True,
+        })
+        self.assertTrue(strict_miss.ok, strict_miss.summary)
+        self.assertEqual([], strict_miss.data["results"])
+
+        for invalid in ({"case_sensitive": "false"}, {"file_pattern": ""}, {"file_pattern": 17}):
+            with self.subTest(invalid=invalid):
+                result = self.registry.execute("computer.search", {
+                    "root": str(self.allowed), "query": "alpha", **invalid,
+                })
+                self.assertFalse(result.ok)
+
     def test_patch_preserves_crlf_when_fragment_uses_lf(self):
         target = self.allowed / "windows.py"
         before = b"def hello():\r\n    return 'old'\r\n"
