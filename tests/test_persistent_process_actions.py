@@ -207,6 +207,75 @@ class PersistentProcessActionsTests(unittest.TestCase):
         self.assertTrue(all(not item["ownership_valid"] for item in result.data["processes"]))
         self.assertTrue(all("token" not in item for item in result.data["processes"]))
 
+    def test_log_byte_cursor_reads_once_without_splitting_utf8(self):
+        project = self.registry._project({"project": "demo"})
+        process_id = "12345678-1234-4234-8234-123456789012"
+        state_path = self.registry._process_state_path(project, process_id)
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps({
+            "process_id": process_id, "project": "demo",
+            "state": "exited", "started_at_unix": time.time() - 30,
+            "manager_pid": 0, "token": "", "argv": ["python"],
+        }), encoding="utf-8")
+        log_path = self.registry._process_log_path(project, process_id)
+        source = b"a" * 1023 + "é".encode("utf-8") + b"\n" + b"b" * 1500
+        log_path.write_bytes(source)
+
+        received = []
+        offset = 0
+        for _ in range(10):
+            page = self.registry.execute("process.logs", {
+                "project": "demo", "process_id": process_id,
+                "offset": offset, "max_bytes": 1024,
+            })
+            self.assertTrue(page.ok, page.summary)
+            self.assertEqual("cursor", page.data["read_mode"])
+            self.assertEqual(offset, page.data["start_offset"])
+            self.assertGreaterEqual(page.data["next_offset"], offset)
+            received.append(page.data["tail"])
+            if not page.data["has_more"]:
+                break
+            offset = page.data["next_offset"]
+        else:
+            self.fail("cursor did not reach EOF")
+        self.assertEqual(source.decode("utf-8"), "".join(received))
+        self.assertEqual(len(source), page.data["next_offset"])
+        self.assertFalse(page.data["has_more"])
+        self.assertNotIn("token", page.data["process"])
+
+        # Existing callers keep the same bounded tail semantics.
+        tail = self.registry.execute("process.logs", {
+            "project": "demo", "process_id": process_id, "max_bytes": 1024,
+        })
+        self.assertTrue(tail.ok, tail.summary)
+        self.assertEqual("b" * 1024, tail.data["tail"])
+        self.assertTrue(tail.data["truncated"])
+        self.assertNotIn("next_offset", tail.data)
+
+        stale = self.registry.execute("process.logs", {
+            "project": "demo", "process_id": process_id,
+            "offset": len(source) + 1,
+        })
+        self.assertFalse(stale.ok)
+        self.assertEqual("process_log_cursor_stale", stale.data["error_code"])
+        for bad in (True, -1, "0"):
+            rejected = self.registry.execute("process.logs", {
+                "project": "demo", "process_id": process_id, "offset": bad,
+            })
+            self.assertFalse(rejected.ok)
+
+        # An exited log ending in a partial multibyte sequence must terminate
+        # rather than return the same cursor forever.
+        log_path.write_bytes(b"Q" * 1023 + b"\xc3")
+        malformed = self.registry.execute("process.logs", {
+            "project": "demo", "process_id": process_id,
+            "offset": 0, "max_bytes": 1024,
+        })
+        self.assertTrue(malformed.ok, malformed.summary)
+        self.assertEqual("Q" * 1023 + "\ufffd", malformed.data["tail"])
+        self.assertEqual(1024, malformed.data["next_offset"])
+        self.assertFalse(malformed.data["has_more"])
+
     def test_start_status_logs_list_and_stop(self):
         started = self.registry.execute(
             "process.start",
