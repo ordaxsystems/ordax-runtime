@@ -171,6 +171,19 @@ class ComputerLaunchAppTests(unittest.TestCase):
         self.assertEqual(4242, result.data["pid"])
         popen.assert_called_once()
 
+    def test_launch_app_drops_inherited_electron_node_mode(self):
+        executable = self.root / "viewer.exe"
+        executable.write_bytes(b"stub")
+        self._write_policy([str(executable.resolve())])
+        with patch.dict("os.environ", {"ELECTRON_RUN_AS_NODE": "1"}), patch(
+            "subprocess.Popen", return_value=SimpleNamespace(pid=4244)
+        ) as popen:
+            result = self.actions.computer_launch_app(
+                {"project": "demo", "application": str(executable)}
+            )
+        self.assertTrue(result.ok, result.summary)
+        self.assertNotIn("ELECTRON_RUN_AS_NODE", popen.call_args.kwargs["env"])
+
     def test_launch_app_allows_explicit_executable_basename(self):
         executable = self.root / "viewer.exe"
         executable.write_bytes(b"stub")

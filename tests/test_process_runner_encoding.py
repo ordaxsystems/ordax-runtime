@@ -36,6 +36,7 @@ class ProcessRunnerEncodingTests(unittest.TestCase):
             "ORDAX_MISSION_ID": "inherited",
             "_PYI_APPLICATION_HOME_DIR": "frozen-private",
             "PYINSTALLER_RESET_ENVIRONMENT": "1",
+            "ELECTRON_RUN_AS_NODE": "1",
             "ORDAX_TEST_PUBLIC_ENV": "not-inherited",
             "PUBLIC_TASK_VALUE": "kept",
         }
@@ -46,6 +47,8 @@ class ProcessRunnerEncodingTests(unittest.TestCase):
             self.assertNotIn("ORDAX_RUNTIME_HOST_PROFILE", projected)
             self.assertNotIn("_PYI_APPLICATION_HOME_DIR", projected)
             self.assertNotIn("PYINSTALLER_RESET_ENVIRONMENT", projected)
+            self.assertNotIn("ELECTRON_RUN_AS_NODE", projected)
+            self.assertEqual(external_process_environment({"ELECTRON_RUN_AS_NODE": "1"})["ELECTRON_RUN_AS_NODE"], "1")
             self.assertEqual(projected["ORDAX_MISSION_ID"], "task-explicit")
             self.assertEqual(projected["PUBLIC_TASK_VALUE"], "kept")
             script = (

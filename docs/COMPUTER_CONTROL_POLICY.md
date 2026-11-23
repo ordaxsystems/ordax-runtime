@@ -89,7 +89,7 @@ The editor is deliberately **not** a Product MCP action. Remote clients can read
 
 ## App launch
 
-`computer.launch_app` does not use a shell. The Runtime resolves one Windows `.exe` and validates bounded arguments.
+`computer.launch_app` does not use a shell. The Runtime resolves one Windows `.exe` and validates bounded arguments. The shared external-process environment removes inherited `ELECTRON_RUN_AS_NODE` so a GUI Electron app is not silently executed as Node.js; explicitly authorized terminal overrides remain available.
 
 - Bounded mode requires the resolved executable in `allowed_applications`.
 - Full Access accepts supported `.exe` applications without maintaining an ORDAX per-app allowlist.
