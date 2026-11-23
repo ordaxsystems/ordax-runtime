@@ -983,12 +983,13 @@ def computer_processes(
     query: str = "",
     max_items: int = 200,
     space_id: str | None = None,
+    include_metrics: bool = False,
 ) -> dict[str, Any]:
     return _invoke(
         device_id=device_id,
         action="computer.processes",
         space_id=space_id,
-        arguments={"query": query, "max_items": max_items},
+        arguments={"query": query, "max_items": max_items, "include_metrics": include_metrics},
     )
 
 
