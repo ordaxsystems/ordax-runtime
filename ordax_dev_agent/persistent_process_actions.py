@@ -762,22 +762,49 @@ class PersistentProcessActions:
         max_bytes = int(payload.get("max_bytes", 65536))
         if not 1024 <= max_bytes <= 262144:
             return ActionResult(False, "max_bytes must be between 1024 and 262144")
+        cursor = payload.get("offset")
+        if cursor is not None and (type(cursor) is not int or not 0 <= cursor <= 9007199254740991):
+            return ActionResult(False, "offset must be a non-negative JSON-safe byte integer")
         path = self._process_log_path(project, process_id)
         if not path.is_file():
+            if cursor is not None:
+                return ActionResult(True, "persistent process has no logs yet", {
+                    "process": state, "tail": "", "size_bytes": 0,
+                    "truncated": False, "start_offset": 0, "next_offset": 0,
+                    "has_more": False, "read_mode": "cursor",
+                })
             return ActionResult(True, "persistent process has no logs yet", {"process": state, "tail": ""})
         size = path.stat().st_size
-        offset = max(0, size - max_bytes)
+        if cursor is not None and cursor > size:
+            # A rotated/truncated log cannot silently reuse an old cursor.
+            return ActionResult(False, "log cursor is beyond current file size", {
+                "error_code": "process_log_cursor_stale", "size_bytes": size,
+            })
+        start_offset = cursor if cursor is not None else max(0, size - max_bytes)
         with path.open("rb") as handle:
-            handle.seek(offset)
+            handle.seek(start_offset)
             chunk = handle.read(max_bytes)
-        text = chunk.decode("utf-8", "replace")
-        if offset and "\n" in text:
-            text = text.split("\n", 1)[1]
+        if cursor is None:
+            # Backward-compatible tail mode: drop the possibly partial first line.
+            text = chunk.decode("utf-8", "replace")
+            if start_offset and "\n" in text:
+                text = text.split("\n", 1)[1]
+            return ActionResult(True, "persistent process logs ready", {
+                "process": state, "tail": text, "size_bytes": size,
+                "truncated": start_offset > 0,
+            })
+        # Cursor mode must not lose a UTF-8 codepoint when read() cuts through
+        # a multibyte sequence. Revisit only the trailing 1..3 pending bytes.
+        import codecs
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        text = decoder.decode(chunk, final=False)
+        pending_bytes = decoder.getstate()[0]
+        next_offset = start_offset + len(chunk) - len(pending_bytes)
         return ActionResult(True, "persistent process logs ready", {
-            "process": state,
-            "tail": text,
-            "size_bytes": size,
-            "truncated": offset > 0,
+            "process": state, "tail": text, "size_bytes": size,
+            "truncated": start_offset > 0,
+            "start_offset": start_offset, "next_offset": next_offset,
+            "has_more": next_offset < size, "read_mode": "cursor",
         })
 
     def process_write_stdin(self, payload: dict[str, Any]) -> ActionResult:
