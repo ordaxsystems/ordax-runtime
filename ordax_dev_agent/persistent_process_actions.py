@@ -696,6 +696,7 @@ class PersistentProcessActions:
 
         active: list[dict[str, Any]] = []
         active_ids: set[str] = set()
+        checked_current: dict[str, dict[str, Any]] = {}
         for raw in candidates:
             if raw.get("state") not in {"starting", "running", "stopping"}:
                 continue
@@ -709,6 +710,7 @@ class PersistentProcessActions:
                 continue
             try:
                 state = self._public_process_state(self._load_process_state(project, raw["process_id"]))
+                checked_current[raw["process_id"]] = state
                 if state["running"]:
                     active.append(state)
                     active_ids.add(raw["process_id"])
@@ -720,7 +722,20 @@ class PersistentProcessActions:
         items: list[dict[str, Any]] = []
         for raw in selected:
             try:
-                items.append(brief(self._public_process_state(self._load_process_state(project, raw["process_id"]))))
+                process_id = raw["process_id"]
+                if process_id in checked_current:
+                    # Active/stale candidates were already reconciled above.
+                    # Avoid repeating expensive Windows ownership probes.
+                    state = checked_current[process_id]
+                elif raw.get("state") in {"exited", "failed", "stopped"}:
+                    # Terminal receipts are historical records, not live claims.
+                    # Checking their old PIDs can hit unrelated reused Windows
+                    # processes and launch one costly CIM probe per receipt.
+                    state = {**raw, "running": False, "ownership_valid": False}
+                else:
+                    # Keep live/starting transitions authoritative and checked.
+                    state = self._public_process_state(self._load_process_state(project, process_id))
+                items.append(brief(state))
             except (OSError, ValueError, KeyError):
                 continue
         next_offset = offset + len(selected) if offset + len(selected) < len(ordered) else None
