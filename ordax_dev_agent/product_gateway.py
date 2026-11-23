@@ -308,10 +308,10 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
     ),
     "computer.process_status": ProductActionSpec("computer.process_status", "computer.process_status", frozenset({"process_id"}), project_required=False),
     "computer.process_list": ProductActionSpec("computer.process_list", "computer.process_list", frozenset(), project_required=False),
-    "computer.process_logs": ProductActionSpec("computer.process_logs", "computer.process_logs", frozenset({"process_id", "max_bytes"}), project_required=False),
+    "computer.process_logs": ProductActionSpec("computer.process_logs", "computer.process_logs", frozenset({"process_id", "max_bytes", "offset"}), project_required=False),
     "process.status": ProductActionSpec("process.status", "process.status", frozenset({"project", "process_id"})),
     "process.list": ProductActionSpec("process.list", "process.list", frozenset({"project"})),
-    "process.logs": ProductActionSpec("process.logs", "process.logs", frozenset({"project", "process_id", "max_bytes"})),
+    "process.logs": ProductActionSpec("process.logs", "process.logs", frozenset({"project", "process_id", "max_bytes", "offset"})),
 }
 
 # Product v2 exposes only bounded typed operations. No generic action executor or shell.
@@ -835,7 +835,14 @@ def _sanitize_product_result(
         }
     elif action in {"process.logs", "computer.process_logs"}:
         process = data.get("process")
-        data = {"process": public_process(process) if isinstance(process, dict) else {}, "tail": str(data.get("tail") or ""), "size_bytes": int(data.get("size_bytes") or 0), "truncated": bool(data.get("truncated"))}
+        public = {"process": public_process(process) if isinstance(process, dict) else {}, "tail": str(data.get("tail") or ""), "size_bytes": int(data.get("size_bytes") or 0), "truncated": bool(data.get("truncated"))}
+        if data.get("read_mode") == "cursor":
+            public["read_mode"] = "cursor"
+            for key in ("start_offset", "next_offset"):
+                if type(data.get(key)) is int and 0 <= data[key] <= 9007199254740991:
+                    public[key] = data[key]
+            public["has_more"] = data.get("has_more") is True
+        data = public
     elif action in {"process.write_stdin", "computer.process_write_stdin"}:
         data = {key: data[key] for key in ("process_id", "queued_bytes", "newline") if key in data}
     elif action == "computer.processes":
