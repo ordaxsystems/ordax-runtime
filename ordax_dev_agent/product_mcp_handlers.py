@@ -661,8 +661,13 @@ def computer_process_status(device_id: str, process_id: str) -> dict[str, Any]:
     return _invoke(device_id=device_id, action="computer.process_status", arguments={"process_id": process_id})
 
 
-def computer_process_list(device_id: str) -> dict[str, Any]:
-    return _invoke(device_id=device_id, action="computer.process_list", arguments={})
+def computer_process_list(device_id: str, mission_id: str | None = None, mission_project: str | None = None, offset: int = 0) -> dict[str, Any]:
+    arguments: dict[str, Any] = {"offset": offset}
+    if mission_id is not None:
+        arguments["mission_id"] = mission_id
+    if mission_project is not None:
+        arguments["mission_project"] = mission_project
+    return _invoke(device_id=device_id, action="computer.process_list", arguments=arguments)
 
 
 def computer_process_logs(device_id: str, process_id: str, max_bytes: int = 65536) -> dict[str, Any]:
@@ -695,8 +700,13 @@ def process_status(device_id: str, project: str, process_id: str, space_id: str 
     return _invoke(device_id=device_id, action="process.status", project=project, space_id=space_id, arguments={"project": project, "process_id": process_id})
 
 
-def process_list(device_id: str, project: str, space_id: str | None = None) -> dict[str, Any]:
-    return _invoke(device_id=device_id, action="process.list", project=project, space_id=space_id, arguments={"project": project})
+def process_list(device_id: str, project: str, space_id: str | None = None, mission_id: str | None = None, mission_project: str | None = None, offset: int = 0) -> dict[str, Any]:
+    arguments: dict[str, Any] = {"project": project, "offset": offset}
+    if mission_id is not None:
+        arguments["mission_id"] = mission_id
+    if mission_project is not None:
+        arguments["mission_project"] = mission_project
+    return _invoke(device_id=device_id, action="process.list", project=project, space_id=space_id, arguments=arguments)
 
 
 def process_logs(device_id: str, project: str, process_id: str, max_bytes: int = 65536, space_id: str | None = None) -> dict[str, Any]:

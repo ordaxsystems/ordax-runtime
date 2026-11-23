@@ -90,6 +90,7 @@ class ComputerProcessActionsTests(unittest.TestCase):
                     "task_title": "Old active task" if live else f"Done {index}",
                     "argv": ["python", "-c", "sensitive command"],
                     "token": "secret-token",
+                    "mission": {"id": "batch-check", "project_label": "runtime"} if index < 30 else None,
                 }
                 registry._process_state_path(scope, process_id).write_text(
                     json.dumps(state), encoding="utf-8"
@@ -106,6 +107,20 @@ class ComputerProcessActionsTests(unittest.TestCase):
             self.assertTrue(listed.data["processes"][0]["running"])
             self.assertNotIn("secret-token", repr(listed.data))
             self.assertNotIn("sensitive command", repr(listed.data))
+            first = registry.execute("computer.process_list", {"mission_id": "batch-check", "mission_project": "runtime"})
+            second = registry.execute("computer.process_list", {"mission_id": "batch-check", "offset": 24})
+            self.assertTrue(first.ok, first.summary)
+            self.assertTrue(second.ok, second.summary)
+            self.assertEqual((first.data["total_registered"], first.data["total_matching"]), (42, 30))
+            self.assertEqual((len(first.data["processes"]), first.data["next_offset"]), (24, 24))
+            self.assertEqual((len(second.data["processes"]), second.data["next_offset"]), (6, None))
+            self.assertTrue({p["process_id"] for p in first.data["processes"]}.isdisjoint(
+                {p["process_id"] for p in second.data["processes"]}))
+            self.assertFalse(registry.execute("computer.process_list", {"mission_id": "../bad"}).ok)
+            self.assertFalse(registry.execute("computer.process_list", {"mission_project": "runtime"}).ok)
+            self.assertFalse(registry.execute("computer.process_list", {"offset": True}).ok)
+            self.assertFalse(registry.execute("computer.process_list", {"offset": -1}).ok)
+            self.assertEqual(registry.execute("computer.process_list", {"mission_id": "missing"}).data["total_matching"], 0)
 
     def test_mission_checkpoint_is_visible_without_id_and_advisory(self):
         registry = self._device_registry()

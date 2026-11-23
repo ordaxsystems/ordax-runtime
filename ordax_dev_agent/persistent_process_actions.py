@@ -630,7 +630,20 @@ class PersistentProcessActions:
     def _process_list_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
         # Historical receipts are kept for cross-chat continuity, not returned
         # wholesale: hundreds of full argv records exceed the MCP gateway limit.
+        # Returned listings are bounded for the Product MCP transport.
         limit = 24
+        mission_id = payload.get("mission_id")
+        mission_project = payload.get("mission_project")
+        offset = payload.get("offset", 0)
+        label_pattern = r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}"
+        if mission_id is not None and (not isinstance(mission_id, str) or re.fullmatch(label_pattern, mission_id) is None):
+            return ActionResult(False, "mission_id must be a safe label of 1..80 characters")
+        if mission_project is not None and (not isinstance(mission_project, str) or re.fullmatch(label_pattern, mission_project) is None):
+            return ActionResult(False, "mission_project must be a safe label of 1..80 characters")
+        if mission_project is not None and mission_id is None:
+            return ActionResult(False, "mission_project requires mission_id")
+        if type(offset) is not int or not 0 <= offset <= 1000000:
+            return ActionResult(False, "offset must be an integer between 0 and 1000000")
         root = self._process_root(project)
         candidates: list[dict[str, Any]] = []
         if root.is_dir():
@@ -648,7 +661,15 @@ class PersistentProcessActions:
                         candidates.append(state)
                 except (OSError, ValueError, TypeError, json.JSONDecodeError):
                     continue
-        candidates.sort(key=lambda value: float(value.get("started_at_unix") or 0), reverse=True)
+        total_registered = len(candidates)
+        if mission_id is not None:
+            candidates = [
+                state for state in candidates
+                if isinstance(state.get("mission"), dict)
+                and state["mission"].get("id") == mission_id
+                and (mission_project is None or state["mission"].get("project_label") == mission_project)
+            ]
+        candidates.sort(key=lambda value: (float(value.get("started_at_unix") or 0), value["process_id"]), reverse=True)
 
         def brief(state: dict[str, Any]) -> dict[str, Any]:
             argv = state.get("argv") or []
@@ -689,29 +710,29 @@ class PersistentProcessActions:
             try:
                 state = self._public_process_state(self._load_process_state(project, raw["process_id"]))
                 if state["running"]:
-                    active.append(brief(state))
+                    active.append(state)
                     active_ids.add(raw["process_id"])
             except (OSError, ValueError, KeyError):
                 continue
-            if len(active) >= limit:
-                break
-        recent: list[dict[str, Any]] = []
-        for raw in candidates:
-            if len(active) + len(recent) >= limit:
-                break
-            if raw["process_id"] in active_ids:
-                continue
+        # Active receipts precede history; only the requested page reads old logs.
+        ordered = active + [raw for raw in candidates if raw["process_id"] not in active_ids]
+        selected = ordered[offset:offset + limit]
+        items: list[dict[str, Any]] = []
+        for raw in selected:
             try:
-                recent.append(brief(self._public_process_state(self._load_process_state(project, raw["process_id"]))))
+                items.append(brief(self._public_process_state(self._load_process_state(project, raw["process_id"]))))
             except (OSError, ValueError, KeyError):
                 continue
-        items = active + recent
+        next_offset = offset + len(selected) if offset + len(selected) < len(ordered) else None
         return ActionResult(True, "persistent process list ready", {
             **({"device_id": project.device_id} if isinstance(project, _DeviceProcessScope) else {"project": project.slug}),
             "processes": items,
-            "total_registered": len(candidates),
+            "total_registered": total_registered,
+            "total_matching": len(candidates),
+            "offset": offset,
+            "next_offset": next_offset,
             "returned": len(items),
-            "truncated": len(candidates) > len(items),
+            "truncated": next_offset is not None,
         })
 
     def process_logs(self, payload: dict[str, Any]) -> ActionResult:
