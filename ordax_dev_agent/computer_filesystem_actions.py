@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections import deque
+from fnmatch import fnmatchcase
 import shutil
 import time
 import uuid
@@ -1059,18 +1061,25 @@ class ComputerFilesystemActions:
             name="max_depth",
         )
         include_hidden = bool(payload.get("include_hidden", False))
+        case_sensitive = payload.get("case_sensitive", False)
+        if not isinstance(case_sensitive, bool):
+            return ActionResult(False, "case_sensitive must be a boolean")
+        file_pattern = payload.get("file_pattern")
+        if file_pattern is not None:
+            if not isinstance(file_pattern, str) or not 1 <= len(file_pattern) <= 200:
+                return ActionResult(False, "file_pattern must contain 1..200 characters")
         deadline = time.monotonic() + 8.0
-        needle = query.casefold()
+        needle = query if case_sensitive else query.casefold()
         results: list[dict[str, Any]] = []
         scanned = 0
         timed_out = False
-        queue: list[tuple[Path, int]] = [(root, 0)]
+        queue: deque[tuple[Path, int]] = deque([(root, 0)])
 
         while queue and len(results) < max_results:
             if time.monotonic() >= deadline:
                 timed_out = True
                 break
-            directory, depth = queue.pop(0)
+            directory, depth = queue.popleft()
             if depth >= max_depth:
                 continue
             try:
@@ -1094,7 +1103,7 @@ class ComputerFilesystemActions:
                 if not _path_allowed(resolved, policy):
                     continue
 
-                matched_name = needle in child.name.casefold()
+                matched_name = needle in (child.name if case_sensitive else child.name.casefold())
                 if matched_name and mode in {"name", "both"}:
                     results.append(
                         {
@@ -1106,12 +1115,19 @@ class ComputerFilesystemActions:
                     if len(results) >= max_results:
                         break
 
-                if child.is_file() and mode in {"content", "both"}:
+                name_matches_pattern = (
+                    file_pattern is None
+                    or fnmatchcase(
+                        child.name if case_sensitive else child.name.casefold(),
+                        file_pattern if case_sensitive else file_pattern.casefold(),
+                    )
+                )
+                if child.is_file() and name_matches_pattern and mode in {"content", "both"}:
                     try:
                         size = child.stat().st_size
                         if size <= 1024 * 1024:
                             text = child.read_text(encoding="utf-8-sig", errors="ignore")
-                            position = text.casefold().find(needle)
+                            position = (text if case_sensitive else text.casefold()).find(needle)
                             if position >= 0:
                                 line = text.count("\n", 0, position) + 1
                                 snippet = text[max(0, position - 120) : position + len(query) + 240]
@@ -1139,6 +1155,8 @@ class ComputerFilesystemActions:
                 "root": str(root),
                 "query": query,
                 "mode": mode,
+                "file_pattern": file_pattern,
+                "case_sensitive": case_sensitive,
                 "results": results,
                 "scanned_entries": scanned,
                 "truncated": len(results) >= max_results,
