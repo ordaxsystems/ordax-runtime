@@ -264,6 +264,18 @@ class PersistentProcessActionsTests(unittest.TestCase):
             })
             self.assertFalse(rejected.ok)
 
+        # An exited log ending in a partial multibyte sequence must terminate
+        # rather than return the same cursor forever.
+        log_path.write_bytes(b"Q" * 1023 + b"\xc3")
+        malformed = self.registry.execute("process.logs", {
+            "project": "demo", "process_id": process_id,
+            "offset": 0, "max_bytes": 1024,
+        })
+        self.assertTrue(malformed.ok, malformed.summary)
+        self.assertEqual("Q" * 1023 + "\ufffd", malformed.data["tail"])
+        self.assertEqual(1024, malformed.data["next_offset"])
+        self.assertFalse(malformed.data["has_more"])
+
     def test_start_status_logs_list_and_stop(self):
         started = self.registry.execute(
             "process.start",
