@@ -284,6 +284,35 @@ class ComputerFilesystemActionsTests(unittest.TestCase):
                 })
                 self.assertFalse(result.ok)
 
+    def test_pdf_text_read_uses_same_local_access_and_line_contract(self):
+        from tests.test_pdf_text import sample_pdf
+        raw = sample_pdf(["First page", "Second page", "Third page"])
+        path = self.allowed / "pages.pdf"
+        path.write_bytes(raw)
+        result = self.registry.execute("computer.text_read", {
+            "path": str(path), "page_start": 2, "page_end": 2,
+            "start_line": 1, "end_line": 2,
+        })
+        self.assertTrue(result.ok, result.summary)
+        self.assertEqual("pdf", result.data["format"])
+        self.assertEqual(3, result.data["page_count"])
+        self.assertEqual(2, result.data["page_start"])
+        self.assertEqual(2, result.data["page_end"])
+        self.assertEqual("[Page 2]\nSecond page", result.data["content"])
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), result.data["sha256"])
+
+        denied = self.registry.execute("computer.text_read", {
+            "path": str(path), "sheet": "Sheet1",
+        })
+        self.assertFalse(denied.ok)
+        self.assertIn("Excel", denied.summary)
+
+        bad = self.allowed / "bad.pdf"
+        bad.write_bytes(b"%PDF-invalid")
+        result = self.registry.execute("computer.text_read", {"path": str(bad)})
+        self.assertFalse(result.ok)
+        self.assertEqual("pdf_text_unavailable", result.data["error_code"])
+
     def test_office_docx_read_lazily_without_optional_packages(self):
         from io import BytesIO
         from zipfile import ZipFile
