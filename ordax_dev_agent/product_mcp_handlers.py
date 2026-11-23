@@ -930,12 +930,17 @@ def computer_text_read(
     start_line: int = 1,
     end_line: int | None = None,
     space_id: str | None = None,
+    sheet: str | None = None,
+    cell_range: str | None = None,
 ) -> dict[str, Any]:
     arguments: dict[str, Any] = {"path": path, "start_line": start_line}
     if end_line is not None:
         arguments["end_line"] = end_line
+    if sheet is not None:
+        arguments["sheet"] = sheet
+    if cell_range is not None:
+        arguments["cell_range"] = cell_range
     return _invoke(device_id=device_id, action="computer.text_read", space_id=space_id, arguments=arguments)
-
 
 def computer_search(
     device_id: str,

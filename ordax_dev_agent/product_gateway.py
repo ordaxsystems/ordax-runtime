@@ -291,7 +291,7 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
     "computer.text_read": ProductActionSpec(
         name="computer.text_read",
         local_action="computer.text_read",
-        allowed_fields=frozenset({"path", "start_line", "end_line"}),
+        allowed_fields=frozenset({"path", "start_line", "end_line", "sheet", "cell_range"}),
         project_required=False,
     ),
     "computer.search": ProductActionSpec(

@@ -757,10 +757,26 @@ class ComputerFilesystemActions:
                 {"path": str(path), "size_bytes": size},
             )
         raw = path.read_bytes()
-        try:
-            content = raw.decode("utf-8-sig")
-        except UnicodeDecodeError as error:
-            return ActionResult(False, f"file is not valid UTF-8 text: {error}")
+        office_details: dict[str, Any] = {}
+        if path.suffix.lower() in {".docx", ".xlsx"}:
+            # Lazy import: no Office XML/ZIP work or third-party dependency at
+            # Runtime startup. Scope checks above apply before archive opening.
+            from .office_text import OfficeDocumentError, extract_office_text
+            try:
+                content, office_details = extract_office_text(
+                    raw, path.suffix.lower(),
+                    sheet=payload.get("sheet"),
+                    cell_range=payload.get("cell_range"),
+                )
+            except OfficeDocumentError as error:
+                return ActionResult(False, str(error), {"error_code": "office_text_unavailable"})
+        else:
+            if "sheet" in payload or "cell_range" in payload:
+                return ActionResult(False, "sheet and cell_range apply only to Excel files")
+            try:
+                content = raw.decode("utf-8-sig")
+            except UnicodeDecodeError as error:
+                return ActionResult(False, f"file is not valid UTF-8 text: {error}")
 
         start_line = _bounded_int(
             payload.get("start_line"),
@@ -803,6 +819,7 @@ class ComputerFilesystemActions:
                 "start_line": start_line,
                 "end_line": min(end_line or len(lines), len(lines)),
                 "content": selected,
+                **office_details,
             },
         )
 
