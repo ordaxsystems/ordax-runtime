@@ -131,7 +131,7 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(name="computer_access_status", action="computer.access_status", description="Read the local ORDAX computer-access policy and allowed filesystem roots."),
     ProductMcpToolSpec(name="computer_file_stat", action="computer.file_stat", description="Inspect a file or directory allowed by the local computer-access policy."),
     ProductMcpToolSpec(name="computer_directory_list", action="computer.directory_list", description="List a directory tree allowed by the local computer-access policy."),
-    ProductMcpToolSpec(name="computer_text_read", action="computer.text_read", description="Read bounded UTF-8 text from an allowed computer path."),
+    ProductMcpToolSpec(name="computer_text_read", action="computer.text_read", description="Read bounded UTF-8, DOCX and XLSX text from an authorized computer path. Excel supports sheet and cell_range; no formulas are executed."),
     ProductMcpToolSpec(name="computer_search", action="computer.search", description="Search names or bounded text content under an allowed computer root."),
     ProductMcpToolSpec(name="computer_processes", action="computer.processes", description="List bounded system process metadata on the authorized computer."),
     ProductMcpToolSpec(name="computer_focus_window", action="computer.focus_window", effect="write", description="Bring one visible Windows window to the foreground."),
