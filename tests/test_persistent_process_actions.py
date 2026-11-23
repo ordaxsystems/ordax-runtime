@@ -176,6 +176,37 @@ class PersistentProcessActionsTests(unittest.TestCase):
         )
         self.assertTrue(persisted["token"])
 
+    def test_list_terminal_history_never_rechecks_recycled_pids(self):
+        project = self.registry._project({"project": "demo"})
+        root = self.registry._process_root(project)
+        root.mkdir(parents=True, exist_ok=True)
+        for index in range(36):
+            process_id = f"00000000-0000-4000-8000-{index:012d}"
+            (root / f"{process_id}.json").write_text(json.dumps({
+                "process_id": process_id,
+                "project": "demo",
+                "state": "exited",
+                "manager_pid": os.getpid(),
+                "token": "private-ownership-token",
+                "started_at_unix": time.time() - index,
+                "argv": ["python", "-c", "pass"],
+            }), encoding="utf-8")
+
+        # Reused PIDs must not prompt a Windows CIM command-line lookup for
+        # terminal receipts; that made large historical lists very slow.
+        with patch.object(self.registry, "_pid_running", side_effect=AssertionError("unnecessary PID lookup")), patch.object(
+            self.registry, "_commandline", side_effect=AssertionError("unnecessary CIM lookup")
+        ):
+            result = self.registry.execute("process.list", {"project": "demo"})
+
+        self.assertTrue(result.ok, result.summary)
+        self.assertEqual(36, result.data["total_registered"])
+        self.assertEqual(24, result.data["returned"])
+        self.assertEqual(24, result.data["next_offset"])
+        self.assertTrue(all(not item["running"] for item in result.data["processes"]))
+        self.assertTrue(all(not item["ownership_valid"] for item in result.data["processes"]))
+        self.assertTrue(all("token" not in item for item in result.data["processes"]))
+
     def test_start_status_logs_list_and_stop(self):
         started = self.registry.execute(
             "process.start",
