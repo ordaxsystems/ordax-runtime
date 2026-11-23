@@ -16,15 +16,38 @@ def now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def canonical_memory_db() -> Path:
+    """Single Runtime-owned destination; never a second memory database."""
+    if os.name == "nt":
+        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        return (root / "OrdaX" / "Runtime" / "memory" / "state.db").resolve()
+    root = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+    return (root / "ordax" / "runtime" / "memory" / "state.db").resolve()
+
+
+def legacy_memory_db() -> Path | None:
+    """Temporary pre-cutover discovery: do not silently discard existing user data."""
+    original = Path.home() / "Apps" / "OrdaxLocalAI" / "data" / "state.db"
+    if original.is_file():
+        return original.resolve()
+    if os.name == "nt":
+        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        previous = root / "OrdaX" / "Studio" / "state.db"
+    else:
+        previous = Path.home() / "AppData" / "Local" / "OrdaX" / "Studio" / "state.db"
+    return previous.resolve() if previous.is_file() else None
+
+
 def resolve_memory_db() -> Path:
     override = os.environ.get("ORDAX_MEMORY_DB")
     if override:
         return Path(override).expanduser().resolve()
-    legacy = Path.home() / "Apps" / "OrdaxLocalAI" / "data" / "state.db"
-    if legacy.is_file():
-        return legacy.resolve()
-    local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    return (local_app_data / "OrdaX" / "Studio" / "state.db").resolve()
+    canonical = canonical_memory_db()
+    if canonical.is_file():
+        return canonical
+    # Existing installations stay on their single old database until an
+    # explicitly verified cutover; fresh installations use the Runtime path.
+    return legacy_memory_db() or canonical
 
 
 class MemoryStore:

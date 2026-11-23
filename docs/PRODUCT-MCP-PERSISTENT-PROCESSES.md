@@ -164,3 +164,14 @@ abstrata de limpeza.
 datada, nunca como status live. Reconsultar `main`, manifesto, Runtime,
 Worker/CI, grants e schema da ferramenta antes de continuar; se a
 execução/gravação estiver incerta, recuperar recibos em vez de repetir.
+
+### Migração controlada do diretório de memória
+
+O Runtime usa `OrdaX/Runtime/memory/state.db` como destino de instalações
+novas. `OrdaX/Studio/state.db` não deve ser apagado automaticamente:
+pode conter projetos/eventos e processos de versões antigas podem usá-lo.
+O migrador `python -m ordax_core.memory_migration` faz preflight sem
+alterações; `--apply` transporta um backup consistente do SQLite e seus
+contextos somente se o destino não existir, preservando a origem.
+Confrontar contagens com as do banco de origem e validar o manifesto físico.
+**Commit Git não equivale a cutover concluído.**
