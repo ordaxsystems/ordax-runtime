@@ -670,8 +670,11 @@ def computer_process_list(device_id: str, mission_id: str | None = None, mission
     return _invoke(device_id=device_id, action="computer.process_list", arguments=arguments)
 
 
-def computer_process_logs(device_id: str, process_id: str, max_bytes: int = 65536) -> dict[str, Any]:
-    return _invoke(device_id=device_id, action="computer.process_logs", arguments={"process_id": process_id, "max_bytes": max_bytes})
+def computer_process_logs(device_id: str, process_id: str, max_bytes: int = 65536, offset: int | None = None) -> dict[str, Any]:
+    arguments: dict[str, Any] = {"process_id": process_id, "max_bytes": max_bytes}
+    if offset is not None:
+        arguments["offset"] = offset
+    return _invoke(device_id=device_id, action="computer.process_logs", arguments=arguments)
 
 
 def computer_process_start(
@@ -709,8 +712,11 @@ def process_list(device_id: str, project: str, space_id: str | None = None, miss
     return _invoke(device_id=device_id, action="process.list", project=project, space_id=space_id, arguments=arguments)
 
 
-def process_logs(device_id: str, project: str, process_id: str, max_bytes: int = 65536, space_id: str | None = None) -> dict[str, Any]:
-    return _invoke(device_id=device_id, action="process.logs", project=project, space_id=space_id, arguments={"project": project, "process_id": process_id, "max_bytes": max_bytes})
+def process_logs(device_id: str, project: str, process_id: str, max_bytes: int = 65536, space_id: str | None = None, offset: int | None = None) -> dict[str, Any]:
+    arguments: dict[str, Any] = {"project": project, "process_id": process_id, "max_bytes": max_bytes}
+    if offset is not None:
+        arguments["offset"] = offset
+    return _invoke(device_id=device_id, action="process.logs", project=project, space_id=space_id, arguments=arguments)
 
 
 def process_start(device_id: str, project: str, argv: list[str], cwd: str = ".", env: dict[str, str] | None = None, wait_seconds: float = 0.5, space_id: str | None = None) -> dict[str, Any]:
