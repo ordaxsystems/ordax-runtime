@@ -133,7 +133,7 @@ PRODUCT_MCP_TOOLS: tuple[ProductMcpToolSpec, ...] = (
     ProductMcpToolSpec(name="computer_directory_list", action="computer.directory_list", description="List a directory tree allowed by the local computer-access policy."),
     ProductMcpToolSpec(name="computer_text_read", action="computer.text_read", description="Read bounded UTF-8, DOCX and XLSX text from an authorized computer path. Excel supports sheet and cell_range; no formulas are executed."),
     ProductMcpToolSpec(name="computer_search", action="computer.search", description="Search names or bounded text content under an allowed computer root."),
-    ProductMcpToolSpec(name="computer_processes", action="computer.processes", description="List bounded system process metadata on the authorized computer."),
+    ProductMcpToolSpec(name="computer_processes", action="computer.processes", description="List system process metadata on an authorized computer. Optional include_metrics=true adds working-set RAM bytes and cumulative CPU time (not CPU percent), without PowerShell polling."),
     ProductMcpToolSpec(name="computer_focus_window", action="computer.focus_window", effect="write", description="Bring one visible Windows window to the foreground."),
     ProductMcpToolSpec(name="computer_click", action="computer.click", effect="write", description="Send a bounded mouse click to the interactive Windows desktop."),
     ProductMcpToolSpec(name="computer_mouse_move", action="computer.mouse_move", effect="write", description="Move the pointer to a validated coordinate on the virtual Windows desktop."),
