@@ -51,3 +51,15 @@ para o estado do projeto. Não criar outro Task Store, scheduler, polling
 agressivo nem integração direta com SQLite do Forge.
 Para Forge, a SSOT de Tasks/claims/observações é o próprio Forge App/SQLite
 sob coordenação do Forge MCP; OrdaX MCP é ferramenta auxiliar de DEV.
+
+## Banco da continuidade — migração sem perda
+
+A SSOT do Runtime para memória e orquestração permanece o mesmo SQLite
+resolvido por `ordax_core.memory.resolve_memory_db`. Instalações novas usam
+`OrdaX/Runtime/memory/state.db`; antes de trocar uma instalação já existente,
+consultar `docs/ORDAX_STUDIO_FOUNDATION.md` e usar o migrador explícito
+`python -m ordax_core.memory_migration` (preflight) e `--apply` somente
+com consumidores quiescentes e destino vazio. **Não remover nem renomear**
+`OrdaX/Studio/state.db` antes da prova de cutover da instalação física.
+O caminho antigo não pode ser atualizado em paralelo ao novo. Nunca
+considerar o registro no Git como migração de dados físicos concluída.

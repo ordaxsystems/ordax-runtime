@@ -31,17 +31,47 @@ ORDAX Studio / Device Agent
         +-- adapters futuros
 ```
 
-## Compatibilidade com ORDAX Local AI
+## Memória do Runtime — caminho canônico e migração
 
-`ordax_core.memory.resolve_memory_db()` procura o banco nesta ordem:
+A autoridade da persistência do MCP e das sessões do orquestrador é
+`ordax_core.memory`, no repositório `ordax-runtime`. **Instalações novas**
+utilizam um único banco:
 
-1. `ORDAX_MEMORY_DB`, quando definido explicitamente;
-2. banco legado `~/Apps/OrdaxLocalAI/data/state.db`, quando já existe;
-3. `%LOCALAPPDATA%/OrdaX/Studio/state.db` para instalações novas.
+- Windows: `%LOCALAPPDATA%/OrdaX/Runtime/memory/state.db`
+- Linux: `XDG_STATE_HOME/ordax/runtime/memory/state.db` (fallback
+  `HOME/.local/state/ordax/runtime/memory/state.db`).
 
-Isso permite continuar usando as memórias já criadas sem mover ou apagar dados. Contextos novos são gravados em `contexts/<projeto>.md`, ao lado do banco selecionado.
+`ORDAX_MEMORY_DB` é override explícito para testes/ambientes isolados.
+`MemoryStore` e `OrchestratorStore` consultam o mesmo resolver.
 
-O esquema inicial é compatível com as tabelas já existentes: `projects`, `memories`, `tasks`, `checkpoints` e `events`.
+### Cutover existente sem perda de dados
+
+Até a migração, instalações antigas que tenham dados em
+`%LOCALAPPDATA%/OrdaX/Studio/state.db` ou
+`HOME/Apps/OrdaxLocalAI/data/state.db` continuam na base existente.
+Assim não se cria um banco novo vazio sobre dados preexistentes.
+O fallback de caminho pré-cutover não cria uma segunda escrita.
+A seleção canônica assume precedência quando o banco migrado já existe.
+
+A operação é **explícita** com consumidores antigos quiescentes:
+
+```powershell
+python -m ordax_core.memory_migration
+python -m ordax_core.memory_migration --apply
+```
+
+O primeiro comando verifica a integridade e mostra contagens sem criar
+arquivos. O segundo usa backup SQLite sob reserva de escrita, transporta
+contextos, compara hashes e promove o novo diretório atomicamente,
+**sem apagar nem sobrescrever a origem**. Se o destino já existir ou
+a origem estiver ocupada/inválida, falha sem substituir dados. Só após
+validar instalação atualizada e provar que nenhum consumidor escreve na
+origem será seguro aposentá-la numa operação separada. Não apagar com
+`path_remove`.
+
+O documento `docs/PRODUCT-MCP-PERSISTENT-PROCESSES.md` é a autoridade
+dos handoffs e revisões. Migrar o caminho não prova que uma sugestão de
+tarefa continua válida: reconciliar com Git, Runtime e grants.
 
 ## Capabilities de memória
 
