@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$InstallRoot,
-    [int]$TimeoutSeconds = 15
+    [int]$TimeoutSeconds = 15,
+    [switch]$PreflightOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,6 +58,61 @@ function Get-ExactProcessOrNull {
         }
         throw
     }
+}
+
+function Assert-NoActiveSupervisedManagers {
+    # This is the existing Runtime supervisor store, not a second task registry.
+    # Upgrading must never kill a persistent worker while leaving its child alive
+    # and falsely recording the mission as stopped.
+    $supervisorRoot = Join-Path $env:LOCALAPPDATA 'OrdaX\DevAgent'
+    foreach ($kind in @('device-processes', 'processes')) {
+        $namespace = Join-Path $supervisorRoot $kind
+        if (!(Test-Path -LiteralPath $namespace -PathType Container)) { continue }
+        foreach ($scope in @(Get-ChildItem -LiteralPath $namespace -Directory -ErrorAction Stop)) {
+            if (($scope.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'ORDAX_UPGRADE_SUPERVISOR_SCOPE_UNVERIFIED'
+            }
+            foreach ($file in @(Get-ChildItem -LiteralPath $scope.FullName -Filter '*.json' -File -ErrorAction Stop)) {
+                if ($file.BaseName -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+                    continue
+                }
+                try {
+                    $record = [IO.File]::ReadAllText($file.FullName, [Text.Encoding]::UTF8) |
+                        ConvertFrom-Json -ErrorAction Stop
+                } catch {
+                    throw 'ORDAX_UPGRADE_SUPERVISOR_RECEIPT_UNREADABLE'
+                }
+                if ($record.state -notin @('starting', 'running', 'stopping')) { continue }
+                $manager = [int]$record.manager_pid
+                if ($manager -le 0) { continue }
+                $handle = Get-ExactProcessOrNull -TargetPid $manager
+                if ($null -eq $handle) { continue }
+                try {
+                    $actualPath = [IO.Path]::GetFullPath([string]$handle.Path)
+                    $startedUnix = ([DateTimeOffset]$handle.StartTime.ToUniversalTime()).ToUnixTimeSeconds()
+                } catch {
+                    throw 'ORDAX_UPGRADE_SUPERVISOR_MANAGER_IDENTITY_UNVERIFIED'
+                }
+                if (!$actualPath.ToLowerInvariant().StartsWith($rootPrefix) -or
+                    ([IO.Path]::GetFileName($actualPath) -notin @('python.exe', 'pythonw.exe'))) {
+                    # A reused PID belonging to a different program is not ours to stop.
+                    continue
+                }
+                $recorded = [double]$record.manager_ready_at_unix
+                if ($recorded -le 0) { $recorded = [double]$record.started_at_unix }
+                if ($recorded -le 0 -or [Math]::Abs($startedUnix - $recorded) -gt 300) {
+                    throw 'ORDAX_UPGRADE_SUPERVISOR_MANAGER_IDENTITY_UNVERIFIED'
+                }
+                throw ("ORDAX_UPGRADE_BLOCKED_SUPERVISED_PROCESS process_id={0} manager_pid={1}" -f
+                    $record.process_id, $manager)
+            }
+        }
+    }
+}
+Assert-NoActiveSupervisedManagers
+if ($PreflightOnly) {
+    Write-Output 'ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR'
+    exit 0
 }
 
 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSeconds))

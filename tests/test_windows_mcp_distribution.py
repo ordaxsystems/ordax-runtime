@@ -104,6 +104,48 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertNotIn('Type: filesandordirs; Name: "{app}"', installer)
         self.assertNotIn('Type: filesandordirs; Name: "{localappdata}', installer)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows lifecycle guard")
+    def test_upgrade_preflight_refuses_live_worker_without_killing_it(self):
+        # Execute only the preflight against an isolated receipt tree; never
+        # touch the real Runtime, Task Scheduler, or unrelated applications.
+        script = ROOT / "scripts/windows/ordax-upgrade-quiesce.ps1"
+        python_exe = Path(sys.base_prefix) / "python.exe"
+        self.assertTrue(python_exe.is_file())
+        with tempfile.TemporaryDirectory(prefix="ordax-upgrade-guard-") as temp:
+            environment = dict(__import__("os").environ, LOCALAPPDATA=temp)
+            command = [
+                "powershell.exe", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", str(script),
+                "-InstallRoot", str(python_exe.parent.parent),
+                "-PreflightOnly",
+            ]
+            clear = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=20)
+            self.assertEqual(clear.returncode, 0, clear.stdout + clear.stderr)
+            self.assertIn("ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR", clear.stdout)
+            pid_label = "feadbeef-0000-4000-8000-000000000001"
+            receipt_dir = Path(temp) / "OrdaX/DevAgent/device-processes" / pid_label
+            receipt_dir.mkdir(parents=True)
+            manager = subprocess.Popen([str(python_exe), "-c", "import time; time.sleep(25)"])
+            try:
+                (receipt_dir / f"{pid_label}.json").write_text(
+                    json.dumps({
+                        "process_id": pid_label, "state": "running",
+                        "manager_pid": manager.pid,
+                        "manager_ready_at_unix": __import__("time").time(),
+                    }), encoding="utf-8"
+                )
+                blocked = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=20)
+                self.assertNotEqual(blocked.returncode, 0)
+                self.assertIn(
+                    "ORDAX_UPGRADE_BLOCKED_SUPERVISED_PROCESS",
+                    blocked.stdout + blocked.stderr,
+                )
+                self.assertIsNone(manager.poll(), "preflight must not terminate the worker")
+            finally:
+                if manager.poll() is None:
+                    manager.terminate()
+                manager.wait(timeout=10)
+
     def test_local_candidate_requires_clean_sources_and_supports_user_inno(self):
         builder = BUILDER.read_text(encoding="utf-8")
         self.assertIn(
@@ -383,8 +425,10 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         disable = upgrade.index(
             "Invoke-CanonicalTaskAction -Name $taskName -Action Disable"
         )
-        quiesce = upgrade.index("Invoke-QuiesceRoot -Root $installRoot")
+        preflight = upgrade.index("Invoke-QuiesceRoot -Root $installRoot -PreflightOnly")
+        quiesce = upgrade.index("Invoke-QuiesceRoot -Root $installRoot\n")
         rename = upgrade.index("[IO.Directory]::Move($installRoot,$previous)")
+        self.assertLess(preflight, owned_task_end)
         self.assertLess(owned_task_end, check_release)
         self.assertLess(check_release, disable)
         self.assertLess(disable, quiesce)
