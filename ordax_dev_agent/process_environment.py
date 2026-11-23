@@ -10,9 +10,12 @@ def external_process_environment(overrides: dict[str, str] | None = None) -> dic
     # are not the OrdaX Native host. Never inherit its per-launch bridge grants,
     # device configuration or PyInstaller boot state. Explicit caller-provided
     # environment remains usable under the existing action/Owner grants.
+    # A Runtime launched from an Electron host may inherit this Node-only flag.
+    # Never propagate it to external apps: GUI Electron otherwise exits silently.
     environment = {
         key: value for key, value in os.environ.items()
         if not key.upper().startswith(("ORDAX_", "_PYI_", "PYINSTALLER_"))
+        and key.upper() != "ELECTRON_RUN_AS_NODE"
     }
     if getattr(sys, "frozen", False) and sys.platform == "linux":
         original = environment.get("LD_LIBRARY_PATH_ORIG")
