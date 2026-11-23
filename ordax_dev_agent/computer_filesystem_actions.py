@@ -757,22 +757,37 @@ class ComputerFilesystemActions:
                 {"path": str(path), "size_bytes": size},
             )
         raw = path.read_bytes()
-        office_details: dict[str, Any] = {}
+        format_details: dict[str, Any] = {}
         if path.suffix.lower() in {".docx", ".xlsx"}:
+            if "page_start" in payload or "page_end" in payload:
+                return ActionResult(False, "page_start and page_end apply only to PDFs")
             # Lazy import: no Office XML/ZIP work or third-party dependency at
             # Runtime startup. Scope checks above apply before archive opening.
             from .office_text import OfficeDocumentError, extract_office_text
             try:
-                content, office_details = extract_office_text(
+                content, format_details = extract_office_text(
                     raw, path.suffix.lower(),
                     sheet=payload.get("sheet"),
                     cell_range=payload.get("cell_range"),
                 )
             except OfficeDocumentError as error:
                 return ActionResult(False, str(error), {"error_code": "office_text_unavailable"})
+        elif path.suffix.lower() == ".pdf":
+            if "sheet" in payload or "cell_range" in payload:
+                return ActionResult(False, "sheet and cell_range apply only to Excel files")
+            from .pdf_text import PdfTextError, extract_pdf_text
+            try:
+                content, format_details = extract_pdf_text(
+                    raw, page_start=payload.get("page_start", 1),
+                    page_end=payload.get("page_end"),
+                )
+            except PdfTextError as error:
+                return ActionResult(False, str(error), {"error_code": "pdf_text_unavailable"})
         else:
             if "sheet" in payload or "cell_range" in payload:
                 return ActionResult(False, "sheet and cell_range apply only to Excel files")
+            if "page_start" in payload or "page_end" in payload:
+                return ActionResult(False, "page_start and page_end apply only to PDFs")
             try:
                 content = raw.decode("utf-8-sig")
             except UnicodeDecodeError as error:
@@ -819,7 +834,7 @@ class ComputerFilesystemActions:
                 "start_line": start_line,
                 "end_line": min(end_line or len(lines), len(lines)),
                 "content": selected,
-                **office_details,
+                **format_details,
             },
         )
 
