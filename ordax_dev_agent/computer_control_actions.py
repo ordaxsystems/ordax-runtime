@@ -82,6 +82,22 @@ class _PROCESSENTRY32W(ctypes.Structure):
     ]
 
 
+class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+    # Public PSAPI memory counters: working set measures resident process RAM.
+    _fields_ = [
+        ("cb", wintypes.DWORD),
+        ("PageFaultCount", wintypes.DWORD),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+    ]
+
+
 class _POINT(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
@@ -119,15 +135,59 @@ class ComputerControlActions:
 
         pid = int(item.get("pid") or item.get("ProcessId") or 0)
         ppid = int(item.get("parent_pid") or item.get("ParentProcessId") or 0)
-        return {
+        result: dict[str, Any] = {
             "pid": pid,
             "parent_pid": ppid,
             "name": bounded(item.get("name") or item.get("Name"), 260),
             "executable": bounded(item.get("executable") or item.get("ExecutablePath"), 2000),
         }
+        working_set = item.get("working_set_bytes")
+        if type(working_set) is int and working_set >= 0:
+            result["working_set_bytes"] = working_set
+        cpu_seconds = item.get("cpu_time_seconds")
+        if type(cpu_seconds) in (int, float) and 0 <= cpu_seconds < 1e15:
+            result["cpu_time_seconds"] = round(float(cpu_seconds), 3)
+        return result
+
+    @staticmethod
+    def _windows_process_metrics(process: int, *, kernel32: Any, psapi: Any) -> dict[str, Any]:
+        # Only called on explicit include_metrics=true; no CIM, PowerShell,
+        # background polling or extra process handle is required.
+        result: dict[str, Any] = {}
+        counters = _PROCESS_MEMORY_COUNTERS()
+        counters.cb = ctypes.sizeof(counters)
+        if psapi.GetProcessMemoryInfo(process, ctypes.byref(counters), counters.cb):
+            result["working_set_bytes"] = int(counters.WorkingSetSize)
+        created, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+        if kernel32.GetProcessTimes(
+            process, ctypes.byref(created), ctypes.byref(exited),
+            ctypes.byref(kernel), ctypes.byref(user),
+        ):
+            ticks = (
+                (int(kernel.dwHighDateTime) << 32) + int(kernel.dwLowDateTime)
+                + (int(user.dwHighDateTime) << 32) + int(user.dwLowDateTime)
+            )
+            result["cpu_time_seconds"] = round(ticks / 10_000_000, 3)
+        return result
+
+    @staticmethod
+    def _ps_cpu_seconds(value: str) -> int | None:
+        # ps(1) time can be MM:SS, HH:MM:SS or D-HH:MM:SS.
+        try:
+            day, sep, clock = value.partition("-")
+            days = int(day) if sep else 0
+            parts = [int(x) for x in (clock if sep else value).split(":")]
+            if not 2 <= len(parts) <= 3 or any(x < 0 for x in parts):
+                return None
+            if parts[-1] >= 60 or parts[-2] >= 60:
+                return None
+            return days * 86400 + (parts[0] * 3600 + parts[1] * 60 + parts[2]
+                                   if len(parts) == 3 else parts[0] * 60 + parts[1])
+        except (TypeError, ValueError):
+            return None
 
     @classmethod
-    def _system_process_snapshot(cls) -> list[dict[str, Any]]:
+    def _system_process_snapshot(cls, include_metrics: bool = False) -> list[dict[str, Any]]:
         if os.name == "nt":
             kernel32 = ctypes.windll.kernel32
             kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
@@ -139,14 +199,23 @@ class ComputerControlActions:
             kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
             kernel32.OpenProcess.restype = wintypes.HANDLE
             kernel32.QueryFullProcessImageNameW.argtypes = [
-                wintypes.HANDLE,
-                wintypes.DWORD,
-                wintypes.LPWSTR,
+                wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
                 ctypes.POINTER(wintypes.DWORD),
             ]
             kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
             kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
             kernel32.CloseHandle.restype = wintypes.BOOL
+            psapi = None
+            if include_metrics:
+                psapi = ctypes.windll.psapi
+                psapi.GetProcessMemoryInfo.argtypes = [
+                    wintypes.HANDLE, ctypes.POINTER(_PROCESS_MEMORY_COUNTERS), wintypes.DWORD,
+                ]
+                psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+                kernel32.GetProcessTimes.argtypes = [
+                    wintypes.HANDLE, *([ctypes.POINTER(wintypes.FILETIME)] * 4),
+                ]
+                kernel32.GetProcessTimes.restype = wintypes.BOOL
 
             snapshot = kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
             if not snapshot or snapshot == _INVALID_HANDLE_VALUE:
@@ -160,11 +229,13 @@ class ComputerControlActions:
                 while has_entry:
                     pid = int(entry.th32ProcessID)
                     if pid > 0:
-                        executable = ""
+                        details: dict[str, Any] = {
+                            "pid": pid,
+                            "parent_pid": int(entry.th32ParentProcessID),
+                            "name": entry.szExeFile,
+                        }
                         process = kernel32.OpenProcess(
-                            _PROCESS_QUERY_LIMITED_INFORMATION,
-                            False,
-                            pid,
+                            _PROCESS_QUERY_LIMITED_INFORMATION, False, pid,
                         )
                         if process:
                             try:
@@ -172,51 +243,54 @@ class ComputerControlActions:
                                 buffer = ctypes.create_unicode_buffer(capacity)
                                 size = wintypes.DWORD(capacity)
                                 if kernel32.QueryFullProcessImageNameW(
-                                    process,
-                                    0,
-                                    buffer,
-                                    ctypes.byref(size),
+                                    process, 0, buffer, ctypes.byref(size),
                                 ):
-                                    executable = buffer.value
+                                    details["executable"] = buffer.value
+                                if include_metrics and psapi is not None:
+                                    details.update(cls._windows_process_metrics(
+                                        process, kernel32=kernel32, psapi=psapi,
+                                    ))
                             finally:
                                 kernel32.CloseHandle(process)
-
-                        items.append(cls._normalize_process_item({
-                            "pid": pid,
-                            "parent_pid": int(entry.th32ParentProcessID),
-                            "name": entry.szExeFile,
-                            "executable": executable,
-                        }))
+                        items.append(cls._normalize_process_item(details))
                     has_entry = bool(kernel32.Process32NextW(snapshot, ctypes.byref(entry)))
             finally:
                 kernel32.CloseHandle(snapshot)
             return items
 
+        ps_columns = "pid=,ppid=,rss=,time=,comm=" if include_metrics else "pid=,ppid=,comm="
         completed = subprocess.run(
-            ["ps", "-eo", "pid=,ppid=,comm="],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            shell=False,
+            ["ps", "-eo", ps_columns],
+            capture_output=True, text=True, timeout=15, shell=False,
         )
         if completed.returncode != 0:
             raise OSError((completed.stderr or "process enumeration failed").strip()[:2000])
         items: list[dict[str, Any]] = []
         for line in (completed.stdout or "").splitlines():
-            parts = line.strip().split(None, 2)
-            if len(parts) < 3:
+            parts = line.strip().split(None, 4 if include_metrics else 2)
+            if len(parts) < (5 if include_metrics else 3):
                 continue
             try:
                 pid = int(parts[0])
                 ppid = int(parts[1])
             except ValueError:
                 continue
-            name = parts[2]
-            items.append(cls._normalize_process_item({
+            details: dict[str, Any] = {
                 "pid": pid,
                 "parent_pid": ppid,
-                "name": name,
-            }))
+                "name": parts[4] if include_metrics else parts[2],
+            }
+            if include_metrics:
+                try:
+                    rss_kb = int(parts[2])
+                    if rss_kb >= 0:
+                        details["working_set_bytes"] = rss_kb * 1024
+                except ValueError:
+                    pass
+                cpu_seconds = cls._ps_cpu_seconds(parts[3])
+                if cpu_seconds is not None:
+                    details["cpu_time_seconds"] = cpu_seconds
+            items.append(cls._normalize_process_item(details))
         return items
 
     @classmethod
@@ -224,7 +298,7 @@ class ComputerControlActions:
         return next((item for item in cls._system_process_snapshot() if item["pid"] == pid), None)
 
     def computer_processes(self, payload: dict[str, Any]) -> ActionResult:
-        allowed = {"query", "max_items"}
+        allowed = {"query", "max_items", "include_metrics"}
         unsupported = sorted(set(payload) - allowed)
         if unsupported:
             return ActionResult(False, "unsupported field(s): " + ", ".join(unsupported))
@@ -236,8 +310,14 @@ class ComputerControlActions:
         if not 1 <= max_items <= 1000:
             return ActionResult(False, "max_items must be between 1 and 1000")
 
+        include_metrics = payload.get("include_metrics", False)
+        if not isinstance(include_metrics, bool):
+            return ActionResult(False, "include_metrics must be a boolean")
         try:
-            items = self._system_process_snapshot()
+            items = (
+                self._system_process_snapshot(include_metrics=True)
+                if include_metrics else self._system_process_snapshot()
+            )
         except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as error:
             return ActionResult(False, f"process enumeration failed: {type(error).__name__}: {error}")
 
