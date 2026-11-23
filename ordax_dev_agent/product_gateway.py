@@ -303,7 +303,7 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
     "computer.processes": ProductActionSpec(
         name="computer.processes",
         local_action="computer.processes",
-        allowed_fields=frozenset({"query", "max_items"}),
+        allowed_fields=frozenset({"query", "max_items", "include_metrics"}),
         project_required=False,
     ),
     "computer.process_status": ProductActionSpec("computer.process_status", "computer.process_status", frozenset({"process_id"}), project_required=False),
@@ -851,7 +851,7 @@ def _sanitize_product_result(
             data["processes"] = [
                 {
                     key: item[key]
-                    for key in ("pid", "parent_pid", "name", "executable")
+                    for key in ("pid", "parent_pid", "name", "executable", "working_set_bytes", "cpu_time_seconds")
                     if key in item
                 }
                 for item in processes
