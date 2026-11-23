@@ -829,6 +829,9 @@ def _sanitize_product_result(
             **{key: data[key] for key in ("total_registered", "returned", "truncated")
                if (key in ("total_registered", "returned") and type(data.get(key)) is int and 0 <= data[key] <= 1000000)
                or (key == "truncated" and type(data.get(key)) is bool)},
+            **{key: data[key] for key in ("total_matching", "offset", "next_offset")
+               if key in data and ((key == "next_offset" and data[key] is None)
+               or (type(data[key]) is int and 0 <= data[key] <= 1000000))},
         }
     elif action in {"process.logs", "computer.process_logs"}:
         process = data.get("process")

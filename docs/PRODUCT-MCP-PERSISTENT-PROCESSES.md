@@ -175,3 +175,22 @@ alterações; `--apply` transporta um backup consistente do SQLite e seus
 contextos somente se o destino não existir, preservando a origem.
 Confrontar contagens com as do banco de origem e validar o manifesto físico.
 **Commit Git não equivale a cutover concluído.**
+
+## Roadmap operacional canônico — 23/11/2026
+
+**SSOT:** este documento e `ordax-os/docs/DEVELOPMENT-WORKFLOW.md`. Owner do supervisor, missões e instalação Windows: `ordax-runtime`; owner do catálogo Product/OAuth/grants/Worker: `ordax-platform`. Não criar segundo Task Store, daemon, updater, banco ou política de DEV. Nenhum marco é "concluído" só por merge, bundle offline ou heartbeat.
+
+| Gate | Resultado exigido | Estado nesta revisão |
+| --- | --- | --- |
+| R0 — reconciliar source | `ordax-runtime/main` igual ao checkout DEV, sem descartar trabalho alheio | Checkout Windows sincronizado a `3ba239c7` antes deste change set; novo diff exige promoção e revalidação |
+| R1 — descobrir missões antigas | `computer.process_list` e `process.list` aceitam filtros exatos `mission_id`, `mission_project`, `offset`, retornam páginas de até 24, priorizam ativos, ocultam argv/token | Implementação Runtime e teste local direcionado; E2E remoto pendente de Platform/instalação |
+| R2 — contrato remoto | Publicar os mesmos parâmetros e campos `total_matching`, `offset`, `next_offset` pelo schema Product/Worker; preservar isolamento e autorização | Pendente; não declarar uso remoto antes do deploy + recibo de leitura |
+| R3 — continuidade entre chats | Owner concede `repository-catalog-read` no Device e `project-continuity` no projeto, catálogo exibe `continuity_update.expected_revision`, duas conversas leem/atualizam CAS sem sobrescrever ou repetir efeitos | Bloqueado por grants Owner/catalogação do cliente; proibição de bypass |
+| R4 — resiliência e autonomia | Provar agentes recuperados com o mesmo launcher, processos/recibos preservados, sem ações reencaminhadas após resultado incerto; fechar somente mediante E2E real da issue #376 | Recuperação física ainda não homologada |
+| R5 — sync físico | `main`/checkout limpos, pacote atestado, lifecycle único, journal `phase=committed`, manifesto de commit instalado, readiness e despacho Product comprovados | Não instalar automaticamente enquanto outras missões supervisionadas estiverem ativas |
+| R6 — eliminação de versões antigas | Migrador de memória comprova contagem/checksums e ausência de writers; instalar versão canônica, depois remover apenas caches/pacotes sem referências nem processos | Dados antigos preservados até prova de cutover; sem apagar banco ou binário em uso |
+| R7 — paridade | Mesmo protocolo de missões/retomada no Windows, OrdaX Desktop e USB/Linux, com provas físicas independentes | Pendente de teste no alvo Linux/USB |
+
+**Sequência obrigatória:** concluir e testar R1 no Runtime; alinhar contrato R2 no Platform; resolver R3 sem alterar grants silenciosamente; sincronizar R5 com preflight de processos vivos; validar R4/R7; executar R6 somente com evidência de descarte seguro. Integração DEV usa testes causais; nunca reconstruir USB/kernel por mudança exclusiva de catálogo ou documentação.
+
+**Regras de retomada:** em novo chat, consultar `ordax_targets`, `computer_process_list` (incluindo páginas/filtros quando o Product os expuser), `continuity.get` com revisão e autoridades Git/manifesto; tratar `next_action` e checkpoints como propostas. Sem processo repetido, sem acesso ao SQLite do Forge e sem interpretar `git pull` como instalação do executável.
