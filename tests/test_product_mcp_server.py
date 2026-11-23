@@ -350,6 +350,17 @@ class ProductMcpServerTests(unittest.TestCase):
             {"query": "python", "max_items": 25},
             process_call[2]["arguments"],
         )
+        FakeClient.instances.clear()
+        enriched = server.computer_processes("dev-1", "python", 25, "space-1", True)
+        self.assertEqual(enriched["status"], "succeeded")
+        metric_call = next(
+            call for instance in FakeClient.instances for call in instance.calls
+            if call[0] == "submit" and call[2]["action"] == "computer.processes"
+        )
+        self.assertEqual(
+            {"query": "python", "max_items": 25, "include_metrics": True},
+            metric_call[2]["arguments"],
+        )
         terminate_call = next(
             call for call in calls if call[2]["action"] == "computer.terminate_process"
         )
