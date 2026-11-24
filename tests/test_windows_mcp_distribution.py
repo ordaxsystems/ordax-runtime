@@ -506,8 +506,8 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         disable = upgrade.index(
             "Invoke-CanonicalTaskAction -Name $taskName -Action Disable"
         )
-        preflight = upgrade.index("Invoke-QuiesceRoot -Root $installRoot -PreflightOnly")
-        quiesce = upgrade.index("Invoke-QuiesceRoot -Root $installRoot\n")
+        preflight = upgrade.index("Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded -PreflightOnly")
+        quiesce = upgrade.index("Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded\n")
         rename = upgrade.index("[IO.Directory]::Move($installRoot,$previous)")
         self.assertLess(preflight, owned_task_end)
         self.assertLess(owned_task_end, check_release)
