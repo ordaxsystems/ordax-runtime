@@ -146,6 +146,87 @@ class WindowsMcpDistributionTests(unittest.TestCase):
                     manager.terminate()
                 manager.wait(timeout=10)
 
+    @unittest.skipUnless(sys.platform == "win32", "PowerShell native upgrade controller")
+    def test_verified_candidate_quiesce_is_used_and_errors_are_classified(self):
+        # Extract only the canonical function: never execute the full lifecycle,
+        # Task Scheduler, or any process termination during this test.
+        lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(encoding="utf-8")
+        function = "function Invoke-QuiesceRoot {" + lifecycle.split(
+            "function Invoke-QuiesceRoot {", 1
+        )[1].split("function Invoke-RegisterAndLaunch {", 1)[0]
+        with tempfile.TemporaryDirectory(prefix="ordax-upgrade-quiesce-contract-") as temp:
+            root = Path(temp)
+            installed = root / "installed"
+            candidate = root / "verified-candidate"
+            installed.mkdir()
+            candidate.mkdir()
+            old_controller = installed / "ordax-upgrade-quiesce.ps1"
+            new_controller = candidate / "ordax-upgrade-quiesce.ps1"
+            # An older installed script cannot satisfy new -PreflightOnly.
+            old_controller.write_text("throw 'OLD_CONTROLLER_MUST_NOT_RUN'\n", encoding="utf-8")
+            new_controller.write_text(
+                "param([string]$InstallRoot,[int]$TimeoutSeconds,[switch]$PreflightOnly)\n"
+                "if (!$PreflightOnly) { throw 'PREFLIGHT_ONLY_TEST' }\n"
+                "Write-Output 'ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR'\n",
+                encoding="utf-8",
+            )
+            def invoke() -> subprocess.CompletedProcess[str]:
+                def quote(p: Path) -> str:
+                    return "'" + str(p).replace("'", "''") + "'"
+                command = (
+                    "$ErrorActionPreference='Stop';"
+                    "$powershell=Join-Path $PSHOME 'powershell.exe';"
+                    f"$updatesRoot={quote(root)};"
+                    + function
+                    + "try { Invoke-QuiesceRoot -Root "
+                    + quote(installed)
+                    + " -VerifiedControllerRoot "
+                    + quote(candidate)
+                    + " -PreflightOnly; exit 0 } "
+                    + "catch { Write-Output $_.Exception.Message; exit 41 }"
+                )
+                return subprocess.run(
+                    ["powershell.exe", "-NoProfile", "-NonInteractive",
+                     "-ExecutionPolicy", "Bypass", "-Command", command],
+                    capture_output=True, text=True, timeout=20,
+                )
+            passed = invoke()
+            self.assertEqual(0, passed.returncode, passed.stdout + passed.stderr)
+            self.assertIn("ORDAX_MCP_SUPERVISOR_PREFLIGHT_VERIFIED", passed.stdout)
+            self.assertNotIn("OLD_CONTROLLER_MUST_NOT_RUN", passed.stdout + passed.stderr)
+
+            new_controller.write_text(
+                "throw 'ORDAX_UPGRADE_BLOCKED_SUPERVISED_PROCESS private/path/must/not/leak'\n",
+                encoding="utf-8",
+            )
+            failed = invoke()
+            self.assertEqual(41, failed.returncode, failed.stdout + failed.stderr)
+            self.assertIn(
+                "category=ORDAX_UPGRADE_BLOCKED_SUPERVISED_PROCESS",
+                failed.stdout,
+            )
+            self.assertNotIn("private/path/must/not/leak", failed.stdout)
+
+    def test_candidate_lifecycle_owns_verified_upgrade_application(self):
+        lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(encoding="utf-8")
+        self.assertIn(
+            "Copy-Item -LiteralPath (Join-Path $expanded 'ordax-mcp-lifecycle.ps1')",
+            lifecycle,
+        )
+        self.assertNotIn(
+            "Copy-Item -LiteralPath $lifecycle -Destination $applyScript",
+            lifecycle,
+        )
+        # The verified controller may only be used after prepared-tree digest validation.
+        self.assertIn(
+            "Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded -PreflightOnly",
+            lifecycle,
+        )
+        self.assertIn(
+            "Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded\n",
+            lifecycle,
+        )
+
     def test_local_candidate_requires_clean_sources_and_supports_user_inno(self):
         builder = BUILDER.read_text(encoding="utf-8")
         self.assertIn(
@@ -425,8 +506,8 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         disable = upgrade.index(
             "Invoke-CanonicalTaskAction -Name $taskName -Action Disable"
         )
-        preflight = upgrade.index("Invoke-QuiesceRoot -Root $installRoot -PreflightOnly")
-        quiesce = upgrade.index("Invoke-QuiesceRoot -Root $installRoot\n")
+        preflight = upgrade.index("Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded -PreflightOnly")
+        quiesce = upgrade.index("Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded\n")
         rename = upgrade.index("[IO.Directory]::Move($installRoot,$previous)")
         self.assertLess(preflight, owned_task_end)
         self.assertLess(owned_task_end, check_release)
