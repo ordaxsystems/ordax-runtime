@@ -207,6 +207,104 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             )
             self.assertNotIn("private/path/must/not/leak", failed.stdout)
 
+    @unittest.skipUnless(sys.platform == "win32", "PowerShell portable bootstrap test")
+    def test_verified_external_lifecycle_bootstrap_rejects_tampering(self):
+        import hashlib
+        from zipfile import ZipFile
+
+        source = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(encoding="utf-8")
+        owner_utilities = (
+            "function Read-OwnerJsonDocument {" + source.split(
+                "function Read-OwnerJsonDocument {", 1
+            )[1].split("function Assert-InstalledProduct {", 1)[0]
+        )
+        bootstrap_function = (
+            "function Assert-VerifiedUpgradeBootstrap {" + source.split(
+                "function Assert-VerifiedUpgradeBootstrap {", 1
+            )[1].split("# Stage integrity is a digest", 1)[0]
+        )
+        commit = "a" * 40
+        with tempfile.TemporaryDirectory(prefix="ordax-verified-bootstrap-") as temp:
+            root = Path(temp)
+            install = root / "installed"
+            candidate = root / "candidate"
+            install.mkdir()
+            candidate.mkdir()
+            manifest = {
+                "schema": "ordax.mcp-windows-candidate/1",
+                "product": "OrdaX MCP",
+                "runtime": "ORDAX Runtime.exe",
+                "runtime_source_commit": commit,
+                "studio_required": False,
+                "signed_public_release": False,
+            }
+            harness = candidate / "ordax-mcp-lifecycle.ps1"
+            archive = root / f"OrdaX-MCP-Dev-{commit}.zip"
+            lines = [
+                "$ErrorActionPreference='Stop'",
+                "Set-StrictMode -Version Latest",
+                f"$installRoot='{str(install).replace(chr(39), chr(39)*2)}'",
+                owner_utilities,
+                bootstrap_function,
+                "try {",
+                f"  $verified=Assert-VerifiedUpgradeBootstrap -ArchivePath '{str(archive).replace(chr(39), chr(39)*2)}' -Commit '{commit}'",
+                "  Write-Output 'ORDAX_BOOTSTRAP_MATCH'; exit 0",
+                "} catch {",
+                "  Write-Output $_.Exception.Message; exit 37",
+                "}",
+            ]
+            harness.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            controller = candidate / "ordax-upgrade-quiesce.ps1"
+            controller.write_text("param([switch]$PreflightOnly)\n", encoding="utf-8")
+            (candidate / "product-manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            with ZipFile(archive, "w") as writer:
+                for name in ("ordax-mcp-lifecycle.ps1", "ordax-upgrade-quiesce.ps1", "product-manifest.json"):
+                    writer.write(candidate / name, arcname=name)
+
+            def run() -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    ["powershell.exe", "-NoProfile", "-NonInteractive",
+                     "-ExecutionPolicy", "Bypass", "-File", str(harness)],
+                    capture_output=True, text=True, timeout=20,
+                )
+
+            accepted = run()
+            self.assertEqual(0, accepted.returncode, accepted.stdout + accepted.stderr)
+            self.assertIn("ORDAX_BOOTSTRAP_MATCH", accepted.stdout)
+            controller.write_text("throw 'tampered'\n", encoding="utf-8")
+            refused = run()
+            self.assertEqual(37, refused.returncode, refused.stdout + refused.stderr)
+            self.assertIn("controller differs from verified archive", refused.stdout)
+
+            controller.write_text("param([switch]$PreflightOnly)\n", encoding="utf-8")
+            manifest["runtime_source_commit"] = "b" * 40
+            (candidate / "product-manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            refused = run()
+            self.assertEqual(37, refused.returncode, refused.stdout + refused.stderr)
+            self.assertIn("bootstrap manifest does not match", refused.stdout)
+
+    def test_legacy_installed_lifecycle_never_bypasses_candidate_integrity(self):
+        lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(encoding="utf-8")
+        upgrade = lifecycle.split("    'Upgrade' {", 1)[1].split("    'ReconcileUpgrade' {", 1)[0]
+        self.assertIn("Assert-InstalledSource", upgrade)
+        self.assertIn("Assert-InstalledProduct", upgrade)
+        self.assertIn("Assert-VerifiedUpgradeBootstrap", upgrade)
+        self.assertIn("Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit", upgrade)
+        self.assertLess(
+            upgrade.index("Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit"),
+            upgrade.index("Assert-VerifiedUpgradeBootstrap"),
+        )
+        self.assertLess(
+            upgrade.index("Assert-VerifiedUpgradeBootstrap"),
+            upgrade.index("Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $bootstrapRoot -PreflightOnly"),
+        )
+        self.assertIn("Copy-Item -LiteralPath (Join-Path $expanded 'ordax-mcp-lifecycle.ps1')", upgrade)
+        self.assertNotIn("Copy-Item -LiteralPath $lifecycle -Destination $applyScript", upgrade)
+
     def test_candidate_lifecycle_owns_verified_upgrade_application(self):
         lifecycle = (ROOT / "scripts/windows/ordax-mcp-lifecycle.ps1").read_text(encoding="utf-8")
         self.assertIn(
@@ -324,7 +422,8 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn("$sha.ComputeHash($stream)", lifecycle)
         self.assertIn("[IO.FileShare]::Read", lifecycle)
         # Do not drop SHA-256 or weaken manifest validation for speed.
-        self.assertEqual(lifecycle.count("Get-OwnerArchiveSha256 -Path"), 3)
+        # Three package/transaction checks plus the verified external bootstrap controller.
+        self.assertEqual(lifecycle.count("Get-OwnerArchiveSha256 -Path"), 4)
         self.assertNotIn("Get-FileHash -LiteralPath", lifecycle)
         self.assertNotIn("Get-Content -LiteralPath $journalPath -Raw", lifecycle)
         # Upgrade uses the same trusted embedded Python as the Runtime,
