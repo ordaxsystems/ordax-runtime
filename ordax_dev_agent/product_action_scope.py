@@ -104,6 +104,7 @@ PROJECT_MCP_ACTIONS = frozenset({
     "browser.type",
     "artifacts.list",
     "artifact.preview",
+    "artifact.local_service_preview",
 })
 
 # Physical USB actions are device-scoped observations, not projects or writes.

@@ -43,6 +43,7 @@ class FakeExecutor:
             "git.diff",
             "git.sync",
             "artifact.preview",
+            "artifact.local_service_preview",
             "artifact.read_chunk",
             "browser.status",
             "browser.list",
@@ -966,6 +967,13 @@ class ProductGatewayTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.data["artifact_name"], "preview.png")
         self.assertNotIn("path", result.data)
+
+    def test_local_service_preview_does_not_inherit_artifact_read_grant(self) -> None:
+        payload = {"project": "scene", "service_id": "host", "requests": [{"route": "/thumb/1"}]}
+        denied = self.gateway.execute("artifact.local_service_preview", payload,
+                                      context=self.context, grant=self.grant("artifact.preview"))
+        self.assertFalse(denied.ok)
+        self.assertEqual(self.executor.calls, [])
 
     def test_artifact_preview_batch_uses_same_project_grant(self) -> None:
         payload = {"project": "scene", "project_artifact_paths": ["a.png", "b.png"]}

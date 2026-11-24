@@ -11,6 +11,7 @@ from typing import Any
 from .models import ActionResult
 from .project_local_service import (
     LocalServiceError, LocalServicePolicy, LocalServiceResponse, read_local_service_batch,
+    resolve_local_service_policy,
 )
 
 
@@ -158,6 +159,33 @@ class ArtifactActions:
             "chunk_sha256": hashlib.sha256(chunk).hexdigest(),
             "base64": base64.b64encode(chunk).decode("ascii"),
         })
+
+    def artifact_local_service_preview(self, payload: dict[str, Any]) -> ActionResult:
+        """Read a configured service only within an attested Product scope."""
+        allowed = {"project", "service_id", "requests", "max_width", "max_height", "quality", "max_bytes"}
+        if set(payload) - allowed:
+            return ActionResult(False, "local_service_request_invalid")
+        scoped = getattr(getattr(self, "_project_execution_local", None), "project", None)
+        if scoped is None or payload.get("project") != scoped.slug:
+            return ActionResult(False, "local_service_project_not_attested")
+        limits = {}
+        for name, default, minimum, maximum in (
+            ("max_width", 1600, 64, 4096), ("max_height", 1200, 64, 4096),
+            ("quality", 72, 30, 92), ("max_bytes", 262144, 4096, 262144),
+        ):
+            value = payload.get(name, default)
+            if type(value) is not int or not minimum <= value <= maximum:
+                return ActionResult(False, "local_service_preview_budget_invalid")
+            limits[name] = value
+        try:
+            project = self._project(payload)
+            policy = resolve_local_service_policy(
+                self.config.state_dir / "agent-settings.json", project.slug, project.root,
+                payload.get("service_id"),
+            )
+        except LocalServiceError as error:
+            return ActionResult(False, str(error))
+        return self.local_service_image_sheet(policy, payload.get("requests"), **limits)
 
     def local_service_image_sheet(
         self, policy: LocalServicePolicy, requests: list[dict], *,

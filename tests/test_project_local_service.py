@@ -4,6 +4,10 @@ import hashlib
 import io
 import base64
 import threading
+import json
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -40,13 +44,13 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/image":
             body = b"RIFF\x04\x00\x00\x00WEBP"
             media = "image/webp"
-        if path in ("/visual", "/wrong-format"):
+        if path.startswith("/thumb/") or path in ("/visual", "/wrong-format"):
             from PIL import Image
             buffer = io.BytesIO()
             color = "blue" if parse_qs(urlsplit(self.path).query).get("id") == ["2"] else "red"
             Image.new("RGB", (96, 64), color).save(buffer, format="PNG")
             body = buffer.getvalue()
-            media = "image/png" if path == "/visual" else "image/webp"
+            media = "image/webp" if path == "/wrong-format" else "image/png"
         if path == "/large":
             body = b"x" * 4096
         if path == "/bad-media":
@@ -72,6 +76,7 @@ class LocalServiceTransportTests(unittest.TestCase):
             LocalServiceRoute("/json", frozenset({"page"}), json_media),
             LocalServiceRoute("/image", frozenset({"id"}), frozenset({"image/webp"})),
             LocalServiceRoute("/visual", frozenset({"id"}), frozenset({"image/png"})),
+            LocalServiceRoute("/thumb/{id}", frozenset({"w"}), frozenset({"image/png"})),
             LocalServiceRoute("/wrong-format", frozenset({"id"}), frozenset({"image/webp"})),
             *tuple(LocalServiceRoute(path, frozenset(), json_media)
                    for path in ("/redirect", "/large", "/bad-media", "/unauthorized")),
@@ -126,6 +131,52 @@ class LocalServiceTransportTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertIn("separate verified authority", result.summary)
         self.assertEqual(self.server.calls, [])
+
+    def test_numeric_route_template_only_accepts_one_positive_integer_segment(self):
+        for route in ("/thumb/0", "/thumb/-1", "/thumb/1/2", "/thumb/1/../2",
+                      "/thumb/%31", "/thumb/abc", "/thumb/{id}"):
+            with self.assertRaisesRegex(LocalServiceError, "route_denied"):
+                read_local_service_batch(self.policy, [{"route": route}])
+        self.assertEqual([], self.server.calls)
+        response = read_local_service_batch(self.policy, [{"route": "/thumb/123", "query": {"w": 256}}])[0]
+        self.assertEqual("/thumb/123", response.route)
+        self.assertEqual(["/thumb/123?w=256"], self.server.calls)
+
+    def test_attested_project_config_is_required_and_reloaded_for_every_batch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            host = ArtifactActions()
+            project = SimpleNamespace(slug="project-123", root=root)
+            host.config = SimpleNamespace(state_dir=root)
+            host._project = lambda payload: project
+            host._project_execution_local = SimpleNamespace(project=None)
+            payload = {"project": project.slug, "service_id": "curation",
+                       "requests": [{"route": "/thumb/42", "query": {"w": 256}}]}
+            self.assertFalse(host.artifact_local_service_preview(payload).ok)
+            host._project_execution_local.project = project
+            self.assertFalse(host.artifact_local_service_preview(payload).ok)
+            settings = root / "agent-settings.json"
+            entry = {"root": str(root), "services": {"curation": {
+                "host": "127.0.0.1", "port": self.server.server_port,
+                "routes": [{"path": "/thumb/{id}", "query_fields": ["w"],
+                            "media_types": ["image/png"]}],
+            }}}
+            data = {"project_local_services": {project.slug: entry}}
+            settings.write_text(json.dumps(data), encoding="utf-8")
+            self.assertFalse(host.artifact_local_service_preview({**payload, "host": "127.0.0.1"}).ok)
+            self.assertFalse(host.artifact_local_service_preview({**payload, "project": "project-999"}).ok)
+            self.assertFalse(host.artifact_local_service_preview({**payload, "max_bytes": 1}).ok)
+            self.assertEqual([], self.server.calls)
+            result = host.artifact_local_service_preview(payload)
+            self.assertTrue(result.ok, result.summary)
+            self.assertEqual(1, result.data["image_count"])
+            self.assertEqual(["/thumb/42?w=256"], self.server.calls)
+            entry["root"] = str(root / "another")
+            settings.write_text(json.dumps(data), encoding="utf-8")
+            self.assertFalse(host.artifact_local_service_preview(payload).ok)
+            settings.write_text("{}", encoding="utf-8")
+            self.assertFalse(host.artifact_local_service_preview(payload).ok)
+            self.assertEqual(["/thumb/42?w=256"], self.server.calls)
 
     def test_rejects_non_loopback_and_model_supplied_origin_or_method_before_io(self):
         for policy in (replace(self.policy, host="localhost"),
