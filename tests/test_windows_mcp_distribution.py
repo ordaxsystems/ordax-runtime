@@ -645,6 +645,86 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertNotIn("taskkill", script)
         self.assertNotIn("SilentlyContinue", script)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows supervised PID identity probe")
+    def test_quiesce_orphan_child_requires_process_identity_not_pid_only(self):
+        # Real Windows kernel process metadata; no process stops, no user files
+        # and no scheduled-task commands. Exercise the exact shipping helper.
+        script = (
+            ROOT / "scripts/windows/ordax-upgrade-quiesce.ps1"
+        ).read_text(encoding="utf-8")
+        helper = "function Assert-NoLiveOrphanSupervisedChild {" + script.split(
+            "function Assert-NoLiveOrphanSupervisedChild {", 1
+        )[1].split("function Assert-NoActiveSupervisedManagers {", 1)[0]
+        powershell = r"""
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+function Get-ExactProcessOrNull {
+    param([int]$TargetPid)
+    if ($TargetPid -ne $PID) { return $null }
+    return Get-Process -Id $TargetPid -ErrorAction Stop
+}
+"""
+        powershell += helper
+        powershell += r"""
+$live=Get-Process -Id $PID
+$created=([DateTimeOffset]$live.StartTime.ToUniversalTime()).ToUnixTimeSeconds()
+$receipt=[pscustomobject]@{
+    process_id='12345678-1234-4234-8234-123456789012'
+    state='running'
+    child_pid=$PID
+    running_at_unix=$created
+    argv=@([string]$live.Path)
+}
+function Check([string]$Case) {
+    try {
+        Assert-NoLiveOrphanSupervisedChild -Record $receipt
+        Write-Output ($Case + '=CLEAR')
+    } catch {
+        Write-Output ($Case + '=' + $_.Exception.Message)
+    }
+}
+Check 'live_orphan'
+$receipt.running_at_unix=$created-3600
+Check 'reused_pid'
+$receipt.running_at_unix=$created
+$receipt.argv=@('relative-executable')
+Check 'ambiguous_executable'
+$receipt.argv=@([string]$live.Path)
+$receipt.child_pid=99999999
+Check 'exited_child'
+"""
+        completed = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-Command", powershell],
+            capture_output=True, text=True, timeout=25,
+        )
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertIn(
+            "live_orphan=ORDAX_UPGRADE_BLOCKED_ORPHAN_SUPERVISED_CHILD",
+            completed.stdout,
+        )
+        self.assertIn("reused_pid=CLEAR", completed.stdout)
+        self.assertIn(
+            "ambiguous_executable=ORDAX_UPGRADE_SUPERVISOR_CHILD_IDENTITY_UNVERIFIED",
+            completed.stdout,
+        )
+        self.assertIn("exited_child=CLEAR", completed.stdout)
+
+    def test_upgrade_preflight_checks_orphan_children_before_quiesce(self):
+        script = (
+            ROOT / "scripts/windows/ordax-upgrade-quiesce.ps1"
+        ).read_text(encoding="utf-8")
+        supervisor = script.split("function Assert-NoActiveSupervisedManagers {", 1)[1]
+        preflight = supervisor.split("Assert-NoActiveSupervisedManagers", 1)[0]
+        self.assertIn("Assert-NoLiveOrphanSupervisedChild -Record $record", preflight)
+        self.assertIn("ORDAX_UPGRADE_BLOCKED_ORPHAN_SUPERVISED_CHILD", script)
+        self.assertIn("ORDAX_UPGRADE_SUPERVISOR_CHILD_IDENTITY_UNVERIFIED", script)
+        self.assertLess(
+            script.index("Assert-NoActiveSupervisedManagers\nif ($PreflightOnly)"),
+            script.index("Write-Output 'ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR'"),
+        )
+        self.assertNotIn("Get-CimInstance", script)
+
     def test_normal_wizard_offers_explicit_connect_but_silent_install_never_opens_oauth(self):
         installer = INNO.read_text(encoding="utf-8")
         run_section = installer.split("[Run]", 1)[1].split("[Code]", 1)[0]
