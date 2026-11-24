@@ -147,7 +147,9 @@ do {
             Stop-Process -InputObject $handle -Force -ErrorAction Stop
         } catch {
             if ($null -eq (Get-ExactProcessOrNull -TargetPid $pidValue)) { continue }
-            throw
+            # Preserve a stable fail-closed category even when Windows emits
+            # localized Stop-Process errors. The lifecycle records only it.
+            throw ("ORDAX_UPGRADE_PROCESS_STOP_FAILED pid={0}" -f $pidValue)
         }
     }
     Start-Sleep -Milliseconds 250
