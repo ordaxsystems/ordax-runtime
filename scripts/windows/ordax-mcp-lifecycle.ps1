@@ -492,8 +492,11 @@ except (OSError, ValueError) as error:
 }
 
 function Invoke-QuiesceRoot {
-    param([string]$Root, [switch]$PreflightOnly)
-    $script = Join-Path $Root 'ordax-upgrade-quiesce.ps1'
+    param([string]$Root, [switch]$PreflightOnly, [string]$VerifiedControllerRoot = '')
+    # Candidate controller is selected only after verified archive/tree digest.
+    # The process boundary remains Root (the installed owner Runtime).
+    $controllerRoot = if ($VerifiedControllerRoot) { $VerifiedControllerRoot } else { $Root }
+    $script = Join-Path $controllerRoot 'ordax-upgrade-quiesce.ps1'
     if (!(Test-Path -LiteralPath $script -PathType Leaf)) {
         throw 'Installed Runtime quiesce controller missing'
     }
@@ -530,10 +533,16 @@ function Invoke-QuiesceRoot {
             throw 'ORDAX_MCP_QUIESCE_OUTPUT_TIMEOUT'
         }
         $receipt = $stdoutTask.Result
+        $diagnostics = $stderrTask.Result + "`n" + $receipt
         $expected = if ($PreflightOnly) { 'ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR' } else { 'ORDAX_UPGRADE_QUIESCED' }
         if ($child.ExitCode -ne 0 -or
             $receipt -notmatch ('(?m)^' + $expected + '\s*$')) {
-            throw ("ORDAX_MCP_QUIESCE_FAILED: exit={0} preflight={1}" -f $child.ExitCode, $PreflightOnly)
+            # Journal only a stable category, not untrusted stderr or local paths.
+            $match = [regex]::Match($diagnostics,
+                '\bORDAX_UPGRADE_(?!QUIESCED\b|SUPERVISOR_PREFLIGHT_CLEAR\b)[A-Z_]{3,100}\b')
+            $category = if ($match.Success) { $match.Value } else { 'ORDAX_UPGRADE_UNCLASSIFIED_FAILURE' }
+            throw ("ORDAX_MCP_QUIESCE_FAILED: exit={0} preflight={1} category={2}" -f
+                $child.ExitCode, $PreflightOnly, $category)
         }
         Write-Output $(if ($PreflightOnly) { 'ORDAX_MCP_SUPERVISOR_PREFLIGHT_VERIFIED' } else { 'ORDAX_MCP_QUIESCE_VERIFIED' })
     } finally { $child.Dispose() }
@@ -666,7 +675,8 @@ switch ($Operation) {
             throw
         }
         $applyScript = Join-Path $tx 'apply.ps1'
-        Copy-Item -LiteralPath $lifecycle -Destination $applyScript -ErrorAction Stop
+        # Use the verified target's lifecycle, not a stale installed copy.
+        Copy-Item -LiteralPath (Join-Path $expanded 'ordax-mcp-lifecycle.ps1') -Destination $applyScript -ErrorAction Stop
         $journal = [pscustomobject]@{
             schema = 'ordax.mcp-dev-upgrade/4'; transactionId = $id; phase = 'staged'
             packageName = $source.Name; sha256 = $PackageSha256.ToUpperInvariant()
@@ -768,9 +778,9 @@ switch ($Operation) {
             if ([IO.Path]::GetPathRoot($expanded) -ine [IO.Path]::GetPathRoot($installRoot)) {
                 throw 'DEV Runtime atomic activation requires same volume'
             }
-            # Recheck after staging and before ending the owner task: no worker may
-            # be sacrificed to activate a newer package.
-            Invoke-QuiesceRoot -Root $installRoot -PreflightOnly
+            # Recheck using the already digest-verified controller in the
+            # candidate. Old installed controllers may lack -PreflightOnly.
+            Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded -PreflightOnly
             $existing = Get-CanonicalScheduledTask -Name $taskName
             Assert-OurTask $existing $lifecycle 'Launch'
             if ($existing) {
@@ -798,7 +808,7 @@ switch ($Operation) {
                 Invoke-CanonicalTaskAction -Name $taskName -Action Disable
                 $ownerDisabled = $true
             }
-            Invoke-QuiesceRoot -Root $installRoot
+            Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded
             [IO.Directory]::Move($installRoot,$previous)
             $oldMoved = $true
             [IO.Directory]::Move($expanded,$installRoot)
