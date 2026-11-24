@@ -51,10 +51,7 @@ function Get-OwnerArchiveSha256 {
     }
 }
 
-function Assert-InstalledSource {
-    if ([IO.Path]::GetFullPath($PSCommandPath) -ine $lifecycle) {
-        throw 'Lifecycle registration must originate from the canonical OrdaX MCP installation'
-    }
+function Assert-InstalledProduct {
     if (!(Test-Path -LiteralPath $launcher -PathType Leaf)) {
         throw 'Canonical OrdaX MCP launcher is missing'
     }
@@ -63,6 +60,13 @@ function Assert-InstalledSource {
     if ($manifest.product -cne 'OrdaX MCP' -or $manifest.runtime -cne 'ORDAX Runtime.exe') {
         throw 'Installed product provenance is not OrdaX MCP'
     }
+}
+
+function Assert-InstalledSource {
+    if ([IO.Path]::GetFullPath($PSCommandPath) -ine $lifecycle) {
+        throw 'Lifecycle registration must originate from the canonical OrdaX MCP installation'
+    }
+    Assert-InstalledProduct
 }
 
 function Assert-OurTask {
@@ -410,6 +414,64 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
 }
 
 
+# An old installed Runtime can only upgrade itself using an old lifecycle.
+# During owner-authorized DEV recovery, accept this SAME lifecycle from a
+# byte-matched, SHA-pinned portable candidate, never a hand-edited script.
+# This verifies only the bootstrap controller. Assert-DevArchive separately
+# validates every entry and provenance before staging anything.
+function Assert-VerifiedUpgradeBootstrap {
+    param([string]$ArchivePath, [string]$Commit)
+    $controller = [IO.Path]::GetFullPath($PSCommandPath)
+    $root = [IO.Path]::GetFullPath((Split-Path -Parent $controller)).TrimEnd('\')
+    if ($root -ieq $installRoot -or
+        $root.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'External DEV upgrade bootstrap must not originate from the installed root'
+    }
+    if ([IO.Path]::GetFileName($controller) -cne 'ordax-mcp-lifecycle.ps1') {
+        throw 'DEV upgrade bootstrap requires canonical lifecycle filename'
+    }
+    $rootItem = Get-Item -LiteralPath $root -ErrorAction Stop
+    if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'DEV upgrade bootstrap root may not be a reparse point'
+    }
+    $manifest = Read-OwnerJsonDocument -Path (Join-Path $root 'product-manifest.json')
+    if ($manifest.schema -cne 'ordax.mcp-windows-candidate/1' -or
+        $manifest.product -cne 'OrdaX MCP' -or
+        $manifest.runtime_source_commit -cne $Commit -or
+        $manifest.studio_required -ne $false -or
+        $manifest.signed_public_release -ne $false) {
+        throw 'DEV upgrade bootstrap manifest does not match requested candidate'
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        foreach ($name in @('product-manifest.json', 'ordax-mcp-lifecycle.ps1', 'ordax-upgrade-quiesce.ps1')) {
+            $entry = $zip.GetEntry($name)
+            if ($null -eq $entry -or $entry.Length -lt 1 -or $entry.Length -gt 250000) {
+                throw 'DEV upgrade bootstrap missing or oversized controller file'
+            }
+            $path = Join-Path $root $name
+            $item = Get-Item -LiteralPath $path -ErrorAction Stop
+            if (!$item.PSIsContainer -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
+                $sha = [Security.Cryptography.SHA256]::Create()
+                try {
+                    $stream = $entry.Open()
+                    try {
+                        $inside = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '')
+                    } finally { $stream.Dispose() }
+                } finally { $sha.Dispose() }
+                if ((Get-OwnerArchiveSha256 -Path $path) -cne $inside) {
+                    throw 'DEV upgrade bootstrap controller differs from verified archive'
+                }
+            } else {
+                throw 'DEV upgrade bootstrap controller path is not a regular file'
+            }
+        }
+    } finally { $zip.Dispose() }
+    return $root
+}
+
 # Stage integrity is a digest of paths, sizes and bytes, verified again before
 # any owner-task or installation mutation by the scheduled executor.
 function Get-PreparedTreeDigest {
@@ -608,9 +670,12 @@ switch ($Operation) {
         Write-Output 'ORDAX_MCP_LIFECYCLE_UNREGISTERED'
     }
     'Upgrade' {
-        Assert-InstalledSource
-        # Refuse before staging when a persistent supervisor still owns a live child.
-        Invoke-QuiesceRoot -Root $installRoot -PreflightOnly
+        # Installation and candidate both use this single canonical updater.
+        # A bootstrap outside the installed root is allowed only when its
+        # scripts exactly match the separately verified portable DEV archive.
+        $installedController = [IO.Path]::GetFullPath($PSCommandPath) -ieq $lifecycle
+        if ($installedController) { Assert-InstalledSource }
+        else { Assert-InstalledProduct }
         if ($PackageSha256 -cnotmatch '^[0-9a-fA-F]{64}$' -or
             $ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
             throw 'Exact portable DEV package SHA-256 and Runtime commit are mandatory'
@@ -629,6 +694,13 @@ switch ($Operation) {
             throw 'Portable DEV archive differs from verified CI candidate'
         }
         Assert-DevArchive -ArchivePath $source.FullName -Commit $ExpectedCommit
+        $bootstrapRoot = ''
+        if (!$installedController) {
+            $bootstrapRoot = Assert-VerifiedUpgradeBootstrap -ArchivePath $source.FullName -Commit $ExpectedCommit
+        }
+        # No supervised process may be sacrificed to update the MCP, even if
+        # a legacy installed quiesce controller lacked current preflight.
+        Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $bootstrapRoot -PreflightOnly
         # The previous Inno DEV attempts remain historical receipts only.
         # A live journal in either schema still forbids overlapping upgrades.
         if (Test-Path -LiteralPath $updatesRoot -PathType Container) {
