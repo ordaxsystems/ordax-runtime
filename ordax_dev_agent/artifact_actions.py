@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from .models import ActionResult
+from .project_local_service import (
+    LocalServiceError, LocalServicePolicy, LocalServiceResponse, read_local_service_batch,
+)
 
 
 class ArtifactActions:
@@ -156,24 +159,55 @@ class ArtifactActions:
             "base64": base64.b64encode(chunk).decode("ascii"),
         })
 
-    def _artifact_image_sheet(self, payload: dict[str, Any]) -> ActionResult:
-        """Build a bounded, labeled contact sheet from authorized project artifacts."""
+    def local_service_image_sheet(
+        self, policy: LocalServicePolicy, requests: list[dict], *,
+        max_width: int = 1600, max_height: int = 1200, quality: int = 72,
+        max_bytes: int = 262144,
+    ) -> ActionResult:
+        """Internal adapter; policy must come from verified Owner authority.
+
+        Not a registered MCP action. The public artifact grant does not confer
+        local HTTP authority. Source hashes identify response bytes, not the
+        host's original media or an editorial identity.
+        """
+        try:
+            responses = read_local_service_batch(policy, requests)
+        except LocalServiceError as error:
+            return ActionResult(False, str(error))
+        return self._artifact_image_sheet({
+            "max_width": max_width, "max_height": max_height,
+            "quality": quality, "max_bytes": max_bytes,
+        }, service_responses=responses)
+
+    def _artifact_image_sheet(
+        self, payload: dict[str, Any], *,
+        service_responses: list[LocalServiceResponse] | None = None,
+    ) -> ActionResult:
+        """Shared renderer for authorized files and trusted HTTP response bytes."""
         import io
         import math
         import time
 
         started = time.monotonic()
-        paths = payload.get("project_artifact_paths")
-        if not isinstance(paths, list) or not 1 <= len(paths) <= 100:
-            return ActionResult(False, "project_artifact_paths must contain 1 to 100 paths")
-        if any(not isinstance(path, str) or not path.strip() for path in paths):
-            return ActionResult(False, "each artifact path must be a nonempty string")
-        if payload.get("artifact_name") is not None or payload.get("project_artifact_path") is not None:
-            return ActionResult(False, "choose a single artifact or a batch")
-        if sum(len(path.encode("utf-8")) for path in paths) > 16384:
-            return ActionResult(False, "batch path byte budget exceeded")
-        if any(Path(path).is_absolute() or Path(path).drive for path in paths):
-            return ActionResult(False, "batch paths must be relative to project Artifacts")
+        if service_responses is None:
+            paths = payload.get("project_artifact_paths")
+            if not isinstance(paths, list) or not 1 <= len(paths) <= 100:
+                return ActionResult(False, "project_artifact_paths must contain 1 to 100 paths")
+            if any(not isinstance(path, str) or not path.strip() for path in paths):
+                return ActionResult(False, "each artifact path must be a nonempty string")
+            if payload.get("artifact_name") is not None or payload.get("project_artifact_path") is not None:
+                return ActionResult(False, "choose a single artifact or a batch")
+            if sum(len(path.encode("utf-8")) for path in paths) > 16384:
+                return ActionResult(False, "batch path byte budget exceeded")
+            if any(Path(path).is_absolute() or Path(path).drive for path in paths):
+                return ActionResult(False, "batch paths must be relative to project Artifacts")
+        else:
+            paths = service_responses
+            if not paths or len(paths) > 8:
+                return ActionResult(False, "invalid local service image batch")
+            if any(response.media_type not in {"image/png", "image/jpeg", "image/webp"}
+                   for response in paths):
+                return ActionResult(False, "local service sheet requires image responses")
         try:
             from PIL import Image, ImageDraw, ImageOps
         except ImportError:
@@ -198,10 +232,13 @@ class ArtifactActions:
             label_height = 22
             sheet = Image.new("RGB", (columns * cell_width, rows * cell_height), "white")
             draw = ImageDraw.Draw(sheet)
-            project = self._project(payload)
-            root = (project.root / "Artifacts").resolve()
+            root = None
+            if service_responses is None:
+                project = self._project(payload)
+                root = (project.root / "Artifacts").resolve()
             seen: dict[str, str] = {}
             perceptual: list[tuple[str, int, float]] = []
+            response_formats: dict[str, str] = {}
             # Same-path repeats within one authorized operation reuse the digest
             # and thumbnail. Never cache an authorization decision across calls.
             read_cache: dict[Path, tuple[tuple[int, int, int, int, int], str, int]] = {}
@@ -219,48 +256,66 @@ class ArtifactActions:
                 return (*identity(stat), stat.st_ctime_ns)
 
             for index, relative in enumerate(paths, 1):
-                # Resolve and authorize every entry, including cache hits.
-                path = self._artifact_path({"project": payload.get("project"), "project_artifact_path": relative})
-                if isinstance(path, ActionResult):
-                    return path
-                if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
-                    return ActionResult(False, "batch supports PNG, JPEG and WebP images")
-                resolved_relative = path.relative_to(root).as_posix()
-                relative_path_bytes += len(resolved_relative.encode("utf-8"))
-                if relative_path_bytes > 16384:
-                    return ActionResult(False, "batch resolved path byte budget exceeded")
+                if service_responses is None:
+                    # Resolve and authorize every entry, including cache hits.
+                    path = self._artifact_path({"project": payload.get("project"), "project_artifact_path": relative})
+                    if isinstance(path, ActionResult):
+                        return path
+                    if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+                        return ActionResult(False, "batch supports PNG, JPEG and WebP images")
+                    resolved_relative = path.relative_to(root).as_posix()
+                    relative_path_bytes += len(resolved_relative.encode("utf-8"))
+                    if relative_path_bytes > 16384:
+                        return ActionResult(False, "batch resolved path byte budget exceeded")
 
-                current = path.stat()
-                observed = version(current)
-                cached = read_cache.get(path)
-                raw: bytes | None = None
-                if cached is not None:
-                    if cached[0] != observed:
-                        return ActionResult(False, "artifact changed during batch; retry",
-                                            {"error_code": "artifact_changed"})
-                    digest, size = cached[1], cached[2]
-                    reused_path_count += 1
+                    current = path.stat()
+                    observed = version(current)
+                    cached = read_cache.get(path)
+                    raw: bytes | None = None
+                    if cached is not None:
+                        if cached[0] != observed:
+                            return ActionResult(False, "artifact changed during batch; retry",
+                                                {"error_code": "artifact_changed"})
+                        digest, size = cached[1], cached[2]
+                        reused_path_count += 1
+                    else:
+                        limit = min(32 * 1024 * 1024, 256 * 1024 * 1024 - source_read_bytes)
+                        if limit <= 0:
+                            return ActionResult(False, "batch source byte budget exceeded")
+                        with path.open("rb") as handle:
+                            opened = os.fstat(handle.fileno())
+                            if identity(opened) != identity(current):
+                                return ActionResult(False, "artifact changed before batch read",
+                                                    {"error_code": "artifact_changed"})
+                            raw = handle.read(limit + 1)
+                            if (identity(os.fstat(handle.fileno())) != identity(opened)
+                                    or version(path.stat()) != observed):
+                                return ActionResult(False, "artifact changed during batch read",
+                                                    {"error_code": "artifact_changed"})
+                        if len(raw) > limit or not raw:
+                            return ActionResult(False, "batch source byte budget exceeded or empty image")
+                        size = len(raw)
+                        source_read_bytes += size
+                        digest = hashlib.sha256(raw).hexdigest()
+                        read_cache[path] = (observed, digest, size)
+                    source_metadata = {"project_artifact_path": resolved_relative,
+                                       "source_sha256": digest}
+                    expected_format = None
                 else:
-                    limit = min(32 * 1024 * 1024, 256 * 1024 * 1024 - source_read_bytes)
-                    if limit <= 0:
-                        return ActionResult(False, "batch source byte budget exceeded")
-                    with path.open("rb") as handle:
-                        opened = os.fstat(handle.fileno())
-                        if identity(opened) != identity(current):
-                            return ActionResult(False, "artifact changed before batch read",
-                                                {"error_code": "artifact_changed"})
-                        raw = handle.read(limit + 1)
-                        if (identity(os.fstat(handle.fileno())) != identity(opened)
-                                or version(path.stat()) != observed):
-                            return ActionResult(False, "artifact changed during batch read",
-                                                {"error_code": "artifact_changed"})
-                    if len(raw) > limit or not raw:
-                        return ActionResult(False, "batch source byte budget exceeded or empty image")
+                    response = service_responses[index - 1]
+                    raw = response.body
                     size = len(raw)
+                    digest = response.sha256
                     source_read_bytes += size
-                    digest = hashlib.sha256(raw).hexdigest()
-                    read_cache[path] = (observed, digest, size)
-
+                    source_metadata = {"source_kind": "local_service_response",
+                                       "request_index": index - 1, "route": response.route,
+                                       "response_sha256": digest}
+                    expected_format = {"image/png": "PNG", "image/jpeg": "JPEG",
+                                       "image/webp": "WEBP"}[response.media_type]
+                    # Check duplicate response declarations too; an identical
+                    # byte stream cannot be re-labeled as a different format.
+                    if digest in seen and response_formats[digest] != expected_format:
+                        return ActionResult(False, "local service image format mismatch")
                 source_bytes += size
                 image_id = f"I{index:03}"
                 tile_id = seen.get(digest)
@@ -271,6 +326,10 @@ class ArtifactActions:
                     tile_id = image_id
                     tile_index = len(seen)
                     with Image.open(io.BytesIO(raw)) as image:
+                        if expected_format is not None:
+                            if image.format != expected_format:
+                                return ActionResult(False, "local service image format mismatch")
+                            response_formats[digest] = expected_format
                         if image.width * image.height > 24_000_000:
                             return ActionResult(False, "batch image pixel budget exceeded")
                         image.draft("RGB", (cell_width, cell_height - label_height))
@@ -298,8 +357,7 @@ class ArtifactActions:
                     seen[digest] = tile_id
                     unique_source_bytes += size
                 items.append({"image_id": image_id, "tile_id": tile_id,
-                              "project_artifact_path": resolved_relative,
-                              "source_sha256": digest, "source_size_bytes": size})
+                              **source_metadata, "source_size_bytes": size})
             final_rows = math.ceil(len(seen) / columns)
             if final_rows < rows:
                 sheet = sheet.crop((0, 0, sheet.width, final_rows * cell_height))
@@ -352,6 +410,7 @@ class ArtifactActions:
             candidates.sort(key=lambda pair: (pair["hamming_distance"], pair["left_tile_id"],
                                               pair["right_tile_id"]))
             return ActionResult(True, "artifact image sheet ready", {
+                "source_kind": "project_artifact" if service_responses is None else "local_service_response",
                 "visual_candidates": {"method": "dhash64", "review_only": True,
                                       "max_distance": 8, "pairs": candidates[:48],
                                       "truncated": len(candidates) > 48},
@@ -370,6 +429,8 @@ class ArtifactActions:
             return ActionResult(False, f"artifact image sheet failed: {error}")
 
     def artifact_preview(self, payload: dict[str, Any]) -> ActionResult:
+        if any(key.startswith("local_service") or key == "service_responses" for key in payload):
+            return ActionResult(False, "local service requires separate verified authority")
         if "project_artifact_paths" in payload:
             return self._artifact_image_sheet(payload)
         path = self._artifact_path(payload)
