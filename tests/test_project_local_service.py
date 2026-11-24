@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import base64
 import threading
 import unittest
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from ordax_dev_agent.artifact_actions import ArtifactActions
 from ordax_dev_agent.project_local_service import (
     LocalServiceError, LocalServicePolicy, LocalServiceRoute, read_local_service_batch,
 )
@@ -37,6 +40,13 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/image":
             body = b"RIFF\x04\x00\x00\x00WEBP"
             media = "image/webp"
+        if path in ("/visual", "/wrong-format"):
+            from PIL import Image
+            buffer = io.BytesIO()
+            color = "blue" if parse_qs(urlsplit(self.path).query).get("id") == ["2"] else "red"
+            Image.new("RGB", (96, 64), color).save(buffer, format="PNG")
+            body = buffer.getvalue()
+            media = "image/png" if path == "/visual" else "image/webp"
         if path == "/large":
             body = b"x" * 4096
         if path == "/bad-media":
@@ -61,6 +71,8 @@ class LocalServiceTransportTests(unittest.TestCase):
         self.policy = LocalServicePolicy("127.0.0.1", self.server.server_port, (
             LocalServiceRoute("/json", frozenset({"page"}), json_media),
             LocalServiceRoute("/image", frozenset({"id"}), frozenset({"image/webp"})),
+            LocalServiceRoute("/visual", frozenset({"id"}), frozenset({"image/png"})),
+            LocalServiceRoute("/wrong-format", frozenset({"id"}), frozenset({"image/webp"})),
             *tuple(LocalServiceRoute(path, frozenset(), json_media)
                    for path in ("/redirect", "/large", "/bad-media", "/unauthorized")),
         ))
@@ -75,6 +87,45 @@ class LocalServiceTransportTests(unittest.TestCase):
         self.assertEqual(values[1].sha256, hashlib.sha256(values[1].body).hexdigest())
         self.assertEqual(parse_qs(urlsplit(self.server.calls[0]).query), {"page": ["1&other=2"]})
         self.assertEqual(len(self.server.calls), 2)
+
+    def test_local_service_sheet_uses_shared_renderer_and_response_identity(self):
+        from PIL import Image
+        host = ArtifactActions()
+        result = host.local_service_image_sheet(self.policy, [
+            {"route": "/visual", "query": {"id": 1}},
+            {"route": "/visual", "query": {"id": 2}},
+            {"route": "/visual", "query": {"id": 1}},
+        ], max_width=800, max_height=600)
+        self.assertTrue(result.ok, result.summary)
+        data = result.data
+        self.assertEqual("local_service_response", data["source_kind"])
+        self.assertEqual(3, data["image_count"])
+        self.assertEqual(2, data["unique_image_count"])
+        self.assertEqual([0, 1, 2], [item["request_index"] for item in data["items"]])
+        self.assertEqual(["I001", "I002", "I001"], [item["tile_id"] for item in data["items"]])
+        self.assertEqual(data["items"][0]["response_sha256"], data["items"][2]["response_sha256"])
+        self.assertTrue(all("source_sha256" not in item and "project_artifact_path" not in item
+                            for item in data["items"]))
+        self.assertTrue(data["visual_candidates"]["review_only"])
+        with Image.open(io.BytesIO(base64.b64decode(data["base64"]))) as sheet:
+            self.assertEqual("JPEG", sheet.format)
+            self.assertEqual(tuple(data["thumbnail_size"]), sheet.size)
+        self.assertEqual(len(self.server.calls), 3)
+
+    def test_local_service_sheet_rejects_non_image_and_mislabeled_image(self):
+        host = ArtifactActions()
+        for route in ("/json", "/wrong-format", "/image"):
+            result = host.local_service_image_sheet(self.policy, [{"route": route}])
+            self.assertFalse(result.ok)
+            self.assertNotIn("base64", result.data)
+
+    def test_public_artifact_preview_cannot_inherit_local_service_authority(self):
+        host = ArtifactActions()
+        for field in ("local_service_requests", "local_service_policy", "service_responses"):
+            result = host.artifact_preview({field: []})
+            self.assertFalse(result.ok)
+            self.assertIn("separate verified authority", result.summary)
+        self.assertEqual(self.server.calls, [])
 
     def test_rejects_non_loopback_and_model_supplied_origin_or_method_before_io(self):
         for policy in (replace(self.policy, host="localhost"),
