@@ -217,8 +217,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             "Copy-Item -LiteralPath $lifecycle -Destination $applyScript",
             lifecycle,
         )
-        digest = lifecycle.index("$preparedTreeSha256")
-        # Validate the prepared tree before running any code from it.
+        # The verified controller may only be used after prepared-tree digest validation.
         self.assertIn(
             "Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded -PreflightOnly",
             lifecycle,
