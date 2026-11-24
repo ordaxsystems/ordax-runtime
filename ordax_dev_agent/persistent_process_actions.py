@@ -130,6 +130,45 @@ class PersistentProcessActions:
             return False
 
     @staticmethod
+    def _pid_created_at_unix(pid: int) -> float | None:
+        """Use a native Win32 PID birth time before any slow CIM ownership probe.
+
+        A recycled historical manager PID may now belong to Chrome or another
+        program. OpenProcess/GetProcessTimes is bounded and does not create a
+        PowerShell subprocess for those unrelated processes.
+        """
+        if os.name != "nt" or pid <= 0:
+            return None
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.windll.kernel32
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            handle = kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return None
+            try:
+                times = [wintypes.FILETIME() for _ in range(4)]
+                kernel32.GetProcessTimes.argtypes = [
+                    wintypes.HANDLE, *([ctypes.POINTER(wintypes.FILETIME)] * 4)
+                ]
+                kernel32.GetProcessTimes.restype = wintypes.BOOL
+                if not kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
+                    return None
+                creation = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+                # FILETIME counts 100ns intervals since 1601-01-01 UTC.
+                unix_time = creation / 10_000_000 - 11_644_473_600
+                return unix_time if unix_time > 0 else None
+            finally:
+                kernel32.CloseHandle(handle)
+        except (AttributeError, OSError, TypeError):
+            # Absence of a birth-time proof never grants ownership: retain
+            # the stricter token-in-command-line validation below.
+            return None
+
+    @staticmethod
     def _commandline(pid: int) -> str:
         if pid <= 0:
             return ""
@@ -261,6 +300,19 @@ class PersistentProcessActions:
 
         if not pid or not self._pid_running(pid):
             return False
+        created_at = self._pid_created_at_unix(pid)
+        try:
+            started_at = float(state.get("started_at_unix") or 0)
+            ready_at = float(state.get("manager_ready_at_unix") or 0)
+        except (ValueError, TypeError):
+            started_at, ready_at = 0.0, 0.0
+        if created_at is not None and started_at > 0:
+            # A live manager is born shortly after its receipt is written and
+            # no later than its ready handshake. Generous margins tolerate a
+            # slow Windows bootstrap without accepting a much newer recycled
+            # PID as the original detached manager.
+            if created_at < started_at - 10 or created_at > max(started_at + 60, ready_at + 10):
+                return False
         commandline = self._commandline(pid)
         return token in commandline and (
             "persistent_process_runtime.py" in commandline

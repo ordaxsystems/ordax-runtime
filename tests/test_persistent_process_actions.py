@@ -524,3 +524,52 @@ class PersistentProcessActionsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowsProcessPidReusePreflightTests(unittest.TestCase):
+    """Ownership checks remain fail-closed while filtering recycled PIDs."""
+
+    def setUp(self):
+        from ordax_dev_agent.persistent_process_actions import PersistentProcessActions
+        self.actions = PersistentProcessActions()
+        self.state = {
+            "process_id": "00000000-0000-4000-8000-000000000111",
+            "token": "owned-original-manager",
+            "manager_pid": 7342,
+            "started_at_unix": 1000.0,
+            "manager_ready_at_unix": 1002.0,
+        }
+
+    def test_recycled_pid_skips_expensive_windows_commandline_probe(self):
+        with (patch.object(self.actions, "_pid_running", return_value=True),
+              patch.object(self.actions, "_pid_created_at_unix", return_value=2200.0),
+              patch.object(self.actions, "_commandline",
+                           side_effect=AssertionError("recycled PID must not invoke CIM"))):
+            self.assertFalse(self.actions._owned(self.state))
+
+    def test_matching_pid_birth_still_requires_original_token(self):
+        with (patch.object(self.actions, "_pid_running", return_value=True),
+              patch.object(self.actions, "_pid_created_at_unix", return_value=1001.0),
+              patch.object(self.actions, "_commandline",
+                           return_value="python persistent_process_runtime.py --token other-manager")):
+            self.assertFalse(self.actions._owned(self.state))
+        with (patch.object(self.actions, "_pid_running", return_value=True),
+              patch.object(self.actions, "_pid_created_at_unix", return_value=1001.0),
+              patch.object(self.actions, "_commandline",
+                           return_value="python persistent_process_runtime.py --token owned-original-manager")):
+            self.assertTrue(self.actions._owned(self.state))
+
+    def test_unavailable_win32_birth_time_falls_back_to_token_verification(self):
+        with (patch.object(self.actions, "_pid_running", return_value=True),
+              patch.object(self.actions, "_pid_created_at_unix", return_value=None),
+              patch.object(self.actions, "_commandline",
+                           return_value="python persistent_process_runtime.py --token owned-original-manager") as cmd):
+            self.assertTrue(self.actions._owned(self.state))
+            cmd.assert_called_once_with(7342)
+
+    def test_manager_birth_before_record_is_not_accepted(self):
+        with (patch.object(self.actions, "_pid_running", return_value=True),
+              patch.object(self.actions, "_pid_created_at_unix", return_value=970.0),
+              patch.object(self.actions, "_commandline",
+                           side_effect=AssertionError("old process must not invoke CIM"))):
+            self.assertFalse(self.actions._owned(self.state))
