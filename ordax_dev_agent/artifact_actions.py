@@ -201,6 +201,7 @@ class ArtifactActions:
             project = self._project(payload)
             root = (project.root / "Artifacts").resolve()
             seen: dict[str, str] = {}
+            perceptual: list[tuple[str, int, float]] = []
             # Same-path repeats within one authorized operation reuse the digest
             # and thumbnail. Never cache an authorization decision across calls.
             read_cache: dict[Path, tuple[tuple[int, int, int, int, int], str, int]] = {}
@@ -278,6 +279,17 @@ class ArtifactActions:
                         rgba = corrected.convert("RGBA")
                         tile = Image.new("RGB", corrected.size, "white")
                         tile.paste(rgba, mask=rgba.getchannel("A"))
+                        # Reuse the decoded, EXIF-corrected tile. This is a
+                        # within-batch near-duplicate hint, not object identity.
+                        gray = tile.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
+                        pixels = list(gray.getdata())
+                        if max(pixels) - min(pixels) >= 24:
+                            fingerprint = 0
+                            for row in range(8):
+                                for col in range(8):
+                                    offset = row * 9 + col
+                                    fingerprint = (fingerprint << 1) | int(pixels[offset] > pixels[offset + 1])
+                            perceptual.append((tile_id, fingerprint, tile.width / tile.height))
                         x = (tile_index % columns) * cell_width
                         y = (tile_index // columns) * cell_height
                         sheet.paste(tile, (x + (cell_width - tile.width) // 2,
@@ -325,7 +337,24 @@ class ArtifactActions:
                 if version(cached_path.stat()) != snapshot:
                     return ActionResult(False, "artifact changed during batch; retry",
                                         {"error_code": "artifact_changed"})
+            # At most 4,950 comparisons for the existing 100-item bound.
+            # Exclude SHA-identical tiles, rank deterministically, and never
+            # imply same object, a confirmed match, or an editorial decision.
+            candidates = []
+            for index, (left, left_hash, left_ratio) in enumerate(perceptual):
+                for right, right_hash, right_ratio in perceptual[index + 1:]:
+                    if max(left_ratio, right_ratio) / min(left_ratio, right_ratio) > 1.15:
+                        continue
+                    distance = (left_hash ^ right_hash).bit_count()
+                    if distance <= 8:
+                        candidates.append({"left_tile_id": left, "right_tile_id": right,
+                                           "hamming_distance": distance})
+            candidates.sort(key=lambda pair: (pair["hamming_distance"], pair["left_tile_id"],
+                                              pair["right_tile_id"]))
             return ActionResult(True, "artifact image sheet ready", {
+                "visual_candidates": {"method": "dhash64", "review_only": True,
+                                      "max_distance": 8, "pairs": candidates[:48],
+                                      "truncated": len(candidates) > 48},
                 "items": items, "image_count": len(items), "unique_image_count": len(seen),
                 "source_size_bytes": source_bytes, "unique_source_size_bytes": unique_source_bytes,
                 "source_read_bytes": source_read_bytes, "reused_path_count": reused_path_count,
