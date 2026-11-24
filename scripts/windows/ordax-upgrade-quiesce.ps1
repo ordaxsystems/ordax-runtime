@@ -60,6 +60,47 @@ function Get-ExactProcessOrNull {
     }
 }
 
+function Assert-NoLiveOrphanSupervisedChild {
+    param($Record)
+    # A legacy manager can die before recording a terminal receipt while its
+    # external child keeps serving requests. It must not be silently discarded
+    # merely because manager_pid is gone. Never match by PID alone: Windows
+    # can recycle a PID into a completely unrelated process.
+    $childPid = 0
+    try { $childPid = [int]$Record.child_pid }
+    catch { throw 'ORDAX_UPGRADE_SUPERVISOR_CHILD_IDENTITY_UNVERIFIED' }
+    if ($childPid -le 0) { return }
+    $child = Get-ExactProcessOrNull -TargetPid $childPid
+    if ($null -eq $child) { return }
+    try {
+        $actualPath = [IO.Path]::GetFullPath([string]$child.Path)
+        $actualStarted = ([DateTimeOffset]$child.StartTime.ToUniversalTime()).ToUnixTimeSeconds()
+        $recordedStarted = [double]$Record.running_at_unix
+    } catch {
+        # Unknown ownership is not evidence that stopping the owner is safe.
+        throw 'ORDAX_UPGRADE_SUPERVISOR_CHILD_IDENTITY_UNVERIFIED'
+    }
+    if ($recordedStarted -le 0) {
+        throw 'ORDAX_UPGRADE_SUPERVISOR_CHILD_IDENTITY_UNVERIFIED'
+    }
+    if ([Math]::Abs($actualStarted - $recordedStarted) -gt 10) {
+        # Definitively different start time: a recycled PID, not this child.
+        return
+    }
+    $command = @($Record.argv)
+    if ($command.Count -lt 1 -or
+        !($command[0] -is [string]) -or
+        ![IO.Path]::IsPathRooted([string]$command[0])) {
+        throw 'ORDAX_UPGRADE_SUPERVISOR_CHILD_IDENTITY_UNVERIFIED'
+    }
+    $expectedPath = [IO.Path]::GetFullPath([string]$command[0])
+    if ($actualPath -ine $expectedPath) {
+        throw 'ORDAX_UPGRADE_SUPERVISOR_CHILD_IDENTITY_UNVERIFIED'
+    }
+    throw ("ORDAX_UPGRADE_BLOCKED_ORPHAN_SUPERVISED_CHILD process_id={0} child_pid={1}" -f
+        $Record.process_id, $childPid)
+}
+
 function Assert-NoActiveSupervisedManagers {
     # This is the existing Runtime supervisor store, not a second task registry.
     # Upgrading must never kill a persistent worker while leaving its child alive
@@ -84,9 +125,15 @@ function Assert-NoActiveSupervisedManagers {
                 }
                 if ($record.state -notin @('starting', 'running', 'stopping')) { continue }
                 $manager = [int]$record.manager_pid
-                if ($manager -le 0) { continue }
+                if ($manager -le 0) {
+                    Assert-NoLiveOrphanSupervisedChild -Record $record
+                    continue
+                }
                 $handle = Get-ExactProcessOrNull -TargetPid $manager
-                if ($null -eq $handle) { continue }
+                if ($null -eq $handle) {
+                    Assert-NoLiveOrphanSupervisedChild -Record $record
+                    continue
+                }
                 try {
                     $actualPath = [IO.Path]::GetFullPath([string]$handle.Path)
                     $startedUnix = ([DateTimeOffset]$handle.StartTime.ToUniversalTime()).ToUnixTimeSeconds()
@@ -95,7 +142,9 @@ function Assert-NoActiveSupervisedManagers {
                 }
                 if (!$actualPath.ToLowerInvariant().StartsWith($rootPrefix) -or
                     ([IO.Path]::GetFileName($actualPath) -notin @('python.exe', 'pythonw.exe'))) {
-                    # A reused PID belonging to a different program is not ours to stop.
+                    # The manager PID now points to another process. Check that
+                    # its old child PID was also recycled or has exited.
+                    Assert-NoLiveOrphanSupervisedChild -Record $record
                     continue
                 }
                 $recorded = [double]$record.manager_ready_at_unix
