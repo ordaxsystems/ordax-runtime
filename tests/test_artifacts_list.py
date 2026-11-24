@@ -134,6 +134,54 @@ class ArtifactsListTests(unittest.TestCase):
                     self.assertEqual(tuple(data["thumbnail_size"]), sheet.size)
                 print(f"sheet images={count} unique={data['unique_image_count']} source_bytes={data['source_size_bytes']} sheet_bytes={data['size_bytes']} elapsed_ms={data['processing_ms']}")
 
+    def test_image_sheet_perceptual_candidates_are_bounded_review_only(self):
+        from PIL import Image
+        from PIL.PngImagePlugin import PngInfo
+
+        with tempfile.TemporaryDirectory() as tmp:
+            host = _Host(Path(tmp))
+            root = host.project.root / "Artifacts"
+            root.mkdir()
+            image = Image.new("L", (128, 96))
+            image.putdata([x * 2 for _ in range(96) for x in range(128)])
+            image.save(root / "ascending.png")
+            metadata = PngInfo()
+            metadata.add_text("description", "different encoding metadata")
+            image.save(root / "similar.png", pnginfo=metadata)
+            (root / "exact.png").write_bytes((root / "ascending.png").read_bytes())
+            inverse = image.point(lambda x: 255 - x)
+            inverse.save(root / "descending.png")
+            Image.new("L", (128, 96), 100).save(root / "flat.png")
+            result = host.artifact_preview({
+                "project": "demo",
+                "project_artifact_paths": ["ascending.png", "similar.png", "exact.png",
+                                           "descending.png", "flat.png"],
+            })
+            self.assertTrue(result.ok, result.summary)
+            data = result.data
+            self.assertEqual(4, data["unique_image_count"])
+            self.assertNotEqual(data["items"][0]["source_sha256"], data["items"][1]["source_sha256"])
+            self.assertEqual("I001", data["items"][2]["tile_id"])
+            candidates = data["visual_candidates"]
+            self.assertTrue(candidates["review_only"])
+            self.assertEqual("dhash64", candidates["method"])
+            self.assertEqual([{"left_tile_id": "I001", "right_tile_id": "I002",
+                               "hamming_distance": 0}], candidates["pairs"])
+            self.assertFalse(candidates["truncated"])
+
+            paths = []
+            for index in range(12):
+                name = f"similar-{index}.png"
+                metadata = PngInfo()
+                metadata.add_text("index", str(index))
+                image.save(root / name, pnginfo=metadata)
+                paths.append(name)
+            result = host.artifact_preview({"project": "demo", "project_artifact_paths": paths})
+            self.assertTrue(result.ok, result.summary)
+            self.assertEqual(12, result.data["unique_image_count"])
+            self.assertEqual(48, len(result.data["visual_candidates"]["pairs"]))
+            self.assertTrue(result.data["visual_candidates"]["truncated"])
+
     def test_image_sheet_reads_repeated_authorized_path_once(self):
         from unittest.mock import patch
         from PIL import Image
