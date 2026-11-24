@@ -478,6 +478,7 @@ class ActionRegistry(
             "agent.self_test": self.agent_self_test,
             "artifacts.list": self.artifacts_list,
             "artifact.preview": self.artifact_preview,
+            "artifact.local_service_preview": self.artifact_local_service_preview,
             "artifact.read_chunk": self.artifact_read_chunk,
             "git.repository_info": self.git_repository_info,
             "git.quick_status": self.git_quick_status,

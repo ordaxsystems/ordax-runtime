@@ -198,6 +198,12 @@ PRODUCT_READ_ONLY_ACTIONS: dict[str, ProductActionSpec] = {
         local_action="handoff.get",
         allowed_fields=frozenset({"project", "handoff_id"}),
     ),
+    "artifact.local_service_preview": ProductActionSpec(
+        name="artifact.local_service_preview",
+        local_action="artifact.local_service_preview",
+        allowed_fields=frozenset({"project", "service_id", "requests", "max_width",
+                                  "max_height", "quality", "max_bytes"}),
+    ),
     "artifact.preview": ProductActionSpec(
         name="artifact.preview",
         local_action="artifact.preview",
@@ -817,7 +823,7 @@ def _sanitize_product_result(
             }
     elif action in {"git.status", "git.diff"}:
         data.pop("command", None)
-    elif action == "artifact.preview":
+    elif action in {"artifact.preview", "artifact.local_service_preview"}:
         data.pop("path", None)
     elif action in {"process.start", "process.status", "process.stop", "computer.process_start", "computer.process_status", "computer.process_stop"}:
         data = public_process(data)
