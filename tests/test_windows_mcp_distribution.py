@@ -422,7 +422,8 @@ class WindowsMcpDistributionTests(unittest.TestCase):
         self.assertIn("$sha.ComputeHash($stream)", lifecycle)
         self.assertIn("[IO.FileShare]::Read", lifecycle)
         # Do not drop SHA-256 or weaken manifest validation for speed.
-        self.assertEqual(lifecycle.count("Get-OwnerArchiveSha256 -Path"), 3)
+        # Three package/transaction checks plus the verified external bootstrap controller.
+        self.assertEqual(lifecycle.count("Get-OwnerArchiveSha256 -Path"), 4)
         self.assertNotIn("Get-FileHash -LiteralPath", lifecycle)
         self.assertNotIn("Get-Content -LiteralPath $journalPath -Raw", lifecycle)
         # Upgrade uses the same trusted embedded Python as the Runtime,
