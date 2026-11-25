@@ -196,22 +196,39 @@ function Assert-PreservedWorkerReceipts {
     if ($journal.schema -cne 'ordax.mcp-dev-upgrade/4' -or
         $journal.phase -cne 'applying' -or
         $null -eq $journal.PSObject.Properties['preservedWorkers']) { throw 'ORDAX_UPGRADE_CONTINUITY_JOURNAL_INVALID' }
-    $store = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'OrdaX\DevAgent')).TrimEnd('\') + '\'
+    $store = Join-Path $env:LOCALAPPDATA 'OrdaX\DevAgent'
     foreach ($expected in @($journal.preservedWorkers)) {
         if ($null -eq $expected) { continue }
+        $reason = 'receipt_locator'
         try {
-            $path = [IO.Path]::GetFullPath([string]$expected.receiptPath)
-            if (!$path.StartsWith($store,[StringComparison]::OrdinalIgnoreCase) -or
-                [IO.Path]::GetFileName($path) -cne ([string]$expected.processId + '.json')) {
-                throw 'invalid receipt path'
+            # The canonical key is namespace/scope/process, not an absolute
+            # pathname that may change spelling (e.g. Windows 8.3 aliases).
+            $scopeName = [string]$expected.scope
+            if ($expected.kind -cnotin @('device-processes','processes') -or
+                [string]$expected.processId -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
+                !$scopeName -or $scopeName -in @('.','..') -or
+                $scopeName.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0 -or
+                $scopeName.TrimEnd(' ','.') -cne $scopeName) {
+                throw 'invalid receipt locator'
             }
+            $namespace = Join-Path $store ([string]$expected.kind)
+            $scopeRoot = Join-Path $namespace $scopeName
+            $path = Join-Path $scopeRoot ([string]$expected.processId + '.json')
+            foreach ($item in @($store,$namespace,$scopeRoot,$path)) {
+                if (([IO.File]::GetAttributes($item) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw 'receipt locator contains reparse point'
+                }
+            }
+            $reason = 'receipt_read'
             $current = [IO.File]::ReadAllText($path,[Text.Encoding]::UTF8) | ConvertFrom-Json
+            $reason = 'receipt_identity'
             if ($current.process_id -cne $expected.processId -or
                 $current.worker_generation -cne $expected.generation -or
                 $current.manager_pid -ne $expected.managerPid -or
                 $current.child_pid -ne $expected.childPid -or
                 (Get-ReceiptBirthIdentity $current.manager_created_at_unix) -cne [string]$expected.managerBirth -or
                 (Get-ReceiptBirthIdentity $current.child_created_at_unix) -cne [string]$expected.childBirth) { throw 'identity changed' }
+            $reason = 'terminal_receipt'
             if ($current.state -in @('exited','failed','stopped')) {
                 # The same supervisor may naturally finish its work during
                 # a switch; only its durable terminal receipt settles it.
@@ -220,13 +237,14 @@ function Assert-PreservedWorkerReceipts {
                 }
                 continue
             }
+            $reason = 'live_worker_identity'
             $manager = Get-ExactProcessOrNull -TargetPid ([int]$current.manager_pid)
             $worker = Join-Path $env:LOCALAPPDATA ("OrdaX\worker-generations\$($expected.generation)\python.exe")
             if ($null -eq $manager -or !(Test-VerifiedDetachedWorker -Record $current -Manager $manager -ExpectedWorker $worker)) {
                 throw 'live worker identity unavailable'
             }
         } catch {
-            throw ("ORDAX_UPGRADE_PRESERVED_WORKER_CONTINUITY_LOST process_id={0}" -f $expected.processId)
+            throw ("ORDAX_UPGRADE_PRESERVED_WORKER_CONTINUITY_LOST process_id={0} reason={1}" -f $expected.processId,$reason)
         }
     }
 }
@@ -288,7 +306,7 @@ function Assert-NoActiveSupervisedManagers {
                                 $record.process_id, $manager)
                             if ($PreserveVerifiedWorkers) {
                                 $snapshot = [ordered]@{
-                                    receiptPath = $file.FullName; processId = $record.process_id
+                                    kind = $kind; scope = $scope.Name; processId = $record.process_id
                                     generation = $generation; managerPid = $manager; childPid = $record.child_pid
                                     managerBirth = (Get-ReceiptBirthIdentity $record.manager_created_at_unix)
                                     childBirth = (Get-ReceiptBirthIdentity $record.child_created_at_unix)
