@@ -146,6 +146,41 @@ class WindowsMcpDistributionTests(unittest.TestCase):
                     manager.terminate()
                 manager.wait(timeout=10)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows launch/quiesce fence")
+    def test_quiesce_exclusive_fence_preserves_parallel_starts(self):
+        import os
+        from ordax_dev_agent.persistent_worker_generation import shared_worker_launch_guard
+
+        script = ROOT / "scripts/windows/ordax-upgrade-quiesce.ps1"
+        with tempfile.TemporaryDirectory(prefix="ordax-launch-fence-") as directory:
+            root = Path(directory)
+            private = root / "OrdaX"
+            private.mkdir()
+            fence = private / "worker-launch.lock"
+            env = dict(os.environ, LOCALAPPDATA=str(root))
+            command = [
+                "powershell.exe", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", str(script),
+                "-InstallRoot", str(root / "simulated-install"),
+                "-TimeoutSeconds", "1", "-PreflightOnly",
+            ]
+            def check():
+                return subprocess.run(command, capture_output=True, text=True,
+                                      errors="replace", env=env, timeout=15)
+            with shared_worker_launch_guard(fence):
+                with shared_worker_launch_guard(fence):
+                    result = check()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("ORDAX_UPGRADE_WORKER_LAUNCH_IN_PROGRESS",
+                                  result.stdout + result.stderr)
+                result = check()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ORDAX_UPGRADE_WORKER_LAUNCH_IN_PROGRESS",
+                              result.stdout + result.stderr)
+            result = check()
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR", result.stdout)
+
     @unittest.skipUnless(sys.platform == "win32", "Windows job breakaway")
     def test_canonical_supervisor_survives_disposable_launcher_job(self):
         # A private test job only. Never touch the installed Runtime, owner

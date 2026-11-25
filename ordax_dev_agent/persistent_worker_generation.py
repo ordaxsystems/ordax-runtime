@@ -16,6 +16,7 @@ import stat
 import sys
 import tempfile
 from pathlib import Path
+from contextlib import contextmanager
 
 SCHEMA = "ordax.persistent-worker-generation/1"
 MODULE_DIR = Path("Lib/site-packages/ordax_dev_agent")
@@ -124,8 +125,12 @@ def prepare_generation(runtime: Path, root: Path, descriptor: dict) -> Path:
             shutil.rmtree(staging)
 
 
-def installed_worker() -> tuple[Path, Path, str] | None:
-    """Standalone Windows MCP only; other product hosts keep their own ABI."""
+class WorkerLaunchGuardError(RuntimeError):
+    """A launch cannot safely cross the canonical installation switch."""
+
+
+def _standalone_runtime_root() -> Path | None:
+    """Identify the same installed standalone host, not source/native hosts."""
     if sys.platform != "win32" or getattr(sys, "frozen", False):
         return None
     local = os.environ.get("LOCALAPPDATA")
@@ -136,6 +141,67 @@ def installed_worker() -> tuple[Path, Path, str] | None:
     runtime = install / "runtime"
     if Path(sys.executable).resolve() != (runtime / "python.exe").resolve():
         return None
+    return runtime
+
+
+@contextmanager
+def shared_worker_launch_guard(path: Path):
+    """Shared Win32 file handle; quiesce uses exclusive FileShare.None.
+
+    Each start can proceed independently. The non-inheritable handle is held
+    through the existing receipt/handshake, never through the child's lifetime.
+    No lease, timestamp or second process registry is authoritative.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    _ordinary(path.parent, directory=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    # READ|WRITE access, share READ|WRITE, OPEN_ALWAYS, OPEN_REPARSE_POINT.
+    # Refuse deletion/rename of the fence while any participant owns a handle.
+    handle = kernel.CreateFileW(str(path), 0xC0000000, 3, None, 4, 0x00200080, None)
+    if handle == ctypes.c_void_p(-1).value or not handle:
+        error = ctypes.get_last_error()
+        category = ("persistent_worker_launch_upgrade_in_progress"
+                    if error in (32, 33) else "persistent_worker_launch_fence_unavailable")
+        raise WorkerLaunchGuardError(f"{category}: win32={error}")
+    try:
+        _ordinary(path)
+        yield
+    finally:
+        kernel.CloseHandle(handle)
+
+
+@contextmanager
+def installed_worker_launch_guard():
+    runtime = _standalone_runtime_root()
+    if runtime is None:
+        yield
+        return
+    private = Path(os.environ["LOCALAPPDATA"]) / "OrdaX"
+    try:
+        private.mkdir(exist_ok=True)
+        _ordinary(private, directory=True)
+    except (OSError, ValueError) as error:
+        raise WorkerLaunchGuardError("persistent_worker_launch_fence_unavailable") from error
+    with shared_worker_launch_guard(private / "worker-launch.lock"):
+        yield
+
+
+def installed_worker() -> tuple[Path, Path, str] | None:
+    """Standalone Windows MCP only; other product hosts keep their own ABI."""
+    runtime = _standalone_runtime_root()
+    if runtime is None:
+        return None
+    base = Path(os.environ["LOCALAPPDATA"])
+    install = runtime.parent
     for path in (install, runtime):
         _ordinary(path, directory=True)
     manifest_path = install / "product-manifest.json"

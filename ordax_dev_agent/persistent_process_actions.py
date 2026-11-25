@@ -17,7 +17,7 @@ from typing import Any
 from .models import ActionResult
 from .persistent_process_runtime import WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS, windows_pid_created_at_unix
 from .process_environment import native_private_worker_command
-from .persistent_worker_generation import installed_worker
+from .persistent_worker_generation import installed_worker, installed_worker_launch_guard, WorkerLaunchGuardError
 
 
 @dataclass(frozen=True)
@@ -343,6 +343,15 @@ class PersistentProcessActions:
         return self._process_start_scoped(payload, self._device_process_scope())
 
     def _process_start_scoped(self, payload: dict[str, Any], project: Any) -> ActionResult:
+        # Only installation switching is exclusive; independent starts hold
+        # compatible shared handles through the existing launch handshake.
+        try:
+            with installed_worker_launch_guard():
+                return self._process_start_under_guard(payload, project)
+        except WorkerLaunchGuardError as error:
+            return ActionResult(False, str(error))
+
+    def _process_start_under_guard(self, payload: dict[str, Any], project: Any) -> ActionResult:
         argv = payload.get("argv")
         if (
             not isinstance(argv, list)

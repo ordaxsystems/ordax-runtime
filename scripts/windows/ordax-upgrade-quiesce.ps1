@@ -186,6 +186,38 @@ function Assert-NoActiveSupervisedManagers {
         }
     }
 }
+# The canonical generation launch path takes a shared handle on this file.
+# Hold the exclusive handle across the supervisor scan and actual quiesce.
+# A preflight-only call releases it on exit; activation repeats the scan.
+$private = Join-Path $env:LOCALAPPDATA 'OrdaX'
+[void][IO.Directory]::CreateDirectory($private)
+if (([IO.File]::GetAttributes($private) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'ORDAX_UPGRADE_WORKER_LAUNCH_FENCE_UNVERIFIED'
+}
+$fencePath = Join-Path $private 'worker-launch.lock'
+$fence = $null
+$fenceDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(10, [Math]::Max(1, $TimeoutSeconds)))
+do {
+    try {
+        if ([IO.File]::Exists($fencePath) -and
+            (([IO.File]::GetAttributes($fencePath) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+            throw 'ORDAX_UPGRADE_WORKER_LAUNCH_FENCE_UNVERIFIED'
+        }
+        $fence = [IO.File]::Open($fencePath, [IO.FileMode]::OpenOrCreate,
+            [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    } catch {
+        $cause = $_.Exception.GetBaseException()
+        $code = $cause.HResult -band 0xffff
+        if ($code -notin @(32, 33)) {
+            throw 'ORDAX_UPGRADE_WORKER_LAUNCH_FENCE_UNVERIFIED'
+        }
+        Start-Sleep -Milliseconds 100
+    }
+} while ($null -eq $fence -and [DateTime]::UtcNow -lt $fenceDeadline)
+if ($null -eq $fence) {
+    throw 'ORDAX_UPGRADE_WORKER_LAUNCH_IN_PROGRESS'
+}
+try {
 Assert-NoActiveSupervisedManagers
 if ($PreflightOnly) {
     Write-Output 'ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR'
@@ -238,3 +270,6 @@ if ($remaining.Count) {
     throw "ORDAX packaged processes are still running after upgrade quiesce: $details"
 }
 Write-Output "ORDAX_UPGRADE_QUIESCED"
+} finally {
+    $fence.Dispose()
+}
