@@ -284,21 +284,11 @@ class PersistentProcessActions:
                 # can still prove ownership with its ephemeral launch token.
                 handles.pop(process_id, None)
 
-        if (
-            local_token
-            and local_token == token
-            and state.get("manager_ready_at_unix")
-            and pid
-        ):
-            # Fast-path for a process launched by this ActionRegistry. The
-            # runtime-authored manager handshake plus the in-memory launch token
-            # is sufficient proof for the current ORDAX instance. A separate PID
-            # probe here is racy on Windows during venv launcher handoff.
-            # The ephemeral token never survives an ORDAX restart, so recovered
-            # state still uses the stricter live-PID + command-line proof below.
-            return True
-
         if not pid or not self._pid_running(pid):
+            # A launch token is not a liveness proof. A dead manager must not
+            # remain owned merely because its last handshake is still on disk.
+            if not handle_running:
+                launch_tokens.pop(process_id, None)
             return False
         created_at = self._pid_created_at_unix(pid)
         try:
@@ -313,6 +303,16 @@ class PersistentProcessActions:
             # PID as the original detached manager.
             if created_at < started_at - 10 or created_at > max(started_at + 60, ready_at + 10):
                 return False
+        if (
+            local_token
+            and local_token == token
+            and ready_at > 0
+            and (handle_running or created_at is not None)
+        ):
+            # The live launcher handle or kernel birth-time check, together
+            # with the local handshake, avoids a redundant CIM query. Without
+            # either, require the same command-line proof as recovered state.
+            return True
         commandline = self._commandline(pid)
         return token in commandline and (
             "persistent_process_runtime.py" in commandline
@@ -320,13 +320,25 @@ class PersistentProcessActions:
         )
 
     def _public_process_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        lifecycle = str(state.get("state") or "unknown")
+        if lifecycle in {"exited", "failed", "stopped"}:
+            # A terminal receipt is the authority, not the historical PID.
+            # Never inspect a recycled PID or run CIM to read completed work.
+            process_id = str(state.get("process_id") or "")
+            handles = getattr(self, "_persistent_process_handles", {})
+            handle = handles.get(process_id)
+            if handle is not None and handle.poll() is not None:
+                handles.pop(process_id, None)
+            getattr(self, "_persistent_process_launch_tokens", {}).pop(process_id, None)
+            result = {**state, "running": False, "ownership_valid": False}
+            result.pop("token", None)
+            return result
         manager_pid = int(state.get("manager_pid") or 0)
         owned = self._owned(state)
         # A live managed Popen handle is authoritative for processes launched by
         # this ActionRegistry. OS process enumeration is only needed for
         # recovered state after the ORDAX Runtime itself restarts.
         running = bool(owned or self._pid_running(manager_pid))
-        lifecycle = str(state.get("state") or "unknown")
         if running and owned and lifecycle in {"starting", "running"}:
             lifecycle = "running"
         elif running and not owned:
