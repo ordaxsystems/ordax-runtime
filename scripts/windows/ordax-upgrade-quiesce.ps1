@@ -2,10 +2,14 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$InstallRoot,
     [int]$TimeoutSeconds = 15,
-    [switch]$PreflightOnly
+    [switch]$PreflightOnly,
+    [switch]$AssessWorkerContinuity
 )
 
 $ErrorActionPreference = "Stop"
+if ($AssessWorkerContinuity -and !$PreflightOnly) {
+    throw 'ORDAX_UPGRADE_WORKER_ASSESSMENT_REQUIRES_PREFLIGHT'
+}
 $root = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
 $rootPrefix = ($root + '\').ToLowerInvariant()
 $ownedExecutables = @(
@@ -116,6 +120,49 @@ function Assert-NoLiveOrphanSupervisedChild {
         $Record.process_id, $childPid)
 }
 
+function Test-VerifiedDetachedWorker {
+    param($Record, $Manager, [string]$ExpectedWorker)
+    # Eligibility only, not authority to activate. A real upgrade must
+    # additionally protect the rollback window and verify continued ownership.
+    if ($Record.state -ne 'running' -or $Record.launcher_job_breakaway_verified -isnot [bool] -or
+        !$Record.launcher_job_breakaway_verified -or
+        [string]$Record.launcher_job_name -cnotmatch '^Local\\OrdaXRuntimeJob_[0-9]+_[0-9]+_[0-9]+$') {
+        return $false
+    }
+    try {
+        if ([IO.Path]::GetFullPath([string]$Manager.Path) -ine $ExpectedWorker) { return $false }
+        $managerBirth = ([double]$Manager.StartTime.ToUniversalTime().Ticks - 621355968000000000) / 10000000
+        $recordedManager = [double]$Record.manager_created_at_unix
+        if ($recordedManager -le 0 -or [double]::IsNaN($recordedManager) -or
+            [double]::IsInfinity($recordedManager) -or
+            [Math]::Abs($managerBirth - $recordedManager) -gt 0.01) { return $false }
+        $childPid = [int]$Record.child_pid
+        if ($childPid -le 0 -or $childPid -eq $Manager.Id) { return $false }
+        $child = Get-ExactProcessOrNull -TargetPid $childPid
+        if ($null -eq $child) { return $false }
+        $childPath = [IO.Path]::GetFullPath([string]$child.Path)
+        $recordedChild = [double]$Record.child_created_at_unix
+        $childBirth = ([double]$child.StartTime.ToUniversalTime().Ticks - 621355968000000000) / 10000000
+        if ($recordedChild -le 0 -or [double]::IsNaN($recordedChild) -or
+            [double]::IsInfinity($recordedChild) -or
+            [Math]::Abs($childBirth - $recordedChild) -gt 0.01 -or
+            $childPath -ine [string]$Record.child_executable_path) { return $false }
+        # Do not classify tasks tied to the mutable installation as detached.
+        foreach ($path in @($childPath, $Record.worker_manager_cwd, $Record.worker_child_cwd)) {
+            if (!($path -is [string]) -or ![IO.Path]::IsPathRooted($path)) { return $false }
+            $full = [IO.Path]::GetFullPath($path).TrimEnd('\')
+            if ($full -ieq $root -or $full.ToLowerInvariant().StartsWith($rootPrefix)) { return $false }
+        }
+        foreach ($argument in @($Record.argv)) {
+            if ($argument -isnot [string] -or
+                $argument.Replace('/','\').ToLowerInvariant().Contains($root.ToLowerInvariant())) { return $false }
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Assert-NoActiveSupervisedManagers {
     # This is the existing Runtime supervisor store, not a second task registry.
     # Upgrading must never kill a persistent worker while leaving its child alive
@@ -164,6 +211,11 @@ function Assert-NoActiveSupervisedManagers {
                     }
                     $expectedWorker = Join-Path $env:LOCALAPPDATA ("OrdaX\worker-generations\$generation\python.exe")
                     if ($actualPath -ieq [IO.Path]::GetFullPath($expectedWorker)) {
+                        if ($AssessWorkerContinuity -and
+                            (Test-VerifiedDetachedWorker -Record $record -Manager $handle -ExpectedWorker ([IO.Path]::GetFullPath($expectedWorker)))) {
+                            Write-Output ("ORDAX_UPGRADE_WORKER_CONTINUITY_ELIGIBLE process_id={0} manager_pid={1}" -f
+                                $record.process_id, $manager)
+                        }
                         throw ("ORDAX_UPGRADE_BLOCKED_SUPERVISED_PROCESS process_id={0} manager_pid={1}" -f
                             $record.process_id, $manager)
                     }
