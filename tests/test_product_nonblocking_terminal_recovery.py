@@ -110,13 +110,16 @@ class TerminalReceiptNonBlockingTests(unittest.TestCase):
         source = (Path(__file__).resolve().parents[1] / "ordax_dev_agent" / "main.py"
                   ).read_text(encoding="utf-8")
         self.assertIn("control_maintenance_executor = ThreadPoolExecutor(", source)
-        self.assertIn('max_workers=2, thread_name_prefix="ordax-control-maintenance"', source)
+        self.assertIn('max_workers=3, thread_name_prefix="ordax-control-maintenance"', source)
         self.assertIn("terminal_recovery_future, next_terminal_recovery = (", source)
         self.assertIn("_schedule_terminal_report_recovery(", source)
         self.assertIn("control_maintenance_executor.shutdown(wait=True, cancel_futures=False)", source)
         self.assertNotIn("project_binding_executor = ThreadPoolExecutor(", source)
         self.assertNotIn("recovery_healthy = _recover_terminal_reports_tick(", source)
         self.assertNotIn("queue.Queue(", source)
+        self.assertIn("heartbeat_future = control_maintenance_executor.submit(", source)
+        self.assertIn("heartbeat_future is not None and heartbeat_future.done()", source)
+        self.assertNotIn("heartbeat_healthy = _product_heartbeat_tick(", source)
 
 
 if __name__ == "__main__":

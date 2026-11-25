@@ -276,6 +276,7 @@ def _product_heartbeat_tick(
         return False
 
     _record_product_heartbeat(runtime)
+    runtime["product_heartbeat_successes"] = int(runtime.get("product_heartbeat_successes", 0)) + 1
     runtime.pop("last_heartbeat_error", None)
     return True
 
@@ -1357,13 +1358,13 @@ def run(
         thread_name_prefix="ordax-product-job",
     )
     job_futures: dict[object, str] = {}
-    # One existing local control-maintenance pool handles two unrelated I/O
-    # tasks independently: Project Catalog reconciliation and durable terminal
-    # report recovery. Both are single-flight; neither can hold a command slot,
-    # queue duplicate maintenance work or block the claim loop.
+    # Heartbeat, Catalog and terminal recovery are independent single-flight
+    # I/O in the existing maintenance pool, never command-worker slots.
     control_maintenance_executor = ThreadPoolExecutor(
-        max_workers=2, thread_name_prefix="ordax-control-maintenance",
+        max_workers=3, thread_name_prefix="ordax-control-maintenance",
     )
+    heartbeat_future: Future[bool] | None = None
+    busy_heartbeat_requested = False
     project_binding_future: Future[int] | None = None
     terminal_recovery_future: Future[bool] | None = None
     from .remote_protocol import DeviceAuthorizationError
@@ -1441,25 +1442,11 @@ def run(
                         project_binding_future, runtime,
                     )
 
-                if now >= next_heartbeat:
-                    runtime["product_heartbeat_attempts"] += 1
-                    with runtime_lock:
-                        has_active_jobs = bool(runtime.get("active_jobs"))
-                    heartbeat_healthy = _product_heartbeat_tick(
-                        control,
-                        host_actions,
-                        runtime,
-                        agent_version=__version__,
-                        metadata={"max_concurrent_jobs": _MAX_CONCURRENT_PRODUCT_JOBS},
-                        status="busy" if has_active_jobs else "online",
-                    )
-                    # A slow Project Catalog lookup used to block the ONLY
-                    # Product claim loop for up to its ten-second HTTP timeout.
-                    # Use the existing canonical reconciler on one independent
-                    # thread; never start another while it is still running.
-                    # Failed presence must not schedule fresh onboarding I/O.
-                    if heartbeat_healthy:
-                        runtime["product_heartbeat_successes"] += 1
+                # Never wait for presence I/O on the sole claim loop. The
+                # authenticated claim/start endpoints still authorize each job.
+                if heartbeat_future is not None and heartbeat_future.done():
+                    heartbeat_healthy = heartbeat_future.result()  # revocation propagates
+                    heartbeat_future = None
                     if heartbeat_healthy and project_binding_future is None:
                         reconcile_project_bindings = getattr(
                             control, "reconcile_project_bindings", None,
@@ -1478,6 +1465,26 @@ def run(
                         _PRODUCT_HEARTBEAT_SECONDS if heartbeat_healthy
                         else _transport_retry_delay(heartbeat_failures)
                     )
+                    if busy_heartbeat_requested and heartbeat_healthy:
+                        next_heartbeat = 0.0
+
+                if heartbeat_future is None and now >= next_heartbeat:
+                    runtime["product_heartbeat_attempts"] += 1
+                    with runtime_lock:
+                        has_active_jobs = bool(runtime.get("active_jobs"))
+                    busy_heartbeat_requested = False
+                    heartbeat_future = control_maintenance_executor.submit(
+                        _product_heartbeat_tick,
+                        control,
+                        host_actions,
+                        runtime,
+                        agent_version=__version__,
+                        metadata={"max_concurrent_jobs": _MAX_CONCURRENT_PRODUCT_JOBS},
+                        status="busy" if has_active_jobs else "online",
+                    )
+                    # Avoid spinning on a due deadline while the HTTP call is
+                    # in flight. Claims and wake reconciliation continue.
+                    next_heartbeat = now + _PRODUCT_HEARTBEAT_SECONDS
 
                 if _consume_product_wake(control, wake_listener):
                     runtime["product_wake_reconciliations"] += 1
@@ -1495,7 +1502,10 @@ def run(
                         product_idle_wait_seconds(
                             now=time.monotonic(),
                             next_claim_due=next_claim_due,
-                            next_heartbeat=next_heartbeat,
+                            next_heartbeat=(
+                                min(next_heartbeat, time.monotonic() + 0.25)
+                                if heartbeat_future is not None else next_heartbeat
+                            ),
                         ),
                         stop_requested, native_access_enabled,
                         wake_listener.wake if wake_listener is not None else None,
@@ -1530,7 +1540,10 @@ def run(
                         product_idle_wait_seconds(
                             now=time.monotonic(),
                             next_claim_due=next_claim_due,
-                            next_heartbeat=next_heartbeat,
+                            next_heartbeat=(
+                                min(next_heartbeat, time.monotonic() + 0.25)
+                                if heartbeat_future is not None else next_heartbeat
+                            ),
                         ),
                         stop_requested, native_access_enabled,
                         wake_listener.wake if wake_listener is not None else None,
@@ -1564,10 +1577,11 @@ def run(
                         if len(active_jobs) > 1
                         else "executing"
                     )
-                    first_active_job = len(active_jobs) == 1
-                if first_active_job:
-                    # Advertise busy immediately after the first accepted lease,
-                    # rather than waiting for the ordinary idle heartbeat cadence.
+                    if len(active_jobs) == 1:
+                        busy_heartbeat_requested = True
+                # Preserve prompt busy presence, but never block claims on it.
+                # If an online heartbeat is in flight, coalesce the request.
+                if busy_heartbeat_requested and heartbeat_future is None:
                     next_heartbeat = 0.0
 
                 future = job_executor.submit(
