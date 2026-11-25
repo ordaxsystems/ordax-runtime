@@ -146,6 +146,94 @@ class WindowsMcpDistributionTests(unittest.TestCase):
                     manager.terminate()
                 manager.wait(timeout=10)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows worker continuity assessment")
+    def test_generation_assessment_never_authorizes_unproven_live_upgrade(self):
+        import os
+        import shutil
+        import time
+        from ordax_dev_agent.persistent_process_runtime import windows_child_identity, windows_pid_created_at_unix
+
+        script = ROOT / "scripts/windows/ordax-upgrade-quiesce.ps1"
+        with tempfile.TemporaryDirectory(prefix="ordax-detached-assessment-") as temp:
+            base = Path(temp)
+            generation = "a" * 64
+            slot = base / "OrdaX/worker-generations" / generation
+            slot.mkdir(parents=True)
+            python = Path(sys.base_prefix) / "python.exe"
+            # Use an actual interpreter image at the canonical generation path.
+            shutil.copy2(python, slot / "python.exe")
+            for name in ("python3.dll", f"python{sys.version_info.major}{sys.version_info.minor}.dll"):
+                if (python.parent / name).exists():
+                    shutil.copy2(python.parent / name, slot / name)
+            env = dict(os.environ, LOCALAPPDATA=temp, PYTHONHOME=str(sys.base_prefix))
+            receipt_id = "feadbeef-0000-4000-8000-000000000002"
+            receipts = base / "OrdaX/DevAgent/device-processes" / receipt_id
+            receipts.mkdir(parents=True)
+            receipt = receipts / f"{receipt_id}.json"
+            root = base / "mutable"
+            root.mkdir()
+            command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                       "-File", str(script), "-InstallRoot", str(root), "-PreflightOnly", "-AssessWorkerContinuity"]
+            manager = subprocess.Popen([str(slot / "python.exe"), "-c", "import time;time.sleep(100)"], env=env)
+            child = None
+            try:
+                child = subprocess.Popen([str(python), "-c", "import time;time.sleep(100)"])
+                proof = {
+                    "process_id": receipt_id, "state": "running",
+                    "manager_pid": manager.pid, "manager_created_at_unix": windows_pid_created_at_unix(manager.pid),
+                    "child_pid": child.pid, **windows_child_identity(child),
+                    "worker_generation": generation,
+                    "worker_manager_cwd": str(base), "worker_child_cwd": str(base),
+                    "launcher_job_name": "Local\\OrdaXRuntimeJob_123_456_1",
+                    "launcher_job_breakaway_verified": True, "argv": [str(python)],
+                    "manager_ready_at_unix": time.time(),
+                }
+                def assess(data):
+                    receipt.write_text(json.dumps(data), encoding="utf-8")
+                    result = subprocess.run(command, capture_output=True, text=True, errors="replace", env=env, timeout=15)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("ORDAX_UPGRADE_BLOCKED_SUPERVISED_PROCESS", result.stdout + result.stderr)
+                    return result.stdout
+                self.assertIn("ORDAX_UPGRADE_WORKER_CONTINUITY_ELIGIBLE", assess(proof))
+                for change in ({"launcher_job_breakaway_verified": False},
+                               {"manager_created_at_unix": 1},
+                               {"child_created_at_unix": 1},
+                               {"worker_child_cwd": str(root)}):
+                    self.assertNotIn("ORDAX_UPGRADE_WORKER_CONTINUITY_ELIGIBLE", assess({**proof, **change}))
+                # Verified portable mode preserves the same pair and emits a
+                # receipt for the one existing journal. Default remains blocked.
+                receipt.write_text(json.dumps(proof), encoding="utf-8")
+                preserve = command[:-1] + ["-PreserveVerifiedWorkers"]
+                result = subprocess.run(preserve, capture_output=True, text=True, errors="replace", env=env, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                snapshots = [json.loads(line.split("|", 1)[1]) for line in result.stdout.splitlines()
+                             if line.startswith("ORDAX_UPGRADE_PRESERVED_WORKER|")]
+                self.assertEqual(len(snapshots), 1)
+                journal = base / "journal.json"
+                journal.write_text(json.dumps({"schema": "ordax.mcp-dev-upgrade/4", "phase": "applying",
+                                               "preservedWorkers": snapshots}), encoding="utf-8")
+                root.rename(base / "previous")
+                root.mkdir()
+                verify = preserve + ["-ContinuityJournalPath", str(journal)]
+                result = subprocess.run(verify, capture_output=True, text=True, errors="replace", env=env, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                root.rmdir()
+                (base / "previous").rename(root)
+                result = subprocess.run(verify, capture_output=True, text=True, errors="replace", env=env, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                receipt.write_text(json.dumps({**proof, "child_created_at_unix": 1}), encoding="utf-8")
+                result = subprocess.run(verify, capture_output=True, text=True, errors="replace", env=env, timeout=15)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ORDAX_UPGRADE_PRESERVED_WORKER_CONTINUITY_LOST", result.stdout + result.stderr)
+                self.assertIsNone(manager.poll())
+                self.assertIsNone(child.poll())
+            finally:
+                for process in (manager, child):
+                    if process is not None:
+                        if process.poll() is None:
+                            process.terminate()
+                        process.wait(timeout=10)
+
     @unittest.skipUnless(sys.platform == "win32", "Windows launch/quiesce fence")
     def test_quiesce_exclusive_fence_preserves_parallel_starts(self):
         import os
@@ -503,7 +591,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             lifecycle,
         )
         self.assertIn(
-            "Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded\n",
+            "Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded -PreserveVerifiedWorkers -ContinuityJournalPath $journalPath\n",
             lifecycle,
         )
 
@@ -788,7 +876,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             "Invoke-CanonicalTaskAction -Name $taskName -Action Disable"
         )
         preflight = upgrade.index("Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded -PreflightOnly")
-        quiesce = upgrade.index("Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded\n")
+        quiesce = upgrade.index("Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded -PreserveVerifiedWorkers -ContinuityJournalPath $journalPath\n")
         rename = upgrade.index("[IO.Directory]::Move($installRoot,$previous)")
         self.assertLess(preflight, owned_task_end)
         self.assertLess(owned_task_end, check_release)

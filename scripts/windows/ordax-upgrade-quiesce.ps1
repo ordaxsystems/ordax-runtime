@@ -2,10 +2,19 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$InstallRoot,
     [int]$TimeoutSeconds = 15,
-    [switch]$PreflightOnly
+    [switch]$PreflightOnly,
+    [switch]$AssessWorkerContinuity,
+    [switch]$PreserveVerifiedWorkers,
+    [string]$ContinuityJournalPath = ''
 )
 
 $ErrorActionPreference = "Stop"
+if ($AssessWorkerContinuity -and !$PreflightOnly) {
+    throw 'ORDAX_UPGRADE_WORKER_ASSESSMENT_REQUIRES_PREFLIGHT'
+}
+if ($ContinuityJournalPath -and !$PreserveVerifiedWorkers) {
+    throw 'ORDAX_UPGRADE_CONTINUITY_JOURNAL_REQUIRES_PRESERVATION'
+}
 $root = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
 $rootPrefix = ($root + '\').ToLowerInvariant()
 $ownedExecutables = @(
@@ -116,6 +125,99 @@ function Assert-NoLiveOrphanSupervisedChild {
         $Record.process_id, $childPid)
 }
 
+function Test-VerifiedDetachedWorker {
+    param($Record, $Manager, [string]$ExpectedWorker)
+    # Eligibility only, not authority to activate. A real upgrade must
+    # additionally protect the rollback window and verify continued ownership.
+    if ($Record.state -ne 'running' -or $Record.launcher_job_breakaway_verified -isnot [bool] -or
+        !$Record.launcher_job_breakaway_verified -or
+        [string]$Record.launcher_job_name -cnotmatch '^Local\\OrdaXRuntimeJob_[0-9]+_[0-9]+_[0-9]+$') {
+        return $false
+    }
+    try {
+        if ([IO.Path]::GetFullPath([string]$Manager.Path) -ine $ExpectedWorker) { return $false }
+        $managerBirth = ([double]$Manager.StartTime.ToUniversalTime().Ticks - 621355968000000000) / 10000000
+        $recordedManager = [double]$Record.manager_created_at_unix
+        if ($recordedManager -le 0 -or [double]::IsNaN($recordedManager) -or
+            [double]::IsInfinity($recordedManager) -or
+            [Math]::Abs($managerBirth - $recordedManager) -gt 0.01) { return $false }
+        $childPid = [int]$Record.child_pid
+        if ($childPid -le 0 -or $childPid -eq $Manager.Id) { return $false }
+        $child = Get-ExactProcessOrNull -TargetPid $childPid
+        if ($null -eq $child) { return $false }
+        $childPath = [IO.Path]::GetFullPath([string]$child.Path)
+        $recordedChild = [double]$Record.child_created_at_unix
+        $childBirth = ([double]$child.StartTime.ToUniversalTime().Ticks - 621355968000000000) / 10000000
+        if ($recordedChild -le 0 -or [double]::IsNaN($recordedChild) -or
+            [double]::IsInfinity($recordedChild) -or
+            [Math]::Abs($childBirth - $recordedChild) -gt 0.01 -or
+            $childPath -ine [string]$Record.child_executable_path) { return $false }
+        # Do not classify tasks tied to the mutable installation as detached.
+        foreach ($path in @($childPath, $Record.worker_manager_cwd, $Record.worker_child_cwd)) {
+            if (!($path -is [string]) -or ![IO.Path]::IsPathRooted($path)) { return $false }
+            $full = [IO.Path]::GetFullPath($path).TrimEnd('\')
+            if ($full -ieq $root -or $full.ToLowerInvariant().StartsWith($rootPrefix)) { return $false }
+        }
+        foreach ($argument in @($Record.argv)) {
+            if ($argument -isnot [string] -or
+                $argument.Replace('/','\').ToLowerInvariant().Contains($root.ToLowerInvariant())) { return $false }
+        }
+        # Loaded modules must not come from the installation being replaced.
+        # This is a present-time proof, not a promise about arbitrary future
+        # file accesses by the external program.
+        foreach ($process in @($Manager, $child)) {
+            foreach ($module in @($process.Modules)) {
+                if (!$module.FileName) { return $false }
+                $modulePath = [IO.Path]::GetFullPath($module.FileName)
+                if ($modulePath.ToLowerInvariant().StartsWith($rootPrefix)) { return $false }
+            }
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Assert-PreservedWorkerReceipts {
+    if (!$ContinuityJournalPath) { return }
+    $journal = [IO.File]::ReadAllText($ContinuityJournalPath,[Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($journal.schema -cne 'ordax.mcp-dev-upgrade/4' -or
+        $journal.phase -cne 'applying') { throw 'ORDAX_UPGRADE_CONTINUITY_JOURNAL_INVALID' }
+    $store = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'OrdaX\DevAgent')).TrimEnd('\') + '\'
+    foreach ($expected in @($journal.preservedWorkers)) {
+        if ($null -eq $expected) { continue }
+        try {
+            $path = [IO.Path]::GetFullPath([string]$expected.receiptPath)
+            if (!$path.StartsWith($store,[StringComparison]::OrdinalIgnoreCase) -or
+                [IO.Path]::GetFileName($path) -cne ([string]$expected.processId + '.json')) {
+                throw 'invalid receipt path'
+            }
+            $current = [IO.File]::ReadAllText($path,[Text.Encoding]::UTF8) | ConvertFrom-Json
+            if ($current.process_id -cne $expected.processId -or
+                $current.worker_generation -cne $expected.generation -or
+                $current.manager_pid -ne $expected.managerPid -or
+                $current.child_pid -ne $expected.childPid -or
+                $current.manager_created_at_unix -ne $expected.managerBirth -or
+                $current.child_created_at_unix -ne $expected.childBirth) { throw 'identity changed' }
+            if ($current.state -in @('exited','failed','stopped')) {
+                # The same supervisor may naturally finish its work during
+                # a switch; only its durable terminal receipt settles it.
+                if ($null -eq $current.returncode -or [double]$current.ended_at_unix -le 0) {
+                    throw 'terminal receipt incomplete'
+                }
+                continue
+            }
+            $manager = Get-ExactProcessOrNull -TargetPid ([int]$current.manager_pid)
+            $worker = Join-Path $env:LOCALAPPDATA ("OrdaX\worker-generations\$($expected.generation)\python.exe")
+            if ($null -eq $manager -or !(Test-VerifiedDetachedWorker -Record $current -Manager $manager -ExpectedWorker $worker)) {
+                throw 'live worker identity unavailable'
+            }
+        } catch {
+            throw ("ORDAX_UPGRADE_PRESERVED_WORKER_CONTINUITY_LOST process_id={0}" -f $expected.processId)
+        }
+    }
+}
+
 function Assert-NoActiveSupervisedManagers {
     # This is the existing Runtime supervisor store, not a second task registry.
     # Upgrading must never kill a persistent worker while leaving its child alive
@@ -155,8 +257,8 @@ function Assert-NoActiveSupervisedManagers {
                 } catch {
                     throw 'ORDAX_UPGRADE_SUPERVISOR_MANAGER_IDENTITY_UNVERIFIED'
                 }
-                # Generation workers execute outside the mutable install.
-                # Keep live handoff fail-closed until the full lifecycle is proven.
+                # Default callers (including uninstall and Inno) still block.
+                # The verified portable lifecycle may preserve eligible workers.
                 if ($record.worker_generation) {
                     $generation = [string]$record.worker_generation
                     if ($generation -cnotmatch '^[0-9a-f]{64}$') {
@@ -164,9 +266,26 @@ function Assert-NoActiveSupervisedManagers {
                     }
                     $expectedWorker = Join-Path $env:LOCALAPPDATA ("OrdaX\worker-generations\$generation\python.exe")
                     if ($actualPath -ieq [IO.Path]::GetFullPath($expectedWorker)) {
+                        if (($AssessWorkerContinuity -or $PreserveVerifiedWorkers) -and
+                            (Test-VerifiedDetachedWorker -Record $record -Manager $handle -ExpectedWorker ([IO.Path]::GetFullPath($expectedWorker)))) {
+                            Write-Output ("ORDAX_UPGRADE_WORKER_CONTINUITY_ELIGIBLE process_id={0} manager_pid={1}" -f
+                                $record.process_id, $manager)
+                            if ($PreserveVerifiedWorkers) {
+                                $snapshot = [ordered]@{
+                                    receiptPath = $file.FullName; processId = $record.process_id
+                                    generation = $generation; managerPid = $manager; childPid = $record.child_pid
+                                    managerBirth = $record.manager_created_at_unix; childBirth = $record.child_created_at_unix
+                                }
+                                Write-Output ('ORDAX_UPGRADE_PRESERVED_WORKER|' + ($snapshot | ConvertTo-Json -Compress))
+                                continue
+                            }
+                        }
                         throw ("ORDAX_UPGRADE_BLOCKED_SUPERVISED_PROCESS process_id={0} manager_pid={1}" -f
                             $record.process_id, $manager)
                     }
+                    # A declared generation never authorizes a different manager.
+                    Assert-NoLiveOrphanSupervisedChild -Record $record
+                    continue
                 }
                 if (!$actualPath.ToLowerInvariant().StartsWith($rootPrefix) -or
                     ([IO.Path]::GetFileName($actualPath) -notin @('python.exe', 'pythonw.exe'))) {
@@ -218,6 +337,7 @@ if ($null -eq $fence) {
     throw 'ORDAX_UPGRADE_WORKER_LAUNCH_IN_PROGRESS'
 }
 try {
+Assert-PreservedWorkerReceipts
 Assert-NoActiveSupervisedManagers
 if ($PreflightOnly) {
     Write-Output 'ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR'

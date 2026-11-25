@@ -460,7 +460,11 @@ class PersistentProcessActions:
                 else {"project": project.slug}
             ),
             "token": token,
-            **({"worker_generation": worker_generation} if worker_generation else {}),
+            **({
+                "worker_generation": worker_generation,
+                "worker_manager_cwd": str(project.root.resolve()),
+                "worker_child_cwd": str(cwd.resolve()),
+            } if worker_generation else {}),
             "state": "starting",
             "cwd": (
                 str(cwd) if isinstance(project, _DeviceProcessScope)
