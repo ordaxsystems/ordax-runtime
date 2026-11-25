@@ -5,6 +5,7 @@ import argparse
 import hmac
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -122,6 +123,43 @@ def windows_child_identity(child: subprocess.Popen) -> dict:
         if birth <= 0 or not query(handle, 0, image, ctypes.byref(length)) or not image.value:
             return {}
         return {"child_created_at_unix": birth, "child_executable_path": image.value}
+    except (AttributeError, OSError, TypeError, ValueError):
+        return {}
+
+
+def windows_launcher_job_proof(child: subprocess.Popen) -> dict:
+    """Prove both processes are outside the precise launcher recovery job.
+
+    Other enclosing Windows jobs are allowed. Query-only handle is closed
+    immediately so it cannot prolong KILL_ON_JOB_CLOSE. No name or inherited
+    flag alone is evidence of breakaway.
+    """
+    name = os.environ.get("ORDAX_RUNTIME_LAUNCHER_JOB", "")
+    if os.name != "nt" or not re.fullmatch(r"Local\\OrdaXRuntimeJob_[0-9]+_[0-9]+_[0-9]+", name):
+        return {}
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenJobObjectW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel.OpenJobObjectW.restype = wintypes.HANDLE
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE,
+                                          ctypes.POINTER(wintypes.BOOL)]
+        kernel.IsProcessInJob.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        job = kernel.OpenJobObjectW(4, False, name)  # JOB_OBJECT_QUERY
+        if not job:
+            return {}
+        try:
+            for handle in (kernel.GetCurrentProcess(), wintypes.HANDLE(int(child._handle))):
+                inside = wintypes.BOOL()
+                if not kernel.IsProcessInJob(handle, job, ctypes.byref(inside)) or inside.value:
+                    return {}
+            return {"launcher_job_name": name, "launcher_job_breakaway_verified": True}
+        finally:
+            kernel.CloseHandle(job)
     except (AttributeError, OSError, TypeError, ValueError):
         return {}
 
@@ -302,6 +340,7 @@ class ProcessRuntime:
                 child_pid=self.child.pid,
                 running_at_unix=time.time(),
                 **windows_child_identity(self.child),
+                **windows_launcher_job_proof(self.child),
             )
             self._stdin_thread = threading.Thread(
                 target=self._pump_stdin,
