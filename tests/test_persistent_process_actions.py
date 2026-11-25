@@ -469,12 +469,15 @@ class PersistentProcessActionsTests(unittest.TestCase):
             "project": "demo",
             "manager_pid": 9191,
             "manager_ready_at_unix": 123.0,
+            "manager_created_at_unix": 122.0,
+            "started_at_unix": 121.0,
             "token": "owned-token",
             "state": "running",
         }
 
         with (
             patch.object(self.registry, "_pid_running", return_value=True),
+            patch.object(self.registry, "_pid_created_at_unix", return_value=122.0),
             patch.object(self.registry, "_commandline") as commandline,
         ):
             public = self.registry._public_process_state(state)
@@ -482,6 +485,19 @@ class PersistentProcessActionsTests(unittest.TestCase):
         self.assertTrue(public["running"])
         self.assertTrue(public["ownership_valid"])
         commandline.assert_not_called()
+
+    def test_exact_manager_birth_rejects_pid_reused_inside_startup_window(self):
+        process_id = "44444444-4444-4444-8444-444444444444"
+        self.registry._persistent_process_launch_tokens = {process_id: "owned-token"}
+        state = {"process_id": process_id, "manager_pid": 9191, "token": "owned-token",
+                 "started_at_unix": 121.0, "manager_created_at_unix": 122.0,
+                 "manager_ready_at_unix": 123.0, "state": "running"}
+        with (
+            patch.object(self.registry, "_pid_running", return_value=True),
+            patch.object(self.registry, "_pid_created_at_unix", return_value=124.0),
+            patch.object(self.registry, "_commandline", side_effect=AssertionError("recycled PID")),
+        ):
+            self.assertFalse(self.registry._owned(state))
 
     def test_exited_windows_launcher_yields_to_runtime_owned_pid(self):
         process_id = "55555555-5555-4555-8555-555555555555"

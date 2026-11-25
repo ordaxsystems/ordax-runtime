@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .models import ActionResult
-from .persistent_process_runtime import WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS
+from .persistent_process_runtime import WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS, windows_pid_created_at_unix
 from .process_environment import native_private_worker_command
 
 
@@ -129,44 +129,7 @@ class PersistentProcessActions:
         except OSError:
             return False
 
-    @staticmethod
-    def _pid_created_at_unix(pid: int) -> float | None:
-        """Use a native Win32 PID birth time before any slow CIM ownership probe.
-
-        A recycled historical manager PID may now belong to Chrome or another
-        program. OpenProcess/GetProcessTimes is bounded and does not create a
-        PowerShell subprocess for those unrelated processes.
-        """
-        if os.name != "nt" or pid <= 0:
-            return None
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            kernel32 = ctypes.windll.kernel32
-            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-            kernel32.OpenProcess.restype = wintypes.HANDLE
-            handle = kernel32.OpenProcess(0x1000, False, pid)
-            if not handle:
-                return None
-            try:
-                times = [wintypes.FILETIME() for _ in range(4)]
-                kernel32.GetProcessTimes.argtypes = [
-                    wintypes.HANDLE, *([ctypes.POINTER(wintypes.FILETIME)] * 4)
-                ]
-                kernel32.GetProcessTimes.restype = wintypes.BOOL
-                if not kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
-                    return None
-                creation = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
-                # FILETIME counts 100ns intervals since 1601-01-01 UTC.
-                unix_time = creation / 10_000_000 - 11_644_473_600
-                return unix_time if unix_time > 0 else None
-            finally:
-                kernel32.CloseHandle(handle)
-        except (AttributeError, OSError, TypeError):
-            # Absence of a birth-time proof never grants ownership: retain
-            # the stricter token-in-command-line validation below.
-            return None
+    _pid_created_at_unix = staticmethod(windows_pid_created_at_unix)
 
     @staticmethod
     def _commandline(pid: int) -> str:
@@ -303,15 +266,23 @@ class PersistentProcessActions:
             # PID as the original detached manager.
             if created_at < started_at - 10 or created_at > max(started_at + 60, ready_at + 10):
                 return False
+        recorded_birth = state.get("manager_created_at_unix")
+        if recorded_birth is not None:
+            if type(recorded_birth) not in (int, float) or recorded_birth <= 0:
+                return False
+            if created_at is not None and abs(created_at - recorded_birth) > 0.01:
+                return False
         if (
             local_token
             and local_token == token
             and ready_at > 0
-            and (handle_running or created_at is not None)
+            and created_at is not None
+            and type(recorded_birth) in (int, float)
+            and abs(created_at - recorded_birth) <= 0.01
         ):
-            # The live launcher handle or kernel birth-time check, together
-            # with the local handshake, avoids a redundant CIM query. Without
-            # either, require the same command-line proof as recovered state.
+            # A receipt-bound exact kernel birth time, not an approximate
+            # startup window or an unrelated launcher handle, proves this
+            # local handshake. Historical receipts use the command-line proof.
             return True
         commandline = self._commandline(pid)
         return token in commandline and (

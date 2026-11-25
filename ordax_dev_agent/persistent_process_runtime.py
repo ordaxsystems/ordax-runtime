@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import os
 import signal
@@ -48,6 +49,45 @@ def atomic_json(path: Path, payload: dict) -> None:
             temp.unlink()
         except OSError:
             pass
+
+
+def windows_pid_created_at_unix(pid: int) -> float | None:
+    """Use a native Win32 PID birth time before any slow CIM ownership probe.
+
+    A recycled historical manager PID may now belong to Chrome or another
+    program. OpenProcess/GetProcessTimes is bounded and does not create a
+    PowerShell subprocess for those unrelated processes.
+    """
+    if os.name != "nt" or pid <= 0:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        try:
+            times = [wintypes.FILETIME() for _ in range(4)]
+            kernel32.GetProcessTimes.argtypes = [
+                wintypes.HANDLE, *([ctypes.POINTER(wintypes.FILETIME)] * 4)
+            ]
+            kernel32.GetProcessTimes.restype = wintypes.BOOL
+            if not kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
+                return None
+            creation = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            # FILETIME counts 100ns intervals since 1601-01-01 UTC.
+            unix_time = creation / 10_000_000 - 11_644_473_600
+            return unix_time if unix_time > 0 else None
+        finally:
+            kernel32.CloseHandle(handle)
+    except (AttributeError, OSError, TypeError):
+        # Absence of a birth-time proof never grants ownership: retain
+        # the stricter token-in-command-line validation below.
+        return None
 
 
 class ProcessRuntime:
@@ -180,7 +220,10 @@ class ProcessRuntime:
 
     def run(self) -> int:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        self.update(manager_pid=os.getpid(), manager_ready_at_unix=time.time())
+        manager_pid = os.getpid()
+        created_at = windows_pid_created_at_unix(manager_pid)
+        self.update(manager_pid=manager_pid, manager_ready_at_unix=time.time(),
+                    **({"manager_created_at_unix": created_at} if created_at is not None else {}))
         creationflags = 0
         start_new_session = False
         if os.name == "nt":
@@ -276,6 +319,14 @@ def main(argv: list[str] | None = None) -> int:
         command=command,
         env=env,
     )
+    # The same private receipt token must bind the worker before it writes
+    # anything or launches a child. No new authority or receipt is created.
+    receipt = runtime.load_state()
+    token = receipt.get("token")
+    if not isinstance(token, str) or not token or not hmac.compare_digest(
+        token.encode("utf-8"), args.token.encode("utf-8")
+    ) or receipt.get("state") != "starting" or receipt.get("manager_pid"):
+        raise SystemExit("persistent process launch receipt mismatch")
     return runtime.run()
 
 
