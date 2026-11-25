@@ -178,6 +178,18 @@ function Test-VerifiedDetachedWorker {
     }
 }
 
+function Get-ReceiptBirthIdentity {
+    param($Value)
+    # Windows PowerShell ConvertTo-Json may round a double to 15 digits.
+    # Keep the exact parsed value as an invariant round-trip string in the
+    # journal; equality never depends on a lossy JSON numeric round trip.
+    $birth = [double]$Value
+    if ($birth -le 0 -or [double]::IsNaN($birth) -or [double]::IsInfinity($birth)) {
+        throw 'ORDAX_UPGRADE_SUPERVISOR_BIRTH_IDENTITY_INVALID'
+    }
+    return $birth.ToString('R',[Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Assert-PreservedWorkerReceipts {
     if (!$ContinuityJournalPath) { return }
     $journal = [IO.File]::ReadAllText($ContinuityJournalPath,[Text.Encoding]::UTF8) | ConvertFrom-Json
@@ -198,8 +210,8 @@ function Assert-PreservedWorkerReceipts {
                 $current.worker_generation -cne $expected.generation -or
                 $current.manager_pid -ne $expected.managerPid -or
                 $current.child_pid -ne $expected.childPid -or
-                $current.manager_created_at_unix -ne $expected.managerBirth -or
-                $current.child_created_at_unix -ne $expected.childBirth) { throw 'identity changed' }
+                (Get-ReceiptBirthIdentity $current.manager_created_at_unix) -cne [string]$expected.managerBirth -or
+                (Get-ReceiptBirthIdentity $current.child_created_at_unix) -cne [string]$expected.childBirth) { throw 'identity changed' }
             if ($current.state -in @('exited','failed','stopped')) {
                 # The same supervisor may naturally finish its work during
                 # a switch; only its durable terminal receipt settles it.
@@ -278,7 +290,8 @@ function Assert-NoActiveSupervisedManagers {
                                 $snapshot = [ordered]@{
                                     receiptPath = $file.FullName; processId = $record.process_id
                                     generation = $generation; managerPid = $manager; childPid = $record.child_pid
-                                    managerBirth = $record.manager_created_at_unix; childBirth = $record.child_created_at_unix
+                                    managerBirth = (Get-ReceiptBirthIdentity $record.manager_created_at_unix)
+                                    childBirth = (Get-ReceiptBirthIdentity $record.child_created_at_unix)
                                 }
                                 Write-Output ('ORDAX_UPGRADE_PRESERVED_WORKER|' + ($snapshot | ConvertTo-Json -Compress))
                                 continue
