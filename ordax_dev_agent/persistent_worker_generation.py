@@ -179,6 +179,38 @@ def shared_worker_launch_guard(path: Path):
         kernel.CloseHandle(handle)
 
 
+def assert_upgrade_not_applying(updates: Path) -> None:
+    """Reuse the canonical lifecycle journal across switch and rollback.
+
+    The updater writes applying BEFORE its exclusive quiesce scan. Starts
+    already holding shared handles must finish the handshake before that
+    scan; later starts cannot cross activation or candidate health checks.
+    No second transaction state or persistent lease.
+    """
+    if not updates.exists() and not updates.is_symlink():
+        return
+    try:
+        _ordinary(updates, directory=True)
+        for transaction in updates.iterdir():
+            if not transaction.is_dir() and not transaction.is_symlink():
+                continue
+            _ordinary(transaction, directory=True)
+            journal = transaction / "journal.json"
+            if not journal.exists() and not journal.is_symlink():
+                continue
+            _ordinary(journal)
+            record = json.loads(journal.read_text(encoding="utf-8-sig"))
+            if not isinstance(record, dict) or record.get("schema") not in {
+                "ordax.mcp-upgrade/1", "ordax.mcp-dev-upgrade/2",
+                "ordax.mcp-dev-upgrade/3", "ordax.mcp-dev-upgrade/4",
+            } or not isinstance(record.get("phase"), str):
+                raise ValueError("unrecognized upgrade journal")
+            if record["phase"] == "applying":
+                raise WorkerLaunchGuardError("persistent_worker_launch_upgrade_in_progress")
+    except (OSError, ValueError) as error:
+        raise WorkerLaunchGuardError("persistent_worker_launch_upgrade_journal_unverified") from error
+
+
 @contextmanager
 def installed_worker_launch_guard():
     runtime = _standalone_runtime_root()
@@ -192,6 +224,7 @@ def installed_worker_launch_guard():
     except (OSError, ValueError) as error:
         raise WorkerLaunchGuardError("persistent_worker_launch_fence_unavailable") from error
     with shared_worker_launch_guard(private / "worker-launch.lock"):
+        assert_upgrade_not_applying(private / "updates" / "mcp")
         yield
 
 
