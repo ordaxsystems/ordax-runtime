@@ -140,6 +140,19 @@ function Assert-NoActiveSupervisedManagers {
                 } catch {
                     throw 'ORDAX_UPGRADE_SUPERVISOR_MANAGER_IDENTITY_UNVERIFIED'
                 }
+                # Generation workers execute outside the mutable install.
+                # Keep live handoff fail-closed until the full lifecycle is proven.
+                if ($record.worker_generation) {
+                    $generation = [string]$record.worker_generation
+                    if ($generation -cnotmatch '^[0-9a-f]{64}$') {
+                        throw 'ORDAX_UPGRADE_SUPERVISOR_MANAGER_IDENTITY_UNVERIFIED'
+                    }
+                    $expectedWorker = Join-Path $env:LOCALAPPDATA ("OrdaX\worker-generations\$generation\python.exe")
+                    if ($actualPath -ieq [IO.Path]::GetFullPath($expectedWorker)) {
+                        throw ("ORDAX_UPGRADE_BLOCKED_SUPERVISED_PROCESS process_id={0} manager_pid={1}" -f
+                            $record.process_id, $manager)
+                    }
+                }
                 if (!$actualPath.ToLowerInvariant().StartsWith($rootPrefix) -or
                     ([IO.Path]::GetFileName($actualPath) -notin @('python.exe', 'pythonw.exe'))) {
                     # The manager PID now points to another process. Check that
