@@ -128,7 +128,23 @@ static bool ensure_runtime_running(const wchar_t *root) {
 }
 
 static HANDLE create_kill_job(void) {
-    HANDLE job = CreateJobObjectW(NULL, NULL);
+    // Identify the precise launcher job, not an arbitrary enclosing job
+    // (e.g. Task Scheduler or CI). The name is private host metadata.
+    wchar_t job_name[128];
+    static LONG generation = 0;
+    if (_snwprintf_s(job_name, 128, _TRUNCATE,
+            L"Local\\OrdaXRuntimeJob_%lu_%llu_%ld",
+            GetCurrentProcessId(), (unsigned long long)GetTickCount64(),
+            InterlockedIncrement(&generation)) < 0) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return NULL;
+    }
+    HANDLE job = CreateJobObjectW(NULL, ORDAX_RUNTIME_LAUNCHER ? job_name : NULL);
+    if (job != NULL && ORDAX_RUNTIME_LAUNCHER && GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(job);
+        SetLastError(ERROR_ALREADY_EXISTS);
+        return NULL;
+    }
     if (job == NULL) {
         return NULL;
     }
@@ -145,6 +161,13 @@ static HANDLE create_kill_job(void) {
             &limits,
             sizeof(limits))) {
         CloseHandle(job);
+        return NULL;
+    }
+    if (ORDAX_RUNTIME_LAUNCHER &&
+            !SetEnvironmentVariableW(L"ORDAX_RUNTIME_LAUNCHER_JOB", job_name)) {
+        DWORD error = GetLastError();
+        CloseHandle(job);
+        SetLastError(error);
         return NULL;
     }
     return job;
