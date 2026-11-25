@@ -191,6 +191,7 @@ function Get-ReceiptBirthIdentity {
 }
 
 function Assert-PreservedWorkerReceipts {
+    param($ObservedWorkers)
     if (!$ContinuityJournalPath) { return }
     $journal = [IO.File]::ReadAllText($ContinuityJournalPath,[Text.Encoding]::UTF8) | ConvertFrom-Json
     if ($journal.schema -cne 'ordax.mcp-dev-upgrade/4' -or
@@ -238,11 +239,16 @@ function Assert-PreservedWorkerReceipts {
                 continue
             }
             $reason = 'live_worker_identity'
-            $manager = Get-ExactProcessOrNull -TargetPid ([int]$current.manager_pid)
-            $worker = Join-Path $env:LOCALAPPDATA ("OrdaX\worker-generations\$($expected.generation)\python.exe")
-            if ($null -eq $manager -or !(Test-VerifiedDetachedWorker -Record $current -Manager $manager -ExpectedWorker $worker)) {
-                throw 'live worker identity unavailable'
-            }
+            # Consume the exact same verified observation used by quiesce.
+            # Never reconstruct a second manager path or query a second PID
+            # between the scan and the continuity comparison.
+            $matches = @($ObservedWorkers | Where-Object {
+                $_.kind -ceq $expected.kind -and $_.scope -ceq $expected.scope -and
+                $_.processId -ceq $expected.processId -and $_.generation -ceq $expected.generation -and
+                $_.managerPid -eq $expected.managerPid -and $_.childPid -eq $expected.childPid -and
+                $_.managerBirth -ceq $expected.managerBirth -and $_.childBirth -ceq $expected.childBirth
+            })
+            if ($matches.Count -ne 1) { throw 'live worker identity unavailable' }
         } catch {
             throw ("ORDAX_UPGRADE_PRESERVED_WORKER_CONTINUITY_LOST process_id={0} reason={1}" -f $expected.processId,$reason)
         }
@@ -250,6 +256,7 @@ function Assert-PreservedWorkerReceipts {
 }
 
 function Assert-NoActiveSupervisedManagers {
+    param($ObservedWorkers)
     # This is the existing Runtime supervisor store, not a second task registry.
     # Upgrading must never kill a persistent worker while leaving its child alive
     # and falsely recording the mission as stopped.
@@ -311,6 +318,7 @@ function Assert-NoActiveSupervisedManagers {
                                     managerBirth = (Get-ReceiptBirthIdentity $record.manager_created_at_unix)
                                     childBirth = (Get-ReceiptBirthIdentity $record.child_created_at_unix)
                                 }
+                                [void]$ObservedWorkers.Add([pscustomobject]$snapshot)
                                 Write-Output ('ORDAX_UPGRADE_PRESERVED_WORKER|' + ($snapshot | ConvertTo-Json -Compress))
                                 continue
                             }
@@ -379,8 +387,9 @@ if ($null -eq $fence) {
     throw 'ORDAX_UPGRADE_WORKER_LAUNCH_IN_PROGRESS'
 }
 try {
-Assert-PreservedWorkerReceipts
-Assert-NoActiveSupervisedManagers
+$observedWorkers = [Collections.Generic.List[object]]::new()
+Assert-NoActiveSupervisedManagers -ObservedWorkers $observedWorkers
+Assert-PreservedWorkerReceipts -ObservedWorkers $observedWorkers
 if ($PreflightOnly) {
     Write-Output 'ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR'
     exit 0

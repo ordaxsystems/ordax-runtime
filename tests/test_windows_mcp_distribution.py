@@ -990,7 +990,7 @@ Check 'exited_child'
         self.assertIn("ORDAX_UPGRADE_BLOCKED_ORPHAN_SUPERVISED_CHILD", script)
         self.assertIn("ORDAX_UPGRADE_SUPERVISOR_CHILD_IDENTITY_UNVERIFIED", script)
         self.assertLess(
-            script.index("Assert-NoActiveSupervisedManagers\nif ($PreflightOnly)"),
+            script.index("Assert-NoActiveSupervisedManagers -ObservedWorkers $observedWorkers"),
             script.index("Write-Output 'ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR'"),
         )
         self.assertNotIn("Get-CimInstance", script)
