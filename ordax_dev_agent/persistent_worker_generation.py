@@ -145,7 +145,7 @@ def _standalone_runtime_root() -> Path | None:
 
 
 @contextmanager
-def shared_worker_launch_guard(path: Path):
+def shared_worker_launch_guard(path: Path, *, exclusive: bool = False):
     """Shared Win32 file handle; quiesce uses exclusive FileShare.None.
 
     Each start can proceed independently. The non-inheritable handle is held
@@ -166,7 +166,8 @@ def shared_worker_launch_guard(path: Path):
     kernel.CloseHandle.restype = wintypes.BOOL
     # READ|WRITE access, share READ|WRITE, OPEN_ALWAYS, OPEN_REPARSE_POINT.
     # Refuse deletion/rename of the fence while any participant owns a handle.
-    handle = kernel.CreateFileW(str(path), 0xC0000000, 3, None, 4, 0x00200080, None)
+    handle = kernel.CreateFileW(str(path), 0xC0000000, 0 if exclusive else 3,
+                                None, 4, 0x00200080, None)
     if handle == ctypes.c_void_p(-1).value or not handle:
         error = ctypes.get_last_error()
         category = ("persistent_worker_launch_upgrade_in_progress"
@@ -250,11 +251,158 @@ def installed_worker() -> tuple[Path, Path, str] | None:
     return target / "python.exe", target / MODULE_DIR / "persistent_process_runtime.py", target.name
 
 
+def referenced_generations(store: Path) -> set[str]:
+    """Existing receipts are the authority; never delete a nonterminal ref."""
+    protected = set()
+    if not store.exists() and not store.is_symlink():
+        return protected
+    _ordinary(store, directory=True)
+    for kind in ("device-processes", "processes"):
+        namespace = store / kind
+        if not namespace.exists() and not namespace.is_symlink():
+            continue
+        _ordinary(namespace, directory=True)
+        for scope in namespace.iterdir():
+            _ordinary(scope, directory=True)
+            for receipt in scope.glob("*.json"):
+                if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", receipt.stem):
+                    continue
+                _ordinary(receipt)
+                record = json.loads(receipt.read_text(encoding="utf-8-sig"))
+                if not isinstance(record, dict) or record.get("process_id") != receipt.stem:
+                    raise ValueError("persistent_worker_gc_receipt_unverified")
+                generation = record.get("worker_generation")
+                if generation is None:
+                    continue
+                if not isinstance(generation, str) or not _HEX.fullmatch(generation):
+                    raise ValueError("persistent_worker_gc_receipt_unverified")
+                # Even a stale running receipt protects its slot until the
+                # normal supervisor has durably settled it.
+                if record.get("state") not in {"exited", "failed", "stopped"}:
+                    protected.add(generation)
+    return protected
+
+
+def collect_unused_generations(root: Path, protected: set[str], *, live_images: set[Path]) -> dict:
+    """Called only under the exclusive existing launch fence after commit."""
+    result = {"removed": [], "retained": [], "deferred": []}
+    if not root.exists() and not root.is_symlink():
+        return result
+    _ordinary(root, directory=True)
+    # Any live executable under the tree protects its generation. The caller
+    # must supply the successfully enumerated Windows Python images.
+    for image in live_images:
+        try:
+            relative = image.resolve().relative_to(root.resolve())
+        except ValueError:
+            continue
+        if relative.parts:
+            protected.add(relative.parts[0])
+    for slot in sorted(root.iterdir()):
+        if not _HEX.fullmatch(slot.name):
+            continue
+        if slot.name in protected:
+            result["retained"].append(slot.name)
+            continue
+        try:
+            # Never delete a corrupt, unrecognized, or reparse-point tree.
+            descriptor = inventory(slot)
+            if descriptor["generation"] != slot.name:
+                raise ValueError("persistent_worker_gc_identity_mismatch")
+            _verify(slot, descriptor["files"])
+            # A private atomic rename prevents a partially removed slot
+            # from being published again as a valid generation.
+            retired = root / (".retired-" + slot.name)
+            if retired.exists() or retired.is_symlink():
+                raise ValueError("persistent_worker_gc_retired_exists")
+            slot.rename(retired)
+            shutil.rmtree(retired)
+            result["removed"].append(slot.name)
+        except (OSError, ValueError):
+            result["deferred"].append(slot.name)
+    return result
+
+
+def windows_live_python_images() -> set[Path]:
+    """Enumerate real image paths; an unqueryable Python defers collection."""
+    import ctypes
+    from ctypes import wintypes as w
+    class Entry(ctypes.Structure):
+        _fields_ = [("dwSize", w.DWORD), ("cntUsage", w.DWORD),
+                    ("th32ProcessID", w.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", w.DWORD), ("cntThreads", w.DWORD),
+                    ("th32ParentProcessID", w.DWORD), ("pcPriClassBase", w.LONG),
+                    ("dwFlags", w.DWORD), ("szExeFile", w.WCHAR * 260)]
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateToolhelp32Snapshot.argtypes = [w.DWORD, w.DWORD]
+    k.CreateToolhelp32Snapshot.restype = w.HANDLE
+    k.Process32FirstW.argtypes = k.Process32NextW.argtypes = [w.HANDLE, ctypes.POINTER(Entry)]
+    k.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+    k.OpenProcess.restype = w.HANDLE
+    k.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, ctypes.POINTER(w.DWORD)]
+    k.CloseHandle.argtypes = [w.HANDLE]
+    handle = k.CreateToolhelp32Snapshot(2, 0)
+    if not handle or handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    images = set()
+    try:
+        entry = Entry()
+        entry.dwSize = ctypes.sizeof(entry)
+        ok = k.Process32FirstW(handle, ctypes.byref(entry))
+        while ok:
+            if entry.szExeFile.lower() in {"python.exe", "pythonw.exe"}:
+                process = k.OpenProcess(0x1000, False, entry.th32ProcessID)
+                if not process:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                try:
+                    image = ctypes.create_unicode_buffer(32768)
+                    length = w.DWORD(len(image))
+                    if not k.QueryFullProcessImageNameW(process, 0, image, ctypes.byref(length)):
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    images.add(Path(image.value))
+                finally:
+                    k.CloseHandle(process)
+            ok = k.Process32NextW(handle, ctypes.byref(entry))
+        if ctypes.get_last_error() != 18:  # ERROR_NO_MORE_FILES
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        k.CloseHandle(handle)
+    return images
+
+
+def collect_installed_generations() -> dict:
+    runtime = _standalone_runtime_root()
+    if runtime is None:
+        raise ValueError("persistent_worker_gc_requires_installed_runtime")
+    private = Path(os.environ["LOCALAPPDATA"]) / "OrdaX"
+    with shared_worker_launch_guard(private / "worker-launch.lock", exclusive=True):
+        assert_upgrade_not_applying(private / "updates" / "mcp")
+        # A remaining previous installation may still be needed for recovery.
+        # Defer rather than infer its state or remove a rollback dependency.
+        previous = runtime.parent.with_name(runtime.parent.name + ".previous-dev")
+        if previous.exists() or previous.is_symlink():
+            return {"deferred": "previous_installation_retained"}
+        manifest_path = runtime.parent / "product-manifest.json"
+        _ordinary(manifest_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+        if manifest.get("product") != "OrdaX MCP" or manifest.get("schema") != "ordax.mcp-windows-candidate/1":
+            raise ValueError("persistent_worker_gc_product_mismatch")
+        descriptor = manifest.get("persistent_worker")
+        _validate_descriptor(descriptor)
+        protected = referenced_generations(private / "DevAgent")
+        protected.add(descriptor["generation"])
+        return collect_unused_generations(private / "worker-generations", protected,
+                                          live_images=windows_live_python_images())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--inventory", type=Path, required=True)
+    operation = parser.add_mutually_exclusive_group(required=True)
+    operation.add_argument("--inventory", type=Path)
+    operation.add_argument("--collect-unused", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(inventory(args.inventory), separators=(",", ":")))
+    result = collect_installed_generations() if args.collect_unused else inventory(args.inventory)
+    print(json.dumps(result, separators=(",", ":")))
 
 
 if __name__ == "__main__":

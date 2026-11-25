@@ -554,7 +554,8 @@ except (OSError, ValueError) as error:
 }
 
 function Invoke-QuiesceRoot {
-    param([string]$Root, [switch]$PreflightOnly, [string]$VerifiedControllerRoot = '')
+    param([string]$Root, [switch]$PreflightOnly, [string]$VerifiedControllerRoot = '',
+        [switch]$PreserveVerifiedWorkers, [string]$ContinuityJournalPath = '', [ref]$Snapshot)
     # Candidate controller is selected only after verified archive/tree digest.
     # The process boundary remains Root (the installed owner Runtime).
     $controllerRoot = if ($VerifiedControllerRoot) { $VerifiedControllerRoot } else { $Root }
@@ -573,6 +574,11 @@ function Invoke-QuiesceRoot {
     $start.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
         $script + '" -InstallRoot "' + $Root + '" -TimeoutSeconds 25'
     if ($PreflightOnly) { $start.Arguments += ' -PreflightOnly' }
+    if ($PreserveVerifiedWorkers) { $start.Arguments += ' -PreserveVerifiedWorkers' }
+    if ($ContinuityJournalPath) {
+        if ($ContinuityJournalPath.Contains('"')) { throw 'Invalid continuity journal path' }
+        $start.Arguments += ' -ContinuityJournalPath "' + $ContinuityJournalPath + '"'
+    }
     $start.WorkingDirectory = $updatesRoot
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
@@ -605,6 +611,15 @@ function Invoke-QuiesceRoot {
             $category = if ($match.Success) { $match.Value } else { 'ORDAX_UPGRADE_UNCLASSIFIED_FAILURE' }
             throw ("ORDAX_MCP_QUIESCE_FAILED: exit={0} preflight={1} category={2}" -f
                 $child.ExitCode, $PreflightOnly, $category)
+        }
+        if ($null -ne $Snapshot) {
+            $observed = @()
+            foreach ($line in ($receipt -split '\r?\n')) {
+                if ($line.StartsWith('ORDAX_UPGRADE_PRESERVED_WORKER|')) {
+                    $observed += ($line.Substring('ORDAX_UPGRADE_PRESERVED_WORKER|'.Length) | ConvertFrom-Json)
+                }
+            }
+            $Snapshot.Value = $observed
         }
         Write-Output $(if ($PreflightOnly) { 'ORDAX_MCP_SUPERVISOR_PREFLIGHT_VERIFIED' } else { 'ORDAX_MCP_QUIESCE_VERIFIED' })
     } finally { $child.Dispose() }
@@ -700,7 +715,7 @@ switch ($Operation) {
         }
         # No supervised process may be sacrificed to update the MCP, even if
         # a legacy installed quiesce controller lacked current preflight.
-        Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $bootstrapRoot -PreflightOnly
+        Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $bootstrapRoot -PreflightOnly -PreserveVerifiedWorkers
         # The previous Inno DEV attempts remain historical receipts only.
         # A live journal in either schema still forbids overlapping upgrades.
         if (Test-Path -LiteralPath $updatesRoot -PathType Container) {
@@ -852,7 +867,10 @@ switch ($Operation) {
             }
             # Recheck using the already digest-verified controller in the
             # candidate. Old installed controllers may lack -PreflightOnly.
-            Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded -PreflightOnly
+            $preserved = @()
+            Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded -PreflightOnly -PreserveVerifiedWorkers -Snapshot ([ref]$preserved)
+            $journal | Add-Member -NotePropertyName preservedWorkers -NotePropertyValue @($preserved) -Force
+            Save-Journal $journalPath $journal
             $existing = Get-CanonicalScheduledTask -Name $taskName
             Assert-OurTask $existing $lifecycle 'Launch'
             if ($existing) {
@@ -880,7 +898,7 @@ switch ($Operation) {
                 Invoke-CanonicalTaskAction -Name $taskName -Action Disable
                 $ownerDisabled = $true
             }
-            Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded
+            Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $expanded -PreserveVerifiedWorkers -ContinuityJournalPath $journalPath
             [IO.Directory]::Move($installRoot,$previous)
             $oldMoved = $true
             [IO.Directory]::Move($expanded,$installRoot)
@@ -914,6 +932,7 @@ switch ($Operation) {
                 Start-Sleep -Seconds 2
             }
             if (!$healthy) { throw 'New portable DEV MCP failed local and remote readiness' }
+            Invoke-QuiesceRoot -Root $installRoot -PreflightOnly -PreserveVerifiedWorkers -ContinuityJournalPath $journalPath
             $journal.phase = 'committed'
             Save-Journal $journalPath $journal
             # DEV contains no user data under the package root; the identity
@@ -956,6 +975,27 @@ switch ($Operation) {
                     } finally { $cleanupProcess.Dispose() }
                 }
             } catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            # Collection is post-commit maintenance, never part of rollback.
+            # Reuse the installed package's generation implementation and its
+            # existing exclusive launch fence. A busy fence defers cleanup.
+            try {
+                $gcStart = [Diagnostics.ProcessStartInfo]::new()
+                $gcStart.FileName = Join-Path $installRoot 'runtime\python.exe'
+                $gcStart.Arguments = '-B -m ordax_dev_agent.persistent_worker_generation --collect-unused'
+                $gcStart.WorkingDirectory = $updatesRoot
+                $gcStart.UseShellExecute = $false
+                $gcStart.CreateNoWindow = $true
+                $gc = [Diagnostics.Process]::Start($gcStart)
+                if ($null -eq $gc) { throw 'Worker generation collection unavailable' }
+                try {
+                    if (!$gc.WaitForExit(120000)) {
+                        $gc.Kill()
+                        [void]$gc.WaitForExit(5000)
+                        throw 'Worker generation collection exceeded deadline'
+                    }
+                    if ($gc.ExitCode -ne 0) { throw 'Worker generation collection deferred' }
+                } finally { $gc.Dispose() }
+            } catch { Write-Warning "DEV worker generation cleanup deferred: $($_.Exception.Message)" }
             Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
         } catch {
             $failure = $_.Exception.Message
@@ -964,7 +1004,8 @@ switch ($Operation) {
                     if ($newMoved) {
                         $running = Get-CanonicalScheduledTask -Name $taskName
                         if ($running) { Invoke-CanonicalTaskAction -Name $taskName -Action Disable }
-                        Invoke-QuiesceRoot -Root $installRoot
+                        # Rollback never sacrifices workers that were preserved at activation.
+                        Invoke-QuiesceRoot -Root $installRoot -PreserveVerifiedWorkers
                         if (Test-Path -LiteralPath $failed) {
                             throw 'Previously failed DEV candidate directory exists'
                         }
@@ -975,6 +1016,11 @@ switch ($Operation) {
                     }
                     [IO.Directory]::Move($previous,$installRoot)
                     Invoke-RegisterAndLaunch -Root $installRoot
+                    # Verify preserved receipts with the verified transaction controller.
+                    # The restored version may predate the continuity parameters.
+                    if (Test-Path -LiteralPath $failed -PathType Container) {
+                        Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $failed -PreflightOnly -PreserveVerifiedWorkers -ContinuityJournalPath $journalPath
+                    }
                 } catch {
                     $failure += "; DEV rollback failed: $($_.Exception.Message)"
                 }
