@@ -276,6 +276,7 @@ def _product_heartbeat_tick(
         return False
 
     _record_product_heartbeat(runtime)
+    runtime["product_heartbeat_successes"] = int(runtime.get("product_heartbeat_successes", 0)) + 1
     runtime.pop("last_heartbeat_error", None)
     return True
 
@@ -1363,6 +1364,7 @@ def run(
         max_workers=3, thread_name_prefix="ordax-control-maintenance",
     )
     heartbeat_future: Future[bool] | None = None
+    busy_heartbeat_requested = False
     project_binding_future: Future[int] | None = None
     terminal_recovery_future: Future[bool] | None = None
     from .remote_protocol import DeviceAuthorizationError
@@ -1445,8 +1447,6 @@ def run(
                 if heartbeat_future is not None and heartbeat_future.done():
                     heartbeat_healthy = heartbeat_future.result()  # revocation propagates
                     heartbeat_future = None
-                    if heartbeat_healthy:
-                        runtime["product_heartbeat_successes"] += 1
                     if heartbeat_healthy and project_binding_future is None:
                         reconcile_project_bindings = getattr(
                             control, "reconcile_project_bindings", None,
@@ -1465,11 +1465,14 @@ def run(
                         _PRODUCT_HEARTBEAT_SECONDS if heartbeat_healthy
                         else _transport_retry_delay(heartbeat_failures)
                     )
+                    if busy_heartbeat_requested and heartbeat_healthy:
+                        next_heartbeat = 0.0
 
                 if heartbeat_future is None and now >= next_heartbeat:
                     runtime["product_heartbeat_attempts"] += 1
                     with runtime_lock:
                         has_active_jobs = bool(runtime.get("active_jobs"))
+                    busy_heartbeat_requested = False
                     heartbeat_future = control_maintenance_executor.submit(
                         _product_heartbeat_tick,
                         control,
@@ -1499,7 +1502,10 @@ def run(
                         product_idle_wait_seconds(
                             now=time.monotonic(),
                             next_claim_due=next_claim_due,
-                            next_heartbeat=next_heartbeat,
+                            next_heartbeat=(
+                                min(next_heartbeat, time.monotonic() + 0.25)
+                                if heartbeat_future is not None else next_heartbeat
+                            ),
                         ),
                         stop_requested, native_access_enabled,
                         wake_listener.wake if wake_listener is not None else None,
@@ -1534,7 +1540,10 @@ def run(
                         product_idle_wait_seconds(
                             now=time.monotonic(),
                             next_claim_due=next_claim_due,
-                            next_heartbeat=next_heartbeat,
+                            next_heartbeat=(
+                                min(next_heartbeat, time.monotonic() + 0.25)
+                                if heartbeat_future is not None else next_heartbeat
+                            ),
                         ),
                         stop_requested, native_access_enabled,
                         wake_listener.wake if wake_listener is not None else None,
@@ -1568,8 +1577,12 @@ def run(
                         if len(active_jobs) > 1
                         else "executing"
                     )
-                # Claim/start already records running state; do not force a
-                # device heartbeat for every transition from idle to busy.
+                    if len(active_jobs) == 1:
+                        busy_heartbeat_requested = True
+                # Preserve prompt busy presence, but never block claims on it.
+                # If an online heartbeat is in flight, coalesce the request.
+                if busy_heartbeat_requested and heartbeat_future is None:
+                    next_heartbeat = 0.0
 
                 future = job_executor.submit(
                     _execute_claimed_job,

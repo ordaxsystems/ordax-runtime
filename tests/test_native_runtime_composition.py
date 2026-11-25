@@ -523,12 +523,14 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         self.assertEqual(len(snapshots), 1)
         counters = snapshots[0]
         self.assertEqual(counters["product_heartbeat_attempts"], 1)
-        self.assertEqual(counters["product_heartbeat_successes"], 1)
+        # Claim no longer waits for the heartbeat worker. The receipt may
+        # already be committed or still in flight at this exact snapshot.
+        self.assertIn(counters["product_heartbeat_successes"], (0, 1))
         self.assertEqual(counters["product_claim_attempts"], 1)
         self.assertEqual(counters["product_empty_claims"], 0)
         self.assertEqual(counters["product_jobs_claimed"], 0)
         self.assertEqual(counters["product_wake_reconciliations"], 0)
-        self.assertEqual(counters["product_catalog_reconcile_submissions"], 1)
+        self.assertIn(counters["product_catalog_reconcile_submissions"], (0, 1))
         # The first observation was captured inside claim_next_job(), before
         # it returned an empty queue. All subsequent local reads are passive.
         for _ in range(3):
@@ -536,6 +538,7 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
             self.assertEqual(finished["product_claim_attempts"], 1)
             self.assertEqual(finished["product_empty_claims"], 1)
             self.assertEqual(finished["product_heartbeat_attempts"], 1)
+            self.assertEqual(finished["product_heartbeat_successes"], 1)
         plane.claim_next_job.assert_called_once_with()
         self.assertEqual(plane.heartbeat.call_count, 2)  # online, offline
 
@@ -557,7 +560,13 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
         def claim():
             try:
                 recovery_pending = recovery_started.wait(1) and not release_recovery.is_set()
-                readiness = server.call_args.kwargs["readiness_provider"]()
+                # Presence may settle independently while claim is in flight.
+                deadline = time.monotonic() + 1.0
+                while True:
+                    readiness = server.call_args.kwargs["readiness_provider"]()
+                    if readiness["runtime"]["product_dispatch_ready"] or time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.005)
                 observed_at_claim.append((recovery_pending, statuses.copy(),
                                           readiness["runtime"]["product_dispatch_ready"]))
             finally:
@@ -642,6 +651,43 @@ class NativeRuntimeCompositionTests(unittest.TestCase):
                 self.assertFalse(COMPUTER_GRAPHICAL_ACTIONS.intersection(plane.heartbeat.call_args.args[0]))
                 self.assertFalse((self.state / "device-token.cloudflare-v3.txt").exists())
 
+
+    def test_slow_heartbeat_never_blocks_independent_claim(self):
+        plane = Mock()
+        plane.recover_pending_reports.return_value = 0
+        entered = threading.Event()
+        release = threading.Event()
+        handlers = {}
+        observed = []
+
+        def heartbeat(*args, **kwargs):
+            if kwargs.get("status") == "online":
+                entered.set()
+                if not release.wait(3):
+                    raise AssertionError("heartbeat was not released")
+
+        def claim():
+            try:
+                observed.append(entered.wait(1) and not release.is_set())
+            finally:
+                release.set()
+                handlers[signal.SIGTERM]()
+            return None
+
+        plane.heartbeat.side_effect = heartbeat
+        plane.claim_next_job.side_effect = claim
+        with (
+            patch("ordax_dev_agent.control_plane.build_control_plane", return_value=plane),
+            patch("ordax_dev_agent.main.start_status_server"),
+            patch("ordax_dev_agent.main._start_local_watchdog", return_value=None),
+            patch("ordax_dev_agent.main.signal.signal",
+                  side_effect=lambda kind, handler: handlers.__setitem__(kind, handler)),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(run(self.config, device_credential_provider=self.provider,
+                                 native_access_enabled=lambda: True, status_port=0), 0)
+        self.assertEqual(observed, [True])
+        self.assertEqual(plane.heartbeat.call_count, 2)
 
     def test_product_loop_executes_two_jobs_concurrently_and_isolates_failure(self):
         jobs = [
