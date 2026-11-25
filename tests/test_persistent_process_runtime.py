@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ordax_dev_agent.persistent_process_runtime import ProcessRuntime
+from ordax_dev_agent.persistent_process_runtime import ProcessRuntime, main
 
 
 class PersistentProcessRuntimeTests(unittest.TestCase):
@@ -19,6 +19,25 @@ class PersistentProcessRuntimeTests(unittest.TestCase):
         runtime.child = SimpleNamespace(poll=lambda: None, stdin=io.StringIO())
         runtime._stopping = False
         return runtime
+
+    def test_worker_entry_rejects_wrong_token_or_already_started_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state.json"
+            args = ["--state", str(state), "--log", str(root / "child.log"),
+                    "--stdin-file", str(root / "stdin.jsonl"), "--cwd", str(root),
+                    "--token", "expected-token", "--", "never-launch"]
+            for receipt in (
+                {"state": "starting", "token": "different-token"},
+                {"state": "running", "token": "expected-token", "manager_pid": 123},
+                {"state": "starting", "token": "expected-token", "manager_pid": 123},
+            ):
+                original = json.dumps(receipt)
+                state.write_text(original, encoding="utf-8")
+                with patch.object(ProcessRuntime, "run", side_effect=AssertionError("must not launch")):
+                    with self.assertRaisesRegex(SystemExit, "launch receipt mismatch"):
+                        main(args)
+                self.assertEqual(state.read_text(encoding="utf-8"), original)
 
     def test_supervised_child_uses_same_private_environment_boundary(self):
         import os
