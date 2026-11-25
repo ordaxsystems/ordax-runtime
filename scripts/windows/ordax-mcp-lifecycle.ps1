@@ -975,6 +975,27 @@ switch ($Operation) {
                     } finally { $cleanupProcess.Dispose() }
                 }
             } catch { Write-Warning "DEV cleanup after committed activation failed: $($_.Exception.Message)" }
+            # Collection is post-commit maintenance, never part of rollback.
+            # Reuse the installed package's generation implementation and its
+            # existing exclusive launch fence. A busy fence defers cleanup.
+            try {
+                $gcStart = [Diagnostics.ProcessStartInfo]::new()
+                $gcStart.FileName = Join-Path $installRoot 'runtime\python.exe'
+                $gcStart.Arguments = '-B -m ordax_dev_agent.persistent_worker_generation --collect-unused'
+                $gcStart.WorkingDirectory = $updatesRoot
+                $gcStart.UseShellExecute = $false
+                $gcStart.CreateNoWindow = $true
+                $gc = [Diagnostics.Process]::Start($gcStart)
+                if ($null -eq $gc) { throw 'Worker generation collection unavailable' }
+                try {
+                    if (!$gc.WaitForExit(120000)) {
+                        $gc.Kill()
+                        [void]$gc.WaitForExit(5000)
+                        throw 'Worker generation collection exceeded deadline'
+                    }
+                    if ($gc.ExitCode -ne 0) { throw 'Worker generation collection deferred' }
+                } finally { $gc.Dispose() }
+            } catch { Write-Warning "DEV worker generation cleanup deferred: $($_.Exception.Message)" }
             Write-Output "ORDAX_MCP_DEV_RUNTIME_ACTIVATED commit=$($journal.targetCommit)"
         } catch {
             $failure = $_.Exception.Message

@@ -9,6 +9,7 @@ from pathlib import Path
 from ordax_dev_agent.persistent_worker_generation import (
     MODULE_DIR, MODULES, inventory, prepare_generation,
     assert_upgrade_not_applying, WorkerLaunchGuardError,
+    referenced_generations, collect_unused_generations,
 )
 
 
@@ -47,6 +48,36 @@ class WorkerGenerationTests(unittest.TestCase):
         (transaction / "journal.json").write_text("{", encoding="utf-8")
         with self.assertRaisesRegex(WorkerLaunchGuardError, "journal_unverified"):
             assert_upgrade_not_applying(transaction.parent)
+
+    def test_collect_retains_current_live_and_nonterminal_receipts(self):
+        slots = []
+        for index in range(5):
+            (self.source / "python.exe").write_bytes(str(index).encode())
+            slots.append(prepare_generation(self.source, self.root, inventory(self.source)))
+        store = self.root.parent / "receipts"
+        scope = store / "device-processes" / "device"
+        scope.mkdir(parents=True)
+        for n, state in ((1, "running"), (3, "exited")):
+            process_id = f"feadbeef-0000-4000-8000-00000000000{n}"
+            (scope / (process_id + ".json")).write_text(json.dumps({
+                "process_id": process_id, "state": state, "worker_generation": slots[n].name,
+            }), encoding="utf-8")
+        protected = referenced_generations(store) | {slots[0].name}
+        (slots[4] / "unexpected.txt").write_text("tampered", encoding="utf-8")
+        result = collect_unused_generations(self.root, protected, live_images={slots[2] / "python.exe"})
+        self.assertEqual(result["removed"], [slots[3].name])
+        self.assertEqual(set(result["retained"]), {slot.name for slot in slots[:3]})
+        self.assertEqual(result["deferred"], [slots[4].name])
+        self.assertFalse(slots[3].exists())
+        self.assertTrue(all(slot.exists() for slot in slots[:3]))
+        self.assertEqual(len(list(scope.glob("*.json"))), 2)
+
+    def test_collection_reference_scan_rejects_invalid_receipt(self):
+        scope = self.root.parent / "receipts" / "device-processes" / "device"
+        scope.mkdir(parents=True)
+        (scope / "feadbeef-0000-4000-8000-000000000001.json").write_text("{", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            referenced_generations(scope.parent.parent)
 
     def test_same_content_reused_and_only_worker_files_copied(self):
         descriptor = inventory(self.source)

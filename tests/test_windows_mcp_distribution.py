@@ -224,7 +224,11 @@ class WindowsMcpDistributionTests(unittest.TestCase):
                 receipt.write_text(json.dumps({**proof, "child_created_at_unix": 1}), encoding="utf-8")
                 result = subprocess.run(verify, capture_output=True, text=True, errors="replace", env=env, timeout=15)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("ORDAX_UPGRADE_PRESERVED_WORKER_CONTINUITY_LOST", result.stdout + result.stderr)
+                # The unified process scan may reject the tampered worker
+                # before the preserved-receipt comparison. Both are fail-closed.
+                self.assertRegex(result.stdout + result.stderr,
+                                 r"ORDAX_UPGRADE_(?:PRESERVED_WORKER_CONTINUITY_LOST|BLOCKED_SUPERVISED_PROCESS)")
+                self.assertNotIn("ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR", result.stdout)
                 self.assertIsNone(manager.poll())
                 self.assertIsNone(child.poll())
             finally:
