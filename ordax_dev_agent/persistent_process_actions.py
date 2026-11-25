@@ -17,6 +17,7 @@ from typing import Any
 from .models import ActionResult
 from .persistent_process_runtime import WINDOWS_CHILD_TREE_STOP_TIMEOUT_SECONDS, windows_pid_created_at_unix
 from .process_environment import native_private_worker_command
+from .persistent_worker_generation import installed_worker
 
 
 @dataclass(frozen=True)
@@ -406,7 +407,16 @@ class PersistentProcessActions:
                               and sys.platform == "win32"
                               and self.config.computer_access_source == "native-windows-dev"
                               and os.environ.get("ORDAX_RUNTIME_HOST_PROFILE") == "ordax-desktop")
-        manager_command = native_private_worker_command(sys.executable, [
+        worker_generation = None
+        worker_executable = sys.executable
+        try:
+            worker = installed_worker()
+            if worker is not None:
+                worker_executable, runtime, worker_generation = worker
+        except (OSError, ValueError) as error:
+            return ActionResult(False, f"persistent worker generation unavailable: {error}")
+        manager_command = native_private_worker_command(str(worker_executable), [
+            *(["-B"] if worker_generation else []),
             *(["--persistent-process-worker"] if native_frozen or desktop_frozen
               else [str(runtime)]),
             "--state", str(state_path),
@@ -441,6 +451,7 @@ class PersistentProcessActions:
                 else {"project": project.slug}
             ),
             "token": token,
+            **({"worker_generation": worker_generation} if worker_generation else {}),
             "state": "starting",
             "cwd": (
                 str(cwd) if isinstance(project, _DeviceProcessScope)

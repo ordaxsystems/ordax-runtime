@@ -144,6 +144,10 @@ if (-not (Test-Path $launcher)) { throw "Runtime launcher missing" }
 Copy-Item (Join-Path $root "scripts\windows\ordax-upgrade-quiesce.ps1") (Join-Path $stage "ordax-upgrade-quiesce.ps1")
 Copy-Item (Join-Path $root "scripts\windows\ordax-mcp-lifecycle.ps1") (Join-Path $stage "ordax-mcp-lifecycle.ps1")
 Copy-Item (Join-Path $root "scripts\windows\ordax-agent-watchdog.ps1") (Join-Path $stage "ordax-agent-watchdog.ps1")
+# The supervisor generation inventory comes from the SAME staged Python.
+$workerJson = & $privatePython -B -m ordax_dev_agent.persistent_worker_generation --inventory $runtime
+if ($LASTEXITCODE -ne 0) { throw "Canonical persistent worker inventory failed" }
+$workerGeneration = ($workerJson -join "`n") | ConvertFrom-Json
 $manifest = [ordered]@{
   schema = "ordax.mcp-windows-candidate/1"
   product = "OrdaX MCP"
@@ -151,6 +155,7 @@ $manifest = [ordered]@{
   runtime_version = $packageVersion
   runtime_source_commit = $sourceCommit
   runtime = "ORDAX Runtime.exe"
+  persistent_worker = $workerGeneration
   account_authority = "ordax-platform"
   control_plane_provenance = $endpoint
   studio_required = $false

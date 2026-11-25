@@ -140,6 +140,90 @@ function Assert-NoActiveSupervisedManagers {
                 } catch {
                     throw 'ORDAX_UPGRADE_SUPERVISOR_MANAGER_IDENTITY_UNVERIFIED'
                 }
+                # Generation workers now execute outside the mutable install.
+                # Until live handoff is proven, retain the existing fail-closed
+                # policy, even before the child has published its PID.
+                if ($record.worker_generation) {
+                    $generation = [string]$record.worker_generation
+                    if ($generation -cnotmatch '^[0-9a-f]{64}
+                    ([IO.Path]::GetFileName($actualPath) -notin @('python.exe', 'pythonw.exe'))) {
+                    # The manager PID now points to another process. Check that
+                    # its old child PID was also recycled or has exited.
+                    Assert-NoLiveOrphanSupervisedChild -Record $record
+                    continue
+                }
+                $recorded = [double]$record.manager_ready_at_unix
+                if ($recorded -le 0) { $recorded = [double]$record.started_at_unix }
+                if ($recorded -le 0 -or [Math]::Abs($startedUnix - $recorded) -gt 300) {
+                    throw 'ORDAX_UPGRADE_SUPERVISOR_MANAGER_IDENTITY_UNVERIFIED'
+                }
+                throw ("ORDAX_UPGRADE_BLOCKED_SUPERVISED_PROCESS process_id={0} manager_pid={1}" -f
+                    $record.process_id, $manager)
+            }
+        }
+    }
+}
+Assert-NoActiveSupervisedManagers
+if ($PreflightOnly) {
+    Write-Output 'ORDAX_UPGRADE_SUPERVISOR_PREFLIGHT_CLEAR'
+    exit 0
+}
+
+$deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSeconds))
+do {
+    $processes = @(Get-OrdaxPackagedProcesses)
+    if (-not $processes.Count) {
+        Write-Output "ORDAX_UPGRADE_QUIESCED"
+        exit 0
+    }
+
+    foreach ($process in $processes) {
+        $pidValue = [int]$process.ProcessId
+        if ($pidValue -le 0 -or $pidValue -eq $PID) { continue }
+        $handle = Get-ExactProcessOrNull -TargetPid $pidValue
+        if ($null -eq $handle) { continue }
+        try {
+            $actualStart = $handle.StartTime.ToUniversalTime().Ticks
+            $actualPath = [IO.Path]::GetFullPath([string]$handle.Path)
+        } catch {
+            if ($null -eq (Get-ExactProcessOrNull -TargetPid $pidValue)) { continue }
+            throw "ORDAX_UPGRADE_PROCESS_PATH_UNVERIFIED pid=$pidValue"
+        }
+        if ($actualStart -ne $process.StartTimeTicks) {
+            throw "ORDAX_UPGRADE_IDENTITY_CHANGED pid=$pidValue"
+        }
+        if ($actualPath -ine $process.ExecutablePath -or
+            -not $actualPath.ToLowerInvariant().StartsWith($rootPrefix)) {
+            throw "ORDAX_UPGRADE_PROCESS_PATH_UNVERIFIED pid=$pidValue"
+        }
+        Write-Output ("ORDAX_UPGRADE_STOP pid={0} name={1} path={2}" -f $pidValue, $process.Name, $process.ExecutablePath)
+        try {
+            Stop-Process -InputObject $handle -Force -ErrorAction Stop
+        } catch {
+            if ($null -eq (Get-ExactProcessOrNull -TargetPid $pidValue)) { continue }
+            # Preserve a stable fail-closed category even when Windows emits
+            # localized Stop-Process errors. The lifecycle records only it.
+            throw ("ORDAX_UPGRADE_PROCESS_STOP_FAILED pid={0}" -f $pidValue)
+        }
+    }
+    Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $deadline)
+
+$remaining = @(Get-OrdaxPackagedProcesses)
+if ($remaining.Count) {
+    $details = ($remaining | ForEach-Object { "$($_.ProcessId):$($_.ExecutablePath)" }) -join '; '
+    throw "ORDAX packaged processes are still running after upgrade quiesce: $details"
+}
+Write-Output "ORDAX_UPGRADE_QUIESCED"
+) {
+                        throw 'ORDAX_UPGRADE_SUPERVISOR_MANAGER_IDENTITY_UNVERIFIED'
+                    }
+                    $expectedWorker = Join-Path $env:LOCALAPPDATA ("OrdaX\worker-generations\$generation\python.exe")
+                    if ($actualPath -ieq [IO.Path]::GetFullPath($expectedWorker)) {
+                        throw ("ORDAX_UPGRADE_BLOCKED_SUPERVISED_PROCESS process_id={0} manager_pid={1}" -f
+                            $record.process_id, $manager)
+                    }
+                }
                 if (!$actualPath.ToLowerInvariant().StartsWith($rootPrefix) -or
                     ([IO.Path]::GetFileName($actualPath) -notin @('python.exe', 'pythonw.exe'))) {
                     # The manager PID now points to another process. Check that
