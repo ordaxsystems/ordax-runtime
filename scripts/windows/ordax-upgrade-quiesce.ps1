@@ -74,8 +74,17 @@ function Assert-NoLiveOrphanSupervisedChild {
     if ($null -eq $child) { return }
     try {
         $actualPath = [IO.Path]::GetFullPath([string]$child.Path)
-        $actualStarted = ([DateTimeOffset]$child.StartTime.ToUniversalTime()).ToUnixTimeSeconds()
-        $recordedStarted = [double]$Record.running_at_unix
+        $actualStarted = ([double]$child.StartTime.ToUniversalTime().Ticks - 621355968000000000) / 10000000
+        $exactBirth = $null -ne $Record.PSObject.Properties['child_created_at_unix']
+        $exactImage = $null -ne $Record.PSObject.Properties['child_executable_path']
+        if ($exactBirth -ne $exactImage) {
+            throw 'ORDAX_UPGRADE_SUPERVISOR_CHILD_IDENTITY_UNVERIFIED'
+        }
+        if ($exactBirth) {
+            $recordedStarted = [double]$Record.child_created_at_unix
+        } else {
+            $recordedStarted = [double]$Record.running_at_unix
+        }
     } catch {
         # Unknown ownership is not evidence that stopping the owner is safe.
         throw 'ORDAX_UPGRADE_SUPERVISOR_CHILD_IDENTITY_UNVERIFIED'
@@ -83,11 +92,17 @@ function Assert-NoLiveOrphanSupervisedChild {
     if ($recordedStarted -le 0) {
         throw 'ORDAX_UPGRADE_SUPERVISOR_CHILD_IDENTITY_UNVERIFIED'
     }
-    if ([Math]::Abs($actualStarted - $recordedStarted) -gt 10) {
+    $tolerance = 10
+    if ($exactBirth) { $tolerance = 0.01 }
+    if ([Math]::Abs($actualStarted - $recordedStarted) -gt $tolerance) {
         # Definitively different start time: a recycled PID, not this child.
         return
     }
-    $command = @($Record.argv)
+    if ($exactImage) {
+        $command = @([string]$Record.child_executable_path)
+    } else {
+        $command = @($Record.argv)
+    }
     if ($command.Count -lt 1 -or
         !($command[0] -is [string]) -or
         ![IO.Path]::IsPathRooted([string]$command[0])) {
