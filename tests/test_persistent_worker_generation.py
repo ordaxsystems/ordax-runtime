@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from ordax_dev_agent.persistent_worker_generation import (
     MODULE_DIR, MODULES, inventory, prepare_generation,
+    assert_upgrade_not_applying, WorkerLaunchGuardError,
 )
 
 
@@ -23,6 +25,28 @@ class WorkerGenerationTests(unittest.TestCase):
         for name in MODULES:
             (self.source / MODULE_DIR / name).write_bytes(name.encode())
         (self.source / "not-a-worker.py").write_text("excluded", encoding="utf-8")
+
+    def test_existing_upgrade_journal_fences_entire_activation(self):
+        updates = self.root / "updates"
+        transaction = updates / "a" 
+        transaction.mkdir(parents=True)
+        journal = transaction / "journal.json"
+        for phase in ("staged", "applying", "committed", "recovery-required"):
+            journal.write_text(json.dumps({
+                "schema": "ordax.mcp-dev-upgrade/4", "phase": phase,
+            }), encoding="utf-8")
+            if phase == "applying":
+                with self.assertRaisesRegex(WorkerLaunchGuardError, "upgrade_in_progress"):
+                    assert_upgrade_not_applying(updates)
+            else:
+                assert_upgrade_not_applying(updates)
+
+    def test_unreadable_upgrade_journal_is_not_treated_as_clear(self):
+        transaction = self.root / "updates" / "a"
+        transaction.mkdir(parents=True)
+        (transaction / "journal.json").write_text("{", encoding="utf-8")
+        with self.assertRaisesRegex(WorkerLaunchGuardError, "journal_unverified"):
+            assert_upgrade_not_applying(transaction.parent)
 
     def test_same_content_reused_and_only_worker_files_copied(self):
         descriptor = inventory(self.source)
