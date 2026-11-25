@@ -182,7 +182,8 @@ function Assert-PreservedWorkerReceipts {
     if (!$ContinuityJournalPath) { return }
     $journal = [IO.File]::ReadAllText($ContinuityJournalPath,[Text.Encoding]::UTF8) | ConvertFrom-Json
     if ($journal.schema -cne 'ordax.mcp-dev-upgrade/4' -or
-        $journal.phase -cne 'applying') { throw 'ORDAX_UPGRADE_CONTINUITY_JOURNAL_INVALID' }
+        $journal.phase -cne 'applying' -or
+        $null -eq $journal.PSObject.Properties['preservedWorkers']) { throw 'ORDAX_UPGRADE_CONTINUITY_JOURNAL_INVALID' }
     $store = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'OrdaX\DevAgent')).TrimEnd('\') + '\'
     foreach ($expected in @($journal.preservedWorkers)) {
         if ($null -eq $expected) { continue }
@@ -243,6 +244,9 @@ function Assert-NoActiveSupervisedManagers {
                 if ($record.state -notin @('starting', 'running', 'stopping')) { continue }
                 $manager = [int]$record.manager_pid
                 if ($manager -le 0) {
+                    if ($record.worker_generation -and $record.state -eq 'starting') {
+                        throw 'ORDAX_UPGRADE_WORKER_LAUNCH_IN_PROGRESS'
+                    }
                     Assert-NoLiveOrphanSupervisedChild -Record $record
                     continue
                 }
@@ -284,6 +288,13 @@ function Assert-NoActiveSupervisedManagers {
                             $record.process_id, $manager)
                     }
                     # A declared generation never authorizes a different manager.
+                    # Only a proven recycled PID may be ignored.
+                    $birth = [double]$record.manager_created_at_unix
+                    $actualBirth = ([double]$handle.StartTime.ToUniversalTime().Ticks - 621355968000000000) / 10000000
+                    if ($birth -le 0 -or [double]::IsNaN($birth) -or [double]::IsInfinity($birth) -or
+                        [Math]::Abs($actualBirth - $birth) -le 0.01) {
+                        throw 'ORDAX_UPGRADE_SUPERVISOR_MANAGER_IDENTITY_UNVERIFIED'
+                    }
                     Assert-NoLiveOrphanSupervisedChild -Record $record
                     continue
                 }

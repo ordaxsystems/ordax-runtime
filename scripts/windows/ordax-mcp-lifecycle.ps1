@@ -995,6 +995,11 @@ switch ($Operation) {
                     }
                     [IO.Directory]::Move($previous,$installRoot)
                     Invoke-RegisterAndLaunch -Root $installRoot
+                    # Verify preserved receipts with the verified transaction controller.
+                    # The restored version may predate the continuity parameters.
+                    if (Test-Path -LiteralPath $failed -PathType Container) {
+                        Invoke-QuiesceRoot -Root $installRoot -VerifiedControllerRoot $failed -PreflightOnly -PreserveVerifiedWorkers -ContinuityJournalPath $journalPath
+                    }
                 } catch {
                     $failure += "; DEV rollback failed: $($_.Exception.Message)"
                 }
