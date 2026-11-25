@@ -219,6 +219,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
             ]
 
         k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateJobObjectW.argtypes = [ctypes.c_void_p, w.LPCWSTR]
         k.CreateJobObjectW.restype = w.HANDLE
         k.SetInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD]
         k.AssignProcessToJobObject.argtypes = [w.HANDLE, w.HANDLE]
@@ -257,7 +258,8 @@ class WindowsMcpDistributionTests(unittest.TestCase):
                 "creationflags=0x01000000|0x00000200|0x00000008|0x08000000); "
                 "time.sleep(60)"
             )
-            job = checked(k.CreateJobObjectW(None, None))
+            job_name = f"Local\\OrdaXRuntimeJob_{os.getpid()}_{time.monotonic_ns()}_1"
+            job = checked(k.CreateJobObjectW(None, job_name))
             parent = None
             manager_handle = child_handle = None
             try:
@@ -268,6 +270,7 @@ class WindowsMcpDistributionTests(unittest.TestCase):
                     [sys.executable, "-u", "-c", parent_code, json.dumps(worker)],
                     cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, text=True,
+                    env=dict(os.environ, ORDAX_RUNTIME_LAUNCHER_JOB=job_name),
                 )
                 checked(k.AssignProcessToJobObject(job, int(parent._handle)))
                 parent.stdin.write("go\n")
@@ -289,6 +292,8 @@ class WindowsMcpDistributionTests(unittest.TestCase):
                 self.assertGreater(before.get("manager_created_at_unix", 0), 0)
                 self.assertGreater(before.get("child_created_at_unix", 0), 0)
                 self.assertTrue(Path(before["child_executable_path"]).is_absolute())
+                self.assertIs(before.get("launcher_job_breakaway_verified"), True)
+                self.assertEqual(before.get("launcher_job_name"), job_name)
                 manager_handle = checked(k.OpenProcess(0x100000 | 0x1000, False, before["manager_pid"]))
                 child_handle = checked(k.OpenProcess(0x100000 | 0x1000, False, before["child_pid"]))
                 for handle in (manager_handle, child_handle):
