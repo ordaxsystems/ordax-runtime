@@ -146,6 +146,148 @@ class WindowsMcpDistributionTests(unittest.TestCase):
                     manager.terminate()
                 manager.wait(timeout=10)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows job breakaway")
+    def test_canonical_supervisor_survives_disposable_launcher_job(self):
+        # A private test job only. Never touch the installed Runtime, owner
+        # task, process store, or any external application.
+        import ctypes
+        import os
+        import time
+        import uuid
+        from ctypes import wintypes as w
+
+        class Basic(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", w.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", w.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", w.DWORD),
+                ("SchedulingClass", w.DWORD),
+            ]
+
+        class Io(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_ulonglong) for name in (
+                "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+            )]
+
+        class Extended(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", Basic), ("IoInfo", Io)] + [
+                (name, ctypes.c_size_t) for name in (
+                    "ProcessMemoryLimit", "JobMemoryLimit",
+                    "PeakProcessMemoryUsed", "PeakJobMemoryUsed",
+                )
+            ]
+
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateJobObjectW.restype = w.HANDLE
+        k.SetInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD]
+        k.AssignProcessToJobObject.argtypes = [w.HANDLE, w.HANDLE]
+        k.IsProcessInJob.argtypes = [w.HANDLE, w.HANDLE, ctypes.POINTER(w.BOOL)]
+        k.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+        k.OpenProcess.restype = w.HANDLE
+        k.TerminateJobObject.argtypes = [w.HANDLE, w.UINT]
+        k.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
+        k.WaitForSingleObject.restype = w.DWORD
+        k.CloseHandle.argtypes = [w.HANDLE]
+
+        def checked(result):
+            if not result:
+                raise ctypes.WinError(ctypes.get_last_error())
+            return result
+
+        with tempfile.TemporaryDirectory(prefix="ordax-job-continuity-") as directory:
+            base = Path(directory)
+            state, log, stdin = (base / name for name in ("receipt.json", "child.log", "stdin.jsonl"))
+            process_id, token = str(uuid.uuid4()), uuid.uuid4().hex
+            state.write_text(json.dumps({
+                "process_id": process_id, "state": "starting", "token": token,
+                "started_at_unix": time.time(),
+            }), encoding="utf-8")
+            stdin.touch()
+            worker = [
+                sys.executable, "-B", "-m", "ordax_dev_agent.persistent_process_runtime",
+                "--state", str(state), "--log", str(log), "--stdin-file", str(stdin),
+                "--cwd", str(base), "--token", token, "--", sys.executable,
+                "-u", "-c", "print('READY',flush=True); print(input(),flush=True)",
+            ]
+            parent_code = (
+                "import json,subprocess,sys,time; input(); "
+                "subprocess.Popen(json.loads(sys.argv[1]),stdin=subprocess.DEVNULL,"
+                "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,"
+                "creationflags=0x01000000|0x00000200|0x00000008|0x08000000); "
+                "time.sleep(60)"
+            )
+            job = checked(k.CreateJobObjectW(None, None))
+            parent = None
+            manager_handle = child_handle = None
+            try:
+                limits = Extended()
+                limits.BasicLimitInformation.LimitFlags = 0x2000 | 0x800
+                checked(k.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+                parent = subprocess.Popen(
+                    [sys.executable, "-u", "-c", parent_code, json.dumps(worker)],
+                    cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, text=True,
+                )
+                checked(k.AssignProcessToJobObject(job, int(parent._handle)))
+                parent.stdin.write("go\n")
+                parent.stdin.flush()
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    try:
+                        before = json.loads(state.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        time.sleep(0.05)
+                        continue
+                    if before.get("state") == "running":
+                        break
+                    if before.get("state") in {"failed", "exited", "stopped"}:
+                        self.fail(f"worker ended before handoff: {before.get('state')}")
+                    time.sleep(0.05)
+                else:
+                    self.fail("canonical worker handshake timed out")
+                self.assertGreater(before.get("manager_created_at_unix", 0), 0)
+                self.assertGreater(before.get("child_created_at_unix", 0), 0)
+                self.assertTrue(Path(before["child_executable_path"]).is_absolute())
+                manager_handle = checked(k.OpenProcess(0x100000 | 0x1000, False, before["manager_pid"]))
+                child_handle = checked(k.OpenProcess(0x100000 | 0x1000, False, before["child_pid"]))
+                for handle in (manager_handle, child_handle):
+                    inside = w.BOOL()
+                    checked(k.IsProcessInJob(handle, job, ctypes.byref(inside)))
+                    self.assertFalse(inside.value)
+                checked(k.TerminateJobObject(job, 0))
+                parent.wait(timeout=5)
+                for handle in (manager_handle, child_handle):
+                    self.assertEqual(k.WaitForSingleObject(handle, 0), 258)
+                with stdin.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps({"text": "CONTINUITY_OK"}) + "\n")
+                self.assertEqual(k.WaitForSingleObject(manager_handle, 15000), 0)
+                self.assertEqual(k.WaitForSingleObject(child_handle, 5000), 0)
+                after = json.loads(state.read_text(encoding="utf-8"))
+                for field in ("process_id", "manager_pid", "child_pid",
+                              "manager_created_at_unix", "child_created_at_unix"):
+                    self.assertEqual(before[field], after[field])
+                self.assertEqual(after["state"], "exited")
+                self.assertEqual(after["returncode"], 0)
+                self.assertIn("CONTINUITY_OK", log.read_text(encoding="utf-8"))
+            finally:
+                # Cooperative stop of only this test's authenticated worker.
+                if manager_handle and k.WaitForSingleObject(manager_handle, 0) == 258:
+                    with stdin.open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps({"control": "stop"}) + "\n")
+                    k.WaitForSingleObject(manager_handle, 20000)
+                if parent is not None and parent.poll() is None:
+                    parent.terminate()
+                    parent.wait(timeout=5)
+                for handle in (manager_handle, child_handle, job):
+                    if handle:
+                        k.CloseHandle(handle)
+
     @unittest.skipUnless(sys.platform == "win32", "PowerShell native upgrade controller")
     def test_verified_candidate_quiesce_is_used_and_errors_are_classified(self):
         # Extract only the canonical function: never execute the full lifecycle,

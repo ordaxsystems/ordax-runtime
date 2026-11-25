@@ -90,6 +90,42 @@ def windows_pid_created_at_unix(pid: int) -> float | None:
         return None
 
 
+def windows_child_identity(child: subprocess.Popen) -> dict:
+    """Record the image and creation time from the owned child handle.
+
+    No PID reopen: a quick exit and recycled PID cannot substitute a
+    different process. If Windows cannot prove identity, omit the proof.
+    """
+    if os.name != "nt":
+        return {}
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = wintypes.HANDLE(int(child._handle))
+        times = [wintypes.FILETIME() for _ in range(4)]
+        kernel32.GetProcessTimes.argtypes = [
+            wintypes.HANDLE, *([ctypes.POINTER(wintypes.FILETIME)] * 4)
+        ]
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
+        if not kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
+            return {}
+        creation = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        birth = creation / 10_000_000 - 11_644_473_600
+        image = ctypes.create_unicode_buffer(32768)
+        length = wintypes.DWORD(len(image))
+        query = kernel32.QueryFullProcessImageNameW
+        query.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                          ctypes.POINTER(wintypes.DWORD)]
+        query.restype = wintypes.BOOL
+        if birth <= 0 or not query(handle, 0, image, ctypes.byref(length)) or not image.value:
+            return {}
+        return {"child_created_at_unix": birth, "child_executable_path": image.value}
+    except (AttributeError, OSError, TypeError, ValueError):
+        return {}
+
+
 class ProcessRuntime:
     def __init__(
         self,
@@ -265,6 +301,7 @@ class ProcessRuntime:
                 state="running",
                 child_pid=self.child.pid,
                 running_at_unix=time.time(),
+                **windows_child_identity(self.child),
             )
             self._stdin_thread = threading.Thread(
                 target=self._pump_stdin,
