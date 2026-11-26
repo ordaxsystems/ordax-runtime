@@ -680,6 +680,23 @@ class ComputerControlActions:
         )
 
     def computer_click(self, payload: dict[str, Any]) -> ActionResult:
+        if payload.get("mode") == "background":
+            from .computer_background_button import click_background_button
+            from .computer_background_input import UnsupportedBackgroundTarget
+            try:
+                data = click_background_button(payload)
+            except UnsupportedBackgroundTarget as error:
+                return ActionResult(False, str(error), {
+                    "error_code": str(error), "mode": "background",
+                    "action_dispatched": False,
+                })
+            return ActionResult(True, "native background button message dispatched", data)
+        if payload.get("mode", "foreground") != "foreground":
+            return ActionResult(False, "unsupported click mode", {"action_dispatched": False})
+        if set(payload) - {"x", "y", "button", "clicks", "mode"}:
+            return ActionResult(False, "global click rejects targeted arguments", {
+                "action_dispatched": False,
+            })
         try:
             user32 = self._user32()
         except ValueError as error:

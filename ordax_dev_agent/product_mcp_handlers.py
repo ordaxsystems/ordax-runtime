@@ -819,8 +819,25 @@ def computer_focus_window(device_id: str, project: str, handle: str, space_id: s
     return _invoke(device_id=device_id, action="computer.focus_window", project=project, space_id=space_id, arguments={"project": project, "handle": handle})
 
 
-def computer_click(device_id: str, project: str, x: int, y: int, button: str = "left", clicks: int = 1, space_id: str | None = None) -> dict[str, Any]:
-    return _invoke(device_id=device_id, action="computer.click", project=project, space_id=space_id, arguments={"project": project, "x": x, "y": y, "button": button, "clicks": clicks})
+def computer_click(
+    device_id: str, project: str, x: int | None = None, y: int | None = None,
+    button: str = "left", clicks: int = 1, space_id: str | None = None,
+    mode: str = "foreground", handle: str | None = None,
+    expected_pid: int | None = None, control_text: str | None = None,
+) -> dict[str, Any]:
+    if mode == "background":
+        arguments = {"project": project, "mode": mode, "handle": handle,
+                     "expected_pid": expected_pid, "control_text": control_text,
+                     "button": button, "clicks": clicks}
+        if x is not None or y is not None:
+            arguments.update({"x": x, "y": y})
+    else:
+        arguments = {"project": project, "x": x, "y": y,
+                     "button": button, "clicks": clicks}
+        if mode != "foreground":
+            arguments["mode"] = mode
+    return _invoke(device_id=device_id, action="computer.click",
+                   project=project, space_id=space_id, arguments=arguments)
 
 
 def computer_mouse_move(device_id: str, project: str, x: int, y: int, duration_ms: int = 0, space_id: str | None = None) -> dict[str, Any]:
