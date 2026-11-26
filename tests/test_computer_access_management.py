@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ordax_dev_agent.computer_filesystem_actions import (
+    _host_administrative_status,
     computer_access_management_status,
     update_computer_access_policy,
 )
@@ -43,9 +44,33 @@ class ComputerAccessManagementTests(unittest.TestCase):
             projects={}, default_project="missing",
         )
 
+    def test_host_admin_status_is_not_applicable_off_windows(self) -> None:
+        with patch("ordax_dev_agent.computer_filesystem_actions.sys.platform", "linux"):
+            self.assertEqual(
+                {"windows_administrator": None, "state": "not_applicable"},
+                _host_administrative_status(),
+            )
+
+    def test_host_admin_status_uses_actual_token_not_full_access_policy(self) -> None:
+        with patch("ordax_dev_agent.computer_filesystem_actions.sys.platform", "win32"), patch(
+            "ordax_dev_agent.computer_filesystem_actions.ctypes.windll", create=True
+        ) as windll:
+            for token, state in ((0, "limited"), (1, "administrator")):
+                windll.shell32.IsUserAnAdmin.return_value = token
+                self.assertEqual(
+                    {"windows_administrator": bool(token), "state": state},
+                    _host_administrative_status(),
+                )
+            windll.shell32.IsUserAnAdmin.side_effect = OSError("unavailable")
+            self.assertEqual(
+                {"windows_administrator": None, "state": "unverified"},
+                _host_administrative_status(),
+            )
+
     def test_status_exposes_revision_without_secret_material(self) -> None:
         status = computer_access_management_status(self.config)
         self.assertTrue(status["enabled"])
+        self.assertIn("host_administrative_status", status)
         self.assertFalse(status["full_access"])
         self.assertFalse(status["full_filesystem"])
         self.assertEqual([str(self.allowed.resolve())], status["allowed_roots"])

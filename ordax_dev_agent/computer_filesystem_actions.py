@@ -6,12 +6,14 @@ this computer can ever be reached through the device boundary.
 """
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
 from collections import deque
 from fnmatch import fnmatchcase
 import shutil
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -303,12 +305,27 @@ def load_computer_access_policy(config) -> ComputerAccessPolicy:
     )
 
 
+def _host_administrative_status() -> dict[str, Any]:
+    """Observe the actual Windows process token, without requesting elevation."""
+    if sys.platform != "win32":
+        return {"windows_administrator": None, "state": "not_applicable"}
+    try:
+        elevated = bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return {"windows_administrator": None, "state": "unverified"}
+    return {
+        "windows_administrator": elevated,
+        "state": "administrator" if elevated else "limited",
+    }
+
+
 def computer_access_management_status(config) -> dict[str, Any]:
     settings_path = config.state_dir / "agent-settings.json"
     policy = load_computer_access_policy(config)
     managed = _environment_management()
     return {
         **policy.public(),
+        "host_administrative_status": _host_administrative_status(),
         "revision": _settings_revision(settings_path),
         "managed_by_environment": managed,
         "settings_path": str(settings_path),
@@ -545,6 +562,7 @@ class ComputerFilesystemActions:
         from . import __version__
 
         status = policy.public()
+        status["host_administrative_status"] = _host_administrative_status()
         # Execution capability presence is distinct from authorization: remote
         # Owner grants are still resolved by the canonical Control Plane.
         device_actions = (
