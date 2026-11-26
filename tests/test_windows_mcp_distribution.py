@@ -1069,6 +1069,23 @@ Check 'exited_child'
         self.assertIn("retention-days: 3", workflow)
         self.assertNotIn("gh release create", workflow)
 
+    def test_owner_dev_attestation_is_bound_to_main_and_smoke_tested_artifacts(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        job = workflow.split("  attest-mcp-owner-dev:", 1)[1]
+        self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", job)
+        self.assertIn("      - mcp-windows-contract", job)
+        self.assertIn("      - mcp-windows-installer", job)
+        self.assertIn("id-token: write", job)
+        self.assertIn("attestations: write", job)
+        self.assertIn("ordax-mcp-dev-portable-", job)
+        self.assertIn("ordax-mcp-windows-candidate-", job)
+        self.assertIn("actions/attest-build-provenance@", job)
+        self.assertIn("gh attestation verify", job)
+        self.assertIn("--source-digest $env:GITHUB_SHA", job)
+        self.assertIn("--signer-workflow ordaxsystems/ordax-runtime/.github/workflows/windows-mcp-candidate.yml", job)
+        self.assertNotIn("gh release create", job)
+        self.assertNotIn("Start-Process", job)
+
     def test_one_portable_dev_candidate_reuses_exact_runtime_stage(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         builder = BUILDER.read_text(encoding="utf-8")
