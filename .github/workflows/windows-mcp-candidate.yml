@@ -340,3 +340,61 @@ jobs:
           path: dist/mcp-windows/OrdaX-MCP-Setup-*-x64.exe
           if-no-files-found: error
           retention-days: 3
+
+  # Owner DEV provenance is issued only after the existing Windows smoke gates.
+  # It is not Authenticode, public release authorization, or Windows elevation.
+  attest-mcp-owner-dev:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - mcp-windows-contract
+      - mcp-windows-installer
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download exact validated portable candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ordax-mcp-dev-portable-${{ github.sha }}
+          path: owner-dev/portable
+      - name: Download exact validated installer candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ordax-mcp-windows-candidate-${{ github.sha }}
+          path: owner-dev/installer
+      - name: Validate exact artifact inventory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $portable = @(Get-ChildItem -LiteralPath owner-dev/portable -File -Recurse)
+          $installer = @(Get-ChildItem -LiteralPath owner-dev/installer -File -Recurse)
+          if ($env:GITHUB_REF -cne 'refs/heads/main' -or
+              $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$' -or
+              $portable.Count -ne 1 -or
+              $portable[0].Name -cne "OrdaX-MCP-Dev-$env:GITHUB_SHA.zip" -or
+              $installer.Count -ne 1 -or
+              $installer[0].Name -cnotmatch '^OrdaX-MCP-Setup-[0-9]+\.[0-9]+\.[0-9]+-x64\.exe$') {
+            throw 'MCP Owner DEV artifact inventory invalid'
+          }
+      - name: Attest exact smoke-tested portable and installer bytes
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            owner-dev/portable/OrdaX-MCP-Dev-*.zip
+            owner-dev/installer/OrdaX-MCP-Setup-*-x64.exe
+          show-summary: true
+      - name: Verify both attestations against exact main SHA and workflow
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(Get-ChildItem -LiteralPath owner-dev -File -Recurse)
+          if ($files.Count -ne 2) { throw 'MCP Owner DEV artifact inventory changed' }
+          foreach ($file in $files) {
+            & gh attestation verify $file.FullName --repo ordaxsystems/ordax-runtime --source-digest $env:GITHUB_SHA --signer-workflow ordaxsystems/ordax-runtime/.github/workflows/windows-mcp-candidate.yml
+            if ($LASTEXITCODE -ne 0) { throw 'MCP Owner DEV provenance verification failed' }
+          }
+          Write-Host 'ORDAX_MCP_OWNER_DEV_ATTESTATION_VERIFIED=PASS'
