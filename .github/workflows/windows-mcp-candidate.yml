@@ -15,6 +15,7 @@ on:
       - "scripts/windows/ordax-upgrade-quiesce.ps1"
       - "scripts/windows/ordax-mcp-lifecycle.ps1"
       - "scripts/windows/ordax-agent-watchdog.ps1"
+      - "scripts/windows/ordax-storage-health.ps1"
       - "tests/test_windows_mcp_distribution.py"
       # This installer pip-installs the exact Runtime project source, not a
       # hand-picked set of entrypoints. Keep these package roots byte-for-byte
@@ -68,7 +69,8 @@ jobs:
             'scripts/windows/get-locked-embedded-python.ps1',
             'scripts/windows/ordax-upgrade-quiesce.ps1',
             'scripts/windows/ordax-mcp-lifecycle.ps1',
-            'scripts/windows/ordax-agent-watchdog.ps1'
+            'scripts/windows/ordax-agent-watchdog.ps1',
+            'scripts/windows/ordax-storage-health.ps1'
           )) {
             $tokens = $null
             $errors = $null
@@ -197,13 +199,21 @@ jobs:
               $m.runtime_source_commit -cne $env:GITHUB_SHA -or $m.studio_required -ne $false -or
               $m.signed_public_release -ne $false -or
               !(Test-Path (Join-Path $probe 'ORDAX Runtime.exe')) -or
-              !(Test-Path (Join-Path $probe 'ordax-mcp-lifecycle.ps1'))) {
+              !(Test-Path (Join-Path $probe 'ordax-mcp-lifecycle.ps1')) -or
+              !(Test-Path (Join-Path $probe 'ordax-storage-health.ps1'))) {
             throw 'Portable DEV archive missing exact MCP Runtime provenance'
           }
           & (Join-Path $probe 'runtime\python.exe') -m ordax_dev_agent.owner_grants_cli --help | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Portable DEV embedded Owner CLI broken' }
           & .\scripts\windows\assert-runtime-package-capabilities.ps1 -PrivatePython (Join-Path $probe 'runtime\python.exe') -RuntimeRoot (Join-Path $probe 'runtime') -Phase staged
           if ($LASTEXITCODE -ne 0) { throw 'Portable DEV Runtime capability proof failed' }
+          $storage = & (Join-Path $probe 'ordax-storage-health.ps1') | ConvertFrom-Json
+          if ($storage.schema -cne 'ordax.windows.storage-health/1' -or $storage.state -notin @('collected','partial') -or $storage.administrator -isnot [bool]) {
+            throw 'Storage health contract invalid'
+          }
+          if (-not $storage.administrator -and @($storage.errors | Where-Object code -eq 'administrator_required').Count -ne 2) {
+            throw 'Limited token incorrectly reported privileged storage access'
+          }
           Write-Host "ORDAX_MCP_PORTABLE_DEV_ARCHIVE=PASS SHA256=$sha"
 
       - name: Verify installation, private Runtime, lifecycle, and uninstall
