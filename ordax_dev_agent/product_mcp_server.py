@@ -203,17 +203,35 @@ def computer_focus_window(
 @mcp.tool()
 def computer_click(
     device_id: str,
-    x: int,
-    y: int,
+    x: int | None = None,
+    y: int | None = None,
     button: str = "left",
     clicks: int = 1,
     space_id: str | None = None,
+    mode: str = "foreground",
+    handle: str | None = None,
+    expected_pid: int | None = None,
+    control_text: str | None = None,
 ) -> dict[str, Any]:
+    if mode == "background":
+        arguments = {
+            "mode": "background", "handle": handle,
+            "expected_pid": expected_pid, "control_text": control_text,
+            "button": button, "clicks": clicks,
+        }
+        # Never allow coordinate-based fallback for targeted input.
+        if x is not None or y is not None:
+            arguments["x"] = x
+            arguments["y"] = y
+    else:
+        arguments = {"x": x, "y": y, "button": button, "clicks": clicks}
+        if mode != "foreground":
+            arguments["mode"] = mode
     return _invoke(
         device_id=device_id,
         action="computer.click",
         space_id=space_id,
-        arguments={"x": x, "y": y, "button": button, "clicks": clicks},
+        arguments=arguments,
     )
 
 

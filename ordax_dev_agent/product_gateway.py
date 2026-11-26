@@ -476,7 +476,7 @@ PRODUCT_TYPED_ACTIONS: dict[str, ProductActionSpec] = {
     "computer.click": ProductActionSpec(
         "computer.click",
         "computer.click",
-        frozenset({"x", "y", "button", "clicks"}),
+        frozenset({"x", "y", "button", "clicks", "mode", "handle", "expected_pid", "control_text"}),
         project_required=False,
         effect="write",
     ),
