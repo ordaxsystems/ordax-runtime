@@ -296,6 +296,20 @@ function Assert-NoActiveSupervisedManagers {
                     $actualPath = [IO.Path]::GetFullPath([string]$handle.Path)
                     $startedUnix = ([DateTimeOffset]$handle.StartTime.ToUniversalTime()).ToUnixTimeSeconds()
                 } catch {
+                    # A legacy receipt may refer to a recycled PID now owned
+                    # by a protected Windows service whose Path/StartTime is
+                    # inaccessible to this Owner session. The kernel-observed
+                    # process NAME is still available: our legacy managers
+                    # always executed python.exe or pythonw.exe. Never use this
+                    # branch for generation-attested workers or an unknown or
+                    # Python process; check that its original child is gone.
+                    $actualName = [string]$handle.ProcessName
+                    if (!$record.worker_generation -and
+                        $actualName -and
+                        $actualName -notin @('python', 'pythonw')) {
+                        Assert-NoLiveOrphanSupervisedChild -Record $record
+                        continue
+                    }
                     throw 'ORDAX_UPGRADE_SUPERVISOR_MANAGER_IDENTITY_UNVERIFIED'
                 }
                 # Default callers (including uninstall and Inno) still block.
